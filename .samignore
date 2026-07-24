@@ -1,0 +1,15 @@
+.git/
+.cursor/
+client/
+scripts/
+Geo-Location/
+node_modules/
+server/node_modules/
+server/.env
+server/.env.*
+*.md
+.vscode/
+.idea/
+coverage/
+dist/
+*.log

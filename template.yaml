@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Grubpac Attendance API (Express on Lambda + HTTP API)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+    Runtime: nodejs20.x
+    Architectures:
+      - x86_64
+
+Parameters:
+  MongoDbUri:
+    Type: String
+    NoEcho: true
+    Description: MongoDB Atlas connection string
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT signing secret (32+ characters)
+  ClientOrigin:
+    Type: String
+    Default: https://localhost
+    Description: Frontend origin for CORS (CloudFront URL later)
+
+Resources:
+  AttendanceApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowCredentials: true
+        AllowOrigins:
+          - !Ref ClientOrigin
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - Cookie
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        MaxAge: 600
+
+  AttendanceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: grubpac-attendance-api
+      Handler: server/src/lambda.handler
+      CodeUri: lambda-package/
+      Environment:
+        Variables:
+          NODE_ENV: production
+          MONGODB_URI: !Ref MongoDbUri
+          JWT_SECRET: !Ref JwtSecret
+          JWT_EXPIRES_IN: 12h
+          CLIENT_ORIGIN: !Ref ClientOrigin
+      Events:
+        ProxyApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AttendanceApi
+            PayloadFormatVersion: '2.0'
+            Method: ANY
+            Path: /{proxy+}
+        RootApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AttendanceApi
+            PayloadFormatVersion: '2.0'
+            Method: ANY
+            Path: /
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${AttendanceApi}.execute-api.${AWS::Region}.amazonaws.com'

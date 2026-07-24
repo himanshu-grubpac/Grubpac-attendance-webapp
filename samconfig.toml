@@ -1,0 +1,15 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "grubpac-attendance-api"
+resolve_s3 = true
+s3_prefix = "grubpac-attendance-api"
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+parameter_overrides = "ClientOrigin=\"https://d1qk2thz664f5x.cloudfront.net\""
+
+[default.global.parameters]
+region = "ap-south-1"

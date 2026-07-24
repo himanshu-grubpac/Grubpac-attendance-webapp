@@ -1,0 +1,83 @@
+import { z } from 'zod';
+import { indianMobileSchema, passwordSchema } from './common.js';
+
+/**
+ * Login accepts a single identifier that may be an email, a 10-digit Indian
+ * mobile number, or an employee code. Detection order: email (contains @) →
+ * mobile (10 digits, optionally with +91/spaces/dashes) → employeeCode.
+ */
+export function detectIdentifierType(identifier) {
+  const value = String(identifier ?? '').trim();
+  if (value.includes('@')) {
+    return 'email';
+  }
+  const digitsOnly = value.replace(/[\s-]/g, '').replace(/^\+91/, '');
+  if (/^[6-9]\d{9}$/.test(digitsOnly)) {
+    return 'mobile';
+  }
+  return 'employeeCode';
+}
+
+export const loginSchema = z
+  .object({
+    identifier: z.string().trim().max(254).optional(),
+    // Legacy alias — older clients/scripts send `email`. Accepted as a fallback
+    // so the same field can carry an email, mobile number, or employee code.
+    email: z.string().trim().max(254).optional(),
+    password: z.string().min(1, 'Password is required.').max(128),
+  })
+  .transform(({ identifier, email, password }) => ({
+    identifier: (identifier || email || '').trim(),
+    password,
+  }))
+  .refine((data) => data.identifier.length > 0, {
+    message: 'Email, mobile number, or employee ID is required.',
+    path: ['identifier'],
+  });
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Current password is required.').max(128),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, 'Please confirm the new password.').max(128),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  })
+  .refine((data) => data.currentPassword !== data.newPassword, {
+    message: 'New password must be different from the current password.',
+    path: ['newPassword'],
+  });
+
+export const adminResetPasswordSchema = z
+  .object({
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, 'Please confirm the new password.').max(128),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  });
+
+/** Self-service profile edits — never accepts role, permissions, email, or org fields. */
+export const updateProfileSchema = z
+  .object({
+    firstName: z
+      .string()
+      .trim()
+      .min(2, 'First name must be at least 2 characters.')
+      .max(50, 'First name must be at most 50 characters.')
+      .optional(),
+    lastName: z
+      .string()
+      .trim()
+      .min(1, 'Last name is required.')
+      .max(50, 'Last name must be at most 50 characters.')
+      .optional(),
+    mobile: indianMobileSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one field is required.',
+  });

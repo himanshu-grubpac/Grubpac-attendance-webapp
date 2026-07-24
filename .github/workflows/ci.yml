@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm run install:all
+
+      - name: Unit tests (server)
+        run: npm run test --prefix server
+
+      - name: API verification
+        run: npm run verify
+
+      - name: Client lint
+        run: npm run lint --prefix client
+
+      - name: Client build
+        run: npm run build --prefix client
+
+      - name: Security audit (high+)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Server security audit (high+)
+        run: npm audit --audit-level=high --prefix server
+        continue-on-error: true

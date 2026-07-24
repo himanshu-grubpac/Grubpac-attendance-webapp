@@ -1,0 +1,29 @@
+{
+  "name": "attendance-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/kill-ports.mjs",
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev --prefix server\" \"node scripts/wait-for-server.mjs && npm run dev --prefix client\"",
+    "prestart": "node scripts/kill-ports.mjs",
+    "start": "concurrently -n server,client -c blue,green \"npm run start --prefix server\" \"node scripts/wait-for-server.mjs && npm run dev --prefix client\"",
+    "seed": "npm run seed --prefix server",
+    "seed:wipe": "npm run seed:wipe --prefix server",
+    "kill": "node scripts/kill-ports.mjs",
+    "verify": "node --env-file=server/.env scripts/verify-api.mjs",
+    "jobs:accrual": "node --env-file=server/.env scripts/run-jobs.mjs accrual",
+    "jobs:carry-forward": "node --env-file=server/.env scripts/run-jobs.mjs carry-forward",
+    "test:server": "npm run test --prefix server",
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "prepare:lambda": "node scripts/prepare-lambda.mjs"
+  },
+  "dependencies": {
+    "mongodb": "^7.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "kill-port": "^2.0.1"
+  }
+}
