@@ -35,7 +35,7 @@
   --radius-xl: 20px;
   --font-body: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Plus Jakarta Sans', var(--font-body);
-  --sidebar-width: 220px;
+  --sidebar-width: 260px;
   --sidebar-width-collapsed: 64px;
   --header-height: 3.25rem;
   --bottom-nav-height: 4rem;
@@ -49,6 +49,10 @@
   --field-max-width: 22rem;
   --field-sm-max-width: 10.5rem;
   --transition: 0.18s ease;
+  --interaction: 0.14s ease;
+  --hover-bg: color-mix(in srgb, var(--text-h) 4%, transparent);
+  --press-bg: color-mix(in srgb, var(--text-h) 8%, transparent);
+  --press-bg-strong: color-mix(in srgb, var(--text-h) 12%, transparent);
   color-scheme: light;
 }
 

@@ -87,6 +87,7 @@ export default function AdminAuditLogs() {
                   <tr>
                     <th>Time (IST)</th>
                     <th>Email</th>
+                    <th>IP address</th>
                     <th>Action</th>
                     <th>Status</th>
                     <th>Reason</th>
@@ -98,6 +99,9 @@ export default function AdminAuditLogs() {
                       <td data-label="Time (IST)">{formatISTDateTime(log.timestamp)}</td>
                       <td data-label="Email" className="cell-ellipsis" title={log.email || undefined}>
                         {log.email || '—'}
+                      </td>
+                      <td data-label="IP address" className="cell-ellipsis" title={log.ip || undefined}>
+                        {log.ip || '—'}
                       </td>
                       <td data-label="Action">{log.action}</td>
                       <td data-label="Status">

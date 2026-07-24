@@ -27,6 +27,11 @@ const attendanceRecordSchema = new mongoose.Schema(
       required: true,
     },
     rejectionReasons: [{ type: String }],
+    /** Present (P) or half-day (HD) per office policy — set on allowed check-in. */
+    attendanceTag: { type: String, enum: ['P', 'HD'], default: null },
+    warningIssued: { type: Boolean, default: false },
+    /** 1-based warning index within the calendar quarter (W1, W2, …). */
+    quarterWarningIndex: { type: Number, min: 1, max: 10, default: null },
   },
   { timestamps: true },
 );

@@ -19,7 +19,7 @@ function buildPageList(page, totalPages) {
   return result;
 }
 
-export default function PaginationBar({ pagination, onPageChange }) {
+export default function PaginationBar({ pagination, onPageChange, entityLabel }) {
   if (!pagination || pagination.total <= 0) return null;
 
   const { page, limit, total, totalPages } = pagination;
@@ -31,6 +31,7 @@ export default function PaginationBar({ pagination, onPageChange }) {
     <div className="pagination-bar">
       <span className="pagination-bar__info">
         Showing {start}–{end} of {total}
+        {entityLabel ? ` ${entityLabel}` : ''}
       </span>
 
       {totalPages > 1 && (

@@ -8,8 +8,10 @@ import {
   downloadEmployeeTemplate,
   getOfficeSettingsHandler,
   listAttendance,
+  getQuarterWarningSummary,
   listAuditLogs,
   getEmployee,
+  getEmployeeStats,
   listEmployees,
   listManagers,
   registerEmployee,
@@ -81,6 +83,7 @@ router.delete(
 
 router.post('/users', requirePermission(PERMISSIONS.USERS_WRITE), asyncHandler(registerEmployee));
 router.get('/users', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(listEmployees));
+router.get('/users/stats', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(getEmployeeStats));
 router.get('/users/managers', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(listManagers));
 router.get(
   '/users/template',
@@ -103,7 +106,11 @@ router.get('/users/:id', requirePermission(PERMISSIONS.USERS_READ), asyncHandler
 
 router.get(
   '/office-settings',
-  requirePermission(PERMISSIONS.OFFICE_MANAGE),
+  requirePermission(
+    PERMISSIONS.OFFICE_MANAGE,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  ),
   asyncHandler(getOfficeSettingsHandler),
 );
 router.put(
@@ -115,6 +122,11 @@ router.get(
   '/attendance',
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
   asyncHandler(listAttendance),
+);
+router.get(
+  '/attendance/quarter-warnings',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(getQuarterWarningSummary),
 );
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(listAuditLogs));
 router.get(

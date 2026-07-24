@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { SYSTEM_ROLE_SLUGS, PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
@@ -12,12 +12,14 @@ import {
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
 import { getAdminAttendance } from '../services/attendanceService.js';
+import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
 import { officeSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
 import { auditLogQuerySchema } from '../../../shared/validation/audit.js';
 import { updateEmployeeOrgSchema } from '../../../shared/validation/employee.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
+import { getISTDateInputValue, parseMonthInputAsISTRange } from '../utils/istDate.js';
 import {
   legacyRoleFromSlug,
   resolveDepartment,
@@ -45,7 +47,40 @@ const attendanceQuerySchema = paginationSchema.extend({
 
 const employeeListQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
+  isActive: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => (value === 'true' ? true : value === 'false' ? false : undefined)),
+  departmentId: objectIdSchema.optional(),
 });
+
+async function buildEmployeeDirectoryQuery() {
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+}
+
+function applyEmployeeListFilters(query, { search, isActive, departmentId }) {
+  if (typeof isActive === 'boolean') {
+    query.isActive = isActive;
+  }
+
+  if (departmentId) {
+    query.departmentId = departmentId;
+  }
+
+  if (search) {
+    const regex = new RegExp(escapeRegex(search), 'i');
+    query.$or = [
+      { name: regex },
+      { email: regex },
+      { mobile: regex },
+      { employeeCode: regex },
+      { department: regex },
+    ];
+  }
+
+  return query;
+}
 
 export async function registerEmployee(req, res) {
   const employee = await createEmployee(req.body, req.user._id);
@@ -61,19 +96,18 @@ export async function registerEmployee(req, res) {
 }
 
 export async function listEmployees(req, res) {
-  const { page, limit, search } = employeeListQuerySchema.parse(req.query);
-  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  const query = adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+  const { page, limit, search, isActive, departmentId } = employeeListQuerySchema.parse(req.query);
+  const query = applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
+    search,
+    isActive,
+    departmentId,
+  });
 
-  if (search) {
-    const regex = new RegExp(escapeRegex(search), 'i');
-    query.$or = [
-      { name: regex },
-      { email: regex },
-      { mobile: regex },
-      { employeeCode: regex },
-      { department: regex },
-    ];
+  const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+
+  if (!canReadAll && canReadTeam && req.user?._id) {
+    query.reportingManagerId = req.user._id;
   }
 
   const skip = (page - 1) * limit;
@@ -96,6 +130,29 @@ export async function listEmployees(req, res) {
       limit,
       total,
       totalPages: Math.ceil(total / limit) || 1,
+    },
+  });
+}
+
+export async function getEmployeeStats(req, res) {
+  const baseQuery = await buildEmployeeDirectoryQuery();
+  const monthKey = getISTDateInputValue().slice(0, 7);
+  const { start: monthStart } = parseMonthInputAsISTRange(monthKey);
+
+  const [total, active, inactive, newThisMonth] = await Promise.all([
+    User.countDocuments(baseQuery),
+    User.countDocuments({ ...baseQuery, isActive: true }),
+    User.countDocuments({ ...baseQuery, isActive: false }),
+    User.countDocuments({ ...baseQuery, createdAt: { $gte: monthStart } }),
+  ]);
+
+  res.json({
+    stats: {
+      total,
+      active,
+      inactive,
+      newThisMonth,
+      monthKey,
     },
   });
 }
@@ -370,6 +427,30 @@ export async function listAttendance(req, res) {
     permissions: req.userPermissions,
   });
   res.json(result);
+}
+
+export async function getQuarterWarningSummary(req, res) {
+  const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+
+  let userIds = [];
+  if (canReadAll) {
+    const employees = await User.find(await buildEmployeeDirectoryQuery())
+      .select('_id')
+      .lean();
+    userIds = employees.map((item) => item._id);
+  } else if (canReadTeam && req.user?._id) {
+    const reports = await User.find({
+      reportingManagerId: req.user._id,
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    userIds = reports.map((item) => item._id);
+  }
+
+  const summary = await getQuarterWarningSummaryForUsers(userIds);
+  res.json(summary);
 }
 
 export async function listAuditLogs(req, res) {

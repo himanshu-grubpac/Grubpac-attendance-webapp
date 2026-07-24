@@ -1,91 +1,118 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PERMISSIONS, hasPermission } from '@shared/permissions.js';
-import { getVisibleNavItems } from '../../config/nav.js';
-import { useAuth } from '../../context/AuthContext.jsx';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 
-const ADMIN_SHORTCUT_PATHS = new Set([
-  '/admin/dashboard',
-  '/admin/leave/approvals',
-  '/admin/attendance',
-  '/admin/leave/team-calendar',
-  '/admin/help/tickets',
-  '/admin/help/team',
-]);
+const KPI_CARDS = [
+  {
+    key: 'pendingLeave',
+    label: 'Pending Leave',
+    icon: '✓',
+    to: '/admin/leave/approvals',
+    getValue: (summary) => summary.pendingLeaveRequests,
+  },
+  {
+    key: 'openTickets',
+    label: 'Open Tickets',
+    icon: '?',
+    to: '/admin/help/tickets',
+    getValue: (summary) => summary.openHelpTickets,
+  },
+  {
+    key: 'presentAbsent',
+    label: 'Present & Absent (Today)',
+    icon: '◷',
+    to: '/admin/attendance',
+    getValue: (summary) => {
+      const { presentToday, absentToday } = summary;
+      if (typeof presentToday !== 'number' || typeof absentToday !== 'number') return '—';
+      return `${presentToday} / ${absentToday}`;
+    },
+    getHint: (summary) => {
+      const { presentToday, absentToday } = summary;
+      if (typeof presentToday !== 'number' || typeof absentToday !== 'number') return null;
+      return 'Present / Absent';
+    },
+  },
+  {
+    key: 'activeEmployees',
+    label: 'Total Active Employees',
+    icon: '☰',
+    to: '/admin/users',
+    getValue: (summary) => summary.activeEmployees,
+  },
+];
+
+function DashboardCardSkeleton() {
+  return (
+    <div className="admin-home__card admin-home__card--skeleton card" aria-hidden="true">
+      <div className="admin-home__card-head">
+        <div className="skeleton admin-home__skeleton-icon" />
+        <div className="skeleton admin-home__skeleton-label" />
+      </div>
+      <div className="skeleton admin-home__skeleton-value" />
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
   const [reports, setReports] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [reportsError, setReportsError] = useState('');
 
-  const shortcuts = getVisibleNavItems(user)
-    .filter((item) => !ADMIN_SHORTCUT_PATHS.has(item.to))
-    .slice(0, 8);
-
-  const canOwnAttendance = hasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN);
-
   useEffect(() => {
+    setLoading(true);
+    setReportsError('');
     adminApi
       .getReportsSummary()
       .then((data) => setReports(data.summary ?? null))
-      .catch((err) => setReportsError(getErrorMessage(err)));
+      .catch((err) => {
+        setReports(null);
+        setReportsError(getErrorMessage(err));
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   return (
     <div className="page page--admin-home">
-      {reports && (
-        <div className="kpi-strip">
-          <Link to="/admin/leave/approvals" className="kpi-strip__item card">
-            <span className="kpi-strip__label">Pending leave</span>
-            <strong className="kpi-strip__value">{reports.pendingLeaveRequests}</strong>
-          </Link>
-          <div className="kpi-strip__item card">
-            <span className="kpi-strip__label">Leave used ({reports.year})</span>
-            <strong className="kpi-strip__value">{reports.approvedLeaveDaysYtd}</strong>
-            <span className="muted small">Approved days YTD</span>
-          </div>
-          <Link to="/admin/help/tickets" className="kpi-strip__item card">
-            <span className="kpi-strip__label">Open tickets</span>
-            <strong className="kpi-strip__value">{reports.openHelpTickets}</strong>
-          </Link>
-          <Link to="/admin/users" className="kpi-strip__item card">
-            <span className="kpi-strip__label">Active employees</span>
-            <strong className="kpi-strip__value">{reports.activeEmployees}</strong>
-          </Link>
-        </div>
-      )}
-      {reportsError && <div className="alert alert--error">{reportsError}</div>}
+      <p className="admin-home__intro muted">
+        Operational snapshot for today (IST).
+      </p>
 
-      {canOwnAttendance ? (
-        <div className="card admin-own-attendance">
-          <Link to="/employee/dashboard" className="admin-own-attendance__link">
-            My attendance →
-          </Link>
+      {reportsError ? (
+        <div className="alert alert--error" role="alert">
+          {reportsError}
         </div>
       ) : null}
 
-      <section className="card dash-shortcuts dash-shortcuts--list">
-        <h2 className="dash-shortcuts__heading">Shortcuts</h2>
-        <ul className="shortcut-list">
-          {shortcuts.map((item) => (
-            <li key={item.to}>
-              <Link to={item.to} className="shortcut-list__link">
-                <span className="shortcut-list__icon" aria-hidden="true">
-                  {item.icon}
-                </span>
-                <span className="shortcut-list__text">
-                  <strong>{item.label}</strong>
-                  <span className="muted small">{item.section}</span>
-                </span>
-                <span className="shortcut-list__chevron" aria-hidden="true">
+      {loading ? (
+        <div className="admin-home__grid" aria-busy="true" aria-label="Loading dashboard metrics">
+          <DashboardCardSkeleton />
+          <DashboardCardSkeleton />
+          <DashboardCardSkeleton />
+          <DashboardCardSkeleton />
+        </div>
+      ) : reports ? (
+        <div className="admin-home__grid">
+          {KPI_CARDS.map((card) => {
+            const hint = card.getHint?.(reports);
+            return (
+              <Link key={card.key} to={card.to} className="admin-home__card card">
+                <span className="admin-home__card-chevron" aria-hidden="true">
                   ›
                 </span>
+                <div className="admin-home__card-head">
+                  <span className="admin-home__card-icon" aria-hidden="true">
+                    {card.icon}
+                  </span>
+                  <span className="admin-home__card-label">{card.label}</span>
+                </div>
+                <strong className="admin-home__card-value">{card.getValue(reports)}</strong>
+                {hint ? <span className="admin-home__card-hint muted small">{hint}</span> : null}
               </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

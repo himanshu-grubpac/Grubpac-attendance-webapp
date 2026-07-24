@@ -27,5 +27,10 @@ export const env = {
     longitude: Number(process.env.DEFAULT_OFFICE_LNG ?? 77.5946),
     radiusMeters: Number(process.env.DEFAULT_OFFICE_RADIUS_METERS ?? 100),
     maxAccuracyMeters: Number(process.env.DEFAULT_MAX_ACCURACY_METERS ?? 50),
+    officeStartTime: '09:00',
+    officeEndTime: '17:00',
+    graceThresholdTime: '09:00',
+    halfDayThresholdTime: '10:00',
+    warningsPerQuarter: 3,
   },
 };

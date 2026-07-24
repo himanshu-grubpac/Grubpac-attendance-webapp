@@ -65,7 +65,8 @@ function PageToolbar() {
   );
 }
 
-function AvatarMenu({ user, profilePath, onLogout, loggingOut }) {
+/** Mobile-only account menu (desktop account lives in sidebar footer). */
+function MobileAvatarMenu({ user, profilePath, onLogout, loggingOut }) {
   const [open, setOpen] = useState(false);
   const { mode, setMode } = useTheme();
   const menuRef = useRef(null);
@@ -108,7 +109,7 @@ function AvatarMenu({ user, profilePath, onLogout, loggingOut }) {
       {open ? (
         <div className="avatar-menu__panel" role="menu">
           <Link to={profilePath} className="avatar-menu__item" role="menuitem" onClick={() => setOpen(false)}>
-            My profile
+            Account settings
           </Link>
           <button
             type="button"
@@ -140,7 +141,90 @@ function AvatarMenu({ user, profilePath, onLogout, loggingOut }) {
   );
 }
 
-function MoreDrawer({ open, onClose, user, sections }) {
+function SidebarAccountFooter({ user, profilePath, collapsed, onLogout, loggingOut }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+  const location = useLocation();
+  const displayName = (user?.name || 'Account').toUpperCase();
+
+  useEscapeKey(open, () => setOpen(false));
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function handlePointer(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', handlePointer);
+    return () => document.removeEventListener('pointerdown', handlePointer);
+  }, [open]);
+
+  return (
+    <div className={`sidebar-account${collapsed ? ' sidebar-account--collapsed' : ''}`} ref={menuRef}>
+      {open ? (
+        <div className="sidebar-account__popover" role="menu">
+          <Link
+            to={profilePath}
+            className="sidebar-account__menu-item"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+          >
+            <span className="sidebar-account__menu-icon sidebar-account__menu-icon--avatar" aria-hidden="true">
+              {getInitials(user?.name)}
+            </span>
+            <span>Account settings</span>
+          </Link>
+          <div className="sidebar-account__menu-sep" role="separator" aria-hidden="true" />
+          <button
+            type="button"
+            className="sidebar-account__menu-item"
+            role="menuitem"
+            disabled={loggingOut}
+            onClick={() => {
+              setOpen(false);
+              onLogout();
+            }}
+          >
+            <span className="sidebar-account__menu-icon" aria-hidden="true">
+              ↩
+            </span>
+            <span>{loggingOut ? 'Signing out…' : 'Log out'}</span>
+          </button>
+        </div>
+      ) : null}
+
+      <button
+        type="button"
+        className={`sidebar-account__trigger${open ? ' is-open' : ''}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Account menu"
+        disabled={loggingOut}
+        title={collapsed ? user?.name : undefined}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="sidebar-account__avatar" aria-hidden="true">
+          {getInitials(user?.name)}
+        </span>
+        {!collapsed ? (
+          <>
+            <span className="sidebar-account__name">{displayName}</span>
+            <span className={`sidebar-account__chevron${open ? ' is-open' : ''}`} aria-hidden="true">
+              ▾
+            </span>
+          </>
+        ) : null}
+      </button>
+    </div>
+  );
+}
+
+function MoreDrawer({ open, onClose, sections }) {
   useEscapeKey(open, onClose);
 
   if (!open) return null;
@@ -304,22 +388,31 @@ function AppLayoutShell() {
       </a>
 
       <aside className="app-sidebar app-sidebar--desktop" aria-label="Sidebar">
+        <div className="app-sidebar__toggle-bar">
+          <button
+            type="button"
+            className="app-sidebar__toggle"
+            onClick={() => setCollapsed((value) => !value)}
+            aria-expanded={!collapsed}
+            aria-controls="app-sidebar-nav"
+            aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+            title={collapsed ? 'Expand menu' : 'Collapse menu'}
+          >
+            <span className="app-sidebar__toggle-icon" aria-hidden="true">
+              {collapsed ? '»' : '«'}
+            </span>
+            <span className="app-sidebar__toggle-label">
+              {collapsed ? 'Expand menu' : 'Collapse menu'}
+            </span>
+          </button>
+        </div>
         <div className="app-sidebar__brand">
-          <CompanyLogo size={collapsed ? 32 : 36} showText={!collapsed} />
+          <CompanyLogo size={32} showText={!collapsed} />
           {!collapsed && (
             <span className="app-sidebar__portal-label">
               {isAdminPortal ? 'Admin' : 'Employee'}
             </span>
           )}
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm app-sidebar__collapse"
-            onClick={() => setCollapsed((value) => !value)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? '»' : '«'}
-          </button>
         </div>
         <nav className="app-nav" id="app-sidebar-nav" aria-label="Main navigation">
           {[...sections.entries()].map(([section, links]) => (
@@ -350,6 +443,16 @@ function AppLayoutShell() {
             </div>
           ))}
         </nav>
+
+        <div className="app-sidebar__footer">
+          <SidebarAccountFooter
+            user={user}
+            profilePath={profilePath}
+            collapsed={collapsed}
+            onLogout={handleLogout}
+            loggingOut={loggingOut}
+          />
+        </div>
       </aside>
 
       <header className="app-header">
@@ -363,29 +466,9 @@ function AppLayoutShell() {
           <NotificationBell />
           <div className="app-header__desktop-utilities">
             <ThemeToggle />
-            <Link
-              to={profilePath}
-              className="user-chip user-chip--desktop"
-              title="My profile"
-              tabIndex={loggingOut ? -1 : undefined}
-              onClick={loggingOut ? (event) => event.preventDefault() : undefined}
-            >
-              <span className="user-chip__avatar" aria-hidden="true">
-                {getInitials(user?.name)}
-              </span>
-              <span className="user-chip__name">{user?.name}</span>
-            </Link>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm app-header__logout"
-              onClick={handleLogout}
-              disabled={loggingOut}
-            >
-              {loggingOut ? 'Signing out…' : 'Logout'}
-            </button>
           </div>
           <div className="app-header__mobile-utilities">
-            <AvatarMenu
+            <MobileAvatarMenu
               user={user}
               profilePath={profilePath}
               onLogout={handleLogout}
@@ -418,7 +501,6 @@ function AppLayoutShell() {
       <MoreDrawer
         open={moreOpen}
         onClose={() => setMoreOpen(false)}
-        user={user}
         sections={moreSections}
       />
 

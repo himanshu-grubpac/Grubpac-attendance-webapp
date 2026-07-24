@@ -4,6 +4,7 @@ import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
+import { evaluateCheckInPolicy } from './attendancePolicyService.js';
 import { getHolidayDateSet } from './leaveService.js';
 import {
   endOfDayIST,
@@ -92,6 +93,11 @@ export async function markAttendance(userId, type, payload) {
       const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
       const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
 
+      let policyFields = {};
+      if (type === 'check_in' && status === 'allowed') {
+        policyFields = await evaluateCheckInPolicy(userId, new Date(), office, session);
+      }
+
       const [record] = await AttendanceRecord.create(
         [
           {
@@ -107,6 +113,7 @@ export async function markAttendance(userId, type, payload) {
             radiusMeters: office.radiusMeters,
             status,
             rejectionReasons,
+            ...policyFields,
           },
         ],
         { session },
@@ -158,9 +165,8 @@ export async function getAdminAttendance({ userId, date, page = 1, limit = 20, a
 
   const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
-  const canReadUsers = hasPermission(permissions, PERMISSIONS.USERS_READ);
 
-  if (!canReadAll && canReadTeam && !canReadUsers && actor?._id) {
+  if (!canReadAll && canReadTeam && actor?._id) {
     const directReports = await User.find({
       reportingManagerId: actor._id,
       isActive: true,

@@ -542,9 +542,10 @@ export async function getTeamCalendar(actor, permissions, query) {
   const users = await User.find(userFilter).select('name email departmentId');
   const userIds = users.map((item) => item._id);
 
+  // Team calendar is planning visibility: only approved leave (pending stays on Approvals).
   const requests = await LeaveRequest.find({
     userId: { $in: userIds },
-    status: { $in: ['pending', 'approved'] },
+    status: 'approved',
     startDate: { $lte: end },
     endDate: { $gte: start },
   })

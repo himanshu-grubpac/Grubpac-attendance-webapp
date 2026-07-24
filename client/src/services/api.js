@@ -71,6 +71,7 @@ export const adminApi = {
   listManagers: (params = {}) => api.get('/admin/users/managers', { params }).then((r) => r.data),
   listEmployees: (params = {}) =>
     api.get('/admin/users', { params }).then((r) => r.data),
+  getEmployeeStats: () => api.get('/admin/users/stats').then((r) => r.data),
   getEmployee: (id) => api.get(`/admin/users/${id}`).then((r) => r.data),
   registerEmployee: (payload) =>
     api.post('/admin/users', payload).then((r) => r.data),
@@ -97,6 +98,8 @@ export const adminApi = {
     api.put('/admin/office-settings', payload).then((r) => r.data),
   listAttendance: (params) =>
     api.get('/admin/attendance', { params }).then((r) => r.data),
+  getQuarterWarnings: () =>
+    api.get('/admin/attendance/quarter-warnings').then((r) => r.data),
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),

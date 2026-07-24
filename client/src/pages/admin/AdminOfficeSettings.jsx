@@ -12,6 +12,11 @@ const emptyOffice = {
   radiusMeters: 100,
   maxAccuracyMeters: 50,
   sandwichLeaveEnabled: false,
+  officeStartTime: '09:00',
+  officeEndTime: '17:00',
+  graceThresholdTime: '09:00',
+  halfDayThresholdTime: '10:00',
+  warningsPerQuarter: 3,
 };
 
 export default function AdminOfficeSettings() {
@@ -35,6 +40,11 @@ export default function AdminOfficeSettings() {
             radiusMeters: settings.radiusMeters ?? 100,
             maxAccuracyMeters: settings.maxAccuracyMeters ?? 50,
             sandwichLeaveEnabled: Boolean(settings.sandwichLeaveEnabled),
+            officeStartTime: settings.officeStartTime ?? '09:00',
+            officeEndTime: settings.officeEndTime ?? '17:00',
+            graceThresholdTime: settings.graceThresholdTime ?? '09:00',
+            halfDayThresholdTime: settings.halfDayThresholdTime ?? '10:00',
+            warningsPerQuarter: settings.warningsPerQuarter ?? 3,
           });
         }
       })
@@ -72,6 +82,11 @@ export default function AdminOfficeSettings() {
       radiusMeters: Number(form.radiusMeters),
       maxAccuracyMeters: Number(form.maxAccuracyMeters),
       sandwichLeaveEnabled: Boolean(form.sandwichLeaveEnabled),
+      officeStartTime: form.officeStartTime.trim(),
+      officeEndTime: form.officeEndTime.trim(),
+      graceThresholdTime: form.graceThresholdTime.trim(),
+      halfDayThresholdTime: form.halfDayThresholdTime.trim(),
+      warningsPerQuarter: Number(form.warningsPerQuarter),
     };
 
     const validation = validateForm(officeSchema, payload);
@@ -175,6 +190,65 @@ export default function AdminOfficeSettings() {
               Enable sandwich leave policy — weekends/holidays between leave days count toward
               leave when both sides are leave (default off until HR confirms).
             </span>
+          </label>
+          <div className="form-grid__full">
+            <p className="card__section-title">Office hours &amp; attendance policy</p>
+            <p className="muted small">
+              Mon–Fri working days. Times are IST (24-hour). Attendance history and check-in
+              evaluation use these thresholds.
+            </p>
+          </div>
+          <label className="form-field--sm">
+            Office start (Mon–Fri)
+            <input
+              className="input input--narrow"
+              type="time"
+              value={form.officeStartTime}
+              onChange={(e) => setForm({ ...form, officeStartTime: e.target.value })}
+            />
+            <FieldError message={fieldErrors.officeStartTime} />
+          </label>
+          <label className="form-field--sm">
+            Office end (Mon–Fri)
+            <input
+              className="input input--narrow"
+              type="time"
+              value={form.officeEndTime}
+              onChange={(e) => setForm({ ...form, officeEndTime: e.target.value })}
+            />
+            <FieldError message={fieldErrors.officeEndTime} />
+          </label>
+          <label className="form-field--sm">
+            Grace / warning threshold
+            <input
+              className="input input--narrow"
+              type="time"
+              value={form.graceThresholdTime}
+              onChange={(e) => setForm({ ...form, graceThresholdTime: e.target.value })}
+            />
+            <FieldError message={fieldErrors.graceThresholdTime} />
+          </label>
+          <label className="form-field--sm">
+            Half-day threshold
+            <input
+              className="input input--narrow"
+              type="time"
+              value={form.halfDayThresholdTime}
+              onChange={(e) => setForm({ ...form, halfDayThresholdTime: e.target.value })}
+            />
+            <FieldError message={fieldErrors.halfDayThresholdTime} />
+          </label>
+          <label className="form-field--sm">
+            Warnings per quarter
+            <input
+              className="input input--narrow"
+              type="number"
+              min="0"
+              max="10"
+              value={form.warningsPerQuarter}
+              onChange={(e) => setForm({ ...form, warningsPerQuarter: e.target.value })}
+            />
+            <FieldError message={fieldErrors.warningsPerQuarter} />
           </label>
           <div className="form-actions form-actions--sticky">
             <button

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
+import BackLink from '../../components/BackLink.jsx';
 import PageLoading from '../../components/PageLoading.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -54,11 +55,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     setMeta({
       title: ticket.title,
       subtitle: `${ticket.category} · ${ticket.priority} priority`,
-      actions: (
-        <Link to={backTo} className="btn btn-ghost btn-sm">
-          ← Back
-        </Link>
-      ),
+      actions: <BackLink to={backTo} compact>Back</BackLink>,
     });
     return () => setMeta(null);
   }, [ticket, backTo, setMeta]);
@@ -132,9 +129,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     return (
       <div className="page">
         <div className="alert alert--error">{error || 'Ticket not found.'}</div>
-        <Link to={backTo} className="btn btn-ghost">
-          Back
-        </Link>
+        <BackLink to={backTo}>Back</BackLink>
       </div>
     );
   }

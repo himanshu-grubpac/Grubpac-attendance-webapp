@@ -16,146 +16,125 @@ export function getDefaultRoute(user) {
   return '/employee/dashboard';
 }
 
+/**
+ * Sidebar / drawer nav items.
+ * Admin portal: Mohit Sir IA only (Account lives in sidebar footer, not here).
+ * Employee portal: self-service items only (Account lives in sidebar footer).
+ */
 export const NAV_ITEMS = [
+  // ── Admin portal (Overview → Employees → Leaves → Operations) ──
   {
     to: '/admin/dashboard',
-    label: 'Admin dashboard',
+    label: 'Dashboard',
     icon: '⊞',
     section: 'Overview',
+    portal: 'admin',
     permission: PERMISSIONS.USERS_READ,
   },
   {
-    to: '/admin/leave/approvals',
-    label: 'Approvals',
-    icon: '✓',
-    section: 'Operations',
-    permission: PERMISSIONS.LEAVE_APPROVE,
-  },
-  {
-    to: '/admin/attendance',
-    label: 'Attendance',
-    icon: '◷',
-    section: 'Operations',
-    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
-  },
-  {
-    to: '/admin/leave/team-calendar',
-    label: 'Team calendar',
-    icon: '▣',
-    section: 'Operations',
-    anyPermission: [PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_READ_ALL],
-  },
-  {
     to: '/admin/users',
-    label: 'Employee list',
+    label: 'Employee List',
     icon: '☰',
     section: 'Employees',
+    portal: 'admin',
     permission: PERMISSIONS.USERS_READ,
   },
   {
     to: '/admin/users/register',
-    label: 'Register employee',
+    label: 'Register Employee',
     icon: '＋',
     section: 'Employees',
+    portal: 'admin',
     permission: PERMISSIONS.USERS_WRITE,
   },
   {
     to: '/admin/users/bulk-upload',
-    label: 'Bulk import',
+    label: 'Bulk Import',
     icon: '⇪',
     section: 'Employees',
+    portal: 'admin',
     permission: PERMISSIONS.USERS_WRITE,
+  },
+  {
+    to: '/admin/salary',
+    label: 'Salary Summary',
+    icon: '₹',
+    section: 'Employees',
+    portal: 'admin',
+    allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
+  },
+  {
+    to: '/admin/attendance',
+    label: 'Attendance history',
+    icon: '◷',
+    section: 'Employees',
+    portal: 'admin',
+    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+  },
+  {
+    to: '/admin/audit-logs',
+    label: 'Login Logs',
+    icon: '⎈',
+    section: 'Employees',
+    portal: 'admin',
+    permission: PERMISSIONS.AUDIT_READ,
   },
   {
     to: '/admin/leave/policies',
     label: 'Leave policies',
     icon: '⚙',
-    section: 'Leave',
+    section: 'Leaves',
+    portal: 'admin',
     permission: PERMISSIONS.LEAVE_MANAGE_POLICIES,
   },
   {
-    to: '/admin/leave/holidays',
-    label: 'Holidays',
-    icon: '☼',
-    section: 'Leave',
-    permission: PERMISSIONS.LEAVE_MANAGE_POLICIES,
+    to: '/admin/leave/approvals',
+    label: 'Pending Requests',
+    icon: '✓',
+    section: 'Leaves',
+    portal: 'admin',
+    permission: PERMISSIONS.LEAVE_APPROVE,
   },
   {
-    to: '/admin/leave/balances',
-    label: 'Adjust balances',
-    icon: '±',
-    section: 'Leave',
-    permission: PERMISSIONS.LEAVE_ADJUST_BALANCES,
-  },
-  {
-    to: '/admin/salary',
-    label: 'Salary summary',
-    icon: '₹',
-    section: 'Payroll',
-    allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
-  },
-  {
-    to: '/admin/help/team',
-    label: 'Team issues',
-    icon: '?',
-    section: 'Support',
-    anyPermission: [PERMISSIONS.HELP_MANAGE],
-    hideIfAllTicketsAdmin: true,
-  },
-  {
-    to: '/admin/help/tickets',
-    label: 'Help tickets',
-    icon: '?',
-    section: 'Support',
-    allPermissions: [PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE],
+    to: '/admin/leave/team-calendar',
+    label: 'Calendar management',
+    icon: '▣',
+    section: 'Leaves',
+    portal: 'admin',
+    anyPermission: [PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_READ_ALL],
   },
   {
     to: '/admin/office-settings',
-    label: 'Office settings',
+    label: 'Geolocation',
     icon: '⌖',
-    section: 'Setup',
+    section: 'Operations',
+    portal: 'admin',
     permission: PERMISSIONS.OFFICE_MANAGE,
-  },
-  {
-    to: '/admin/roles',
-    label: 'Roles',
-    icon: '⚙',
-    section: 'Setup',
-    permission: PERMISSIONS.ROLES_MANAGE,
   },
   {
     to: '/admin/departments',
     label: 'Departments',
     icon: '▦',
-    section: 'Setup',
+    section: 'Operations',
+    portal: 'admin',
     permission: PERMISSIONS.DEPARTMENTS_MANAGE,
   },
   {
-    to: '/admin/audit-logs',
-    label: 'Login logs',
-    icon: '⎈',
-    section: 'Setup',
-    permission: PERMISSIONS.AUDIT_READ,
+    to: '/admin/roles',
+    label: 'Roles & Permissions',
+    icon: '⚙',
+    section: 'Operations',
+    portal: 'admin',
+    permission: PERMISSIONS.ROLES_MANAGE,
   },
-  {
-    to: '/admin/profile',
-    label: 'My profile',
-    icon: '☺',
-    section: 'Account',
-    anyPermission: ADMIN_PORTAL_PERMISSIONS,
-  },
-  {
-    to: '/admin/change-password',
-    label: 'Change password',
-    icon: '⚿',
-    section: 'Account',
-    anyPermission: ADMIN_PORTAL_PERMISSIONS,
-  },
+
+  // ── Employee portal ──
   {
     to: '/employee/dashboard',
     label: 'Dashboard',
     icon: '⌂',
     section: 'Overview',
+    portal: 'employee',
     permission: PERMISSIONS.ATTENDANCE_READ_OWN,
   },
   {
@@ -163,6 +142,7 @@ export const NAV_ITEMS = [
     label: 'Apply leave',
     icon: '＋',
     section: 'Leave',
+    portal: 'employee',
     permission: PERMISSIONS.LEAVE_APPLY,
   },
   {
@@ -170,6 +150,7 @@ export const NAV_ITEMS = [
     label: 'Leave balances',
     icon: '▤',
     section: 'Leave',
+    portal: 'employee',
     permission: PERMISSIONS.LEAVE_READ,
   },
   {
@@ -177,6 +158,7 @@ export const NAV_ITEMS = [
     label: 'My requests',
     icon: '☰',
     section: 'Leave',
+    portal: 'employee',
     permission: PERMISSIONS.LEAVE_READ,
   },
   {
@@ -184,6 +166,7 @@ export const NAV_ITEMS = [
     label: 'Attendance history',
     icon: '◷',
     section: 'Attendance',
+    portal: 'employee',
     permission: PERMISSIONS.ATTENDANCE_READ_OWN,
   },
   {
@@ -191,6 +174,7 @@ export const NAV_ITEMS = [
     label: 'My pay estimate',
     icon: '₹',
     section: 'Payroll',
+    portal: 'employee',
     permission: PERMISSIONS.SALARY_READ,
   },
   {
@@ -198,23 +182,8 @@ export const NAV_ITEMS = [
     label: 'Help',
     icon: '?',
     section: 'Support',
+    portal: 'employee',
     permission: PERMISSIONS.HELP_WRITE,
-  },
-  {
-    to: '/employee/profile',
-    label: 'My profile',
-    icon: '☺',
-    section: 'Account',
-    permission: PERMISSIONS.ATTENDANCE_READ_OWN,
-    hideIfAdminRoute: true,
-  },
-  {
-    to: '/employee/change-password',
-    label: 'Change password',
-    icon: '⚿',
-    section: 'Account',
-    permission: PERMISSIONS.ATTENDANCE_READ_OWN,
-    hideIfAdminRoute: true,
   },
 ];
 
@@ -238,16 +207,10 @@ export function resolveNavItemActive(to, { isActive, location }) {
 export function getVisibleNavItems(user) {
   const permissions = user?.permissions ?? [];
   const hasAdminNav = hasAnyPermission(permissions, ADMIN_PORTAL_PERMISSIONS);
+  const portal = hasAdminNav ? 'admin' : 'employee';
 
   return NAV_ITEMS.filter((item) => {
-    if (item.hideIfAdminRoute && hasAdminNav && item.to.startsWith('/employee/')) {
-      return false;
-    }
-
-    if (
-      item.hideIfAllTicketsAdmin &&
-      hasAllPermissions(permissions, [PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE])
-    ) {
+    if (item.portal && item.portal !== portal) {
       return false;
     }
 
@@ -263,7 +226,7 @@ export function getVisibleNavItems(user) {
       return hasPermission(permissions, item.permission);
     }
 
-  return true;
+    return true;
   });
 }
 
@@ -316,35 +279,23 @@ const ADMIN_BOTTOM_NAV = [
   {
     key: 'approvals',
     to: '/admin/leave/approvals',
-    label: 'Approvals',
+    label: 'Pending Requests',
+    shortLabel: 'Pending',
     icon: '✓',
-    matchPrefixes: ['/admin/leave/approvals', '/admin/help'],
+    matchPrefixes: ['/admin/leave/approvals'],
     permission: PERMISSIONS.LEAVE_APPROVE,
   },
   {
     key: 'attendance',
-    label: 'Attendance',
+    to: '/admin/attendance',
+    label: 'Attendance history',
+    shortLabel: 'Attendance',
     icon: '◷',
-    matchPrefixes: ['/admin/attendance', '/admin/leave/team-calendar'],
-    anyPermission: [
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-      PERMISSIONS.LEAVE_READ_TEAM,
-      PERMISSIONS.LEAVE_READ_ALL,
-    ],
+    matchPrefixes: ['/admin/attendance'],
+    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
   },
   { key: 'more', label: 'Menu', icon: '⋯' },
 ];
-
-function resolveAdminTeamLabel(permissions) {
-  if (
-    hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL) ||
-    hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM)
-  ) {
-    return 'Attendance';
-  }
-  return 'Team calendar';
-}
 
 function navItemAllowed(item, permissions) {
   if (item.allPermissions?.length) {
@@ -357,16 +308,6 @@ function navItemAllowed(item, permissions) {
     return hasPermission(permissions, item.permission);
   }
   return true;
-}
-
-function resolveAdminTeamTarget(permissions) {
-  if (
-    hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL) ||
-    hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM)
-  ) {
-    return '/admin/attendance';
-  }
-  return '/admin/leave/team-calendar';
 }
 
 export function getBottomNavItems(user) {
@@ -384,17 +325,6 @@ export function getBottomNavItems(user) {
         if (!navItemAllowed(item, permissions) && hasPermission(permissions, item.fallbackPermission)) {
           return { ...item, to: item.fallbackTo };
         }
-      }
-
-      if (item.key === 'attendance') {
-        if (!navItemAllowed(item, permissions)) {
-          return null;
-        }
-        return {
-          ...item,
-          to: resolveAdminTeamTarget(permissions),
-          label: resolveAdminTeamLabel(permissions),
-        };
       }
 
       if (!navItemAllowed(item, permissions)) {
@@ -437,8 +367,6 @@ export function getMoreNavItems(user) {
     '/employee/leave/requests',
     '/employee/pay-estimate',
     '/employee/help',
-    '/employee/profile',
-    '/employee/change-password',
   ];
   const byPath = new Map(moreLinks.map((item) => [item.to, item]));
   const ordered = [];
