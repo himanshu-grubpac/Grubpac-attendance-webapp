@@ -4,7 +4,7 @@
  *
  * Covers:
  * - AuditLog deviceId/ip/userAgent indexes (login device conflict)
- * - AttendanceRecord lateNote field (schemaless — index sync only)
+ * - AttendanceRecord lateNote + edit history fields (schemaless — index sync only)
  * - LeaveCarryForwardEntry, WeekAttendanceConfirmation, SalaryTransfer collections
  * - User.managedDepartmentIds backfill
  * - Dual-portal system role permissions (HR attendance.read_own)

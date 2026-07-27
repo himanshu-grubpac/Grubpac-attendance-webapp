@@ -454,6 +454,15 @@ async function main() {
   assert(editAttendance.data.record?.attendanceTag === 'P', 'Edited record keeps Present tag with warning');
   assert(editAttendance.data.record?.quarterWarningIndex === 1, 'Edited record stores warning index');
   assert(editAttendance.data.record?.lateNote === 'Admin edit verify', 'Edited late note is persisted');
+  assert(editAttendance.data.record?.lastEditedAt, 'Edited record stores lastEditedAt');
+  assert(editAttendance.data.record?.lastEditedBy?.name, 'Edited record stores lastEditedBy name');
+  assert(Array.isArray(editAttendance.data.record?.editHistory), 'Edited record stores editHistory');
+  assert(
+    editAttendance.data.record.editHistory.length >= 1,
+    'Edited record appends at least one edit history entry',
+  );
+  const latestEdit = editAttendance.data.record.editHistory.at(-1);
+  assert(latestEdit?.changes?.some((change) => change.field === 'lateNote'), 'Edit history includes late note change');
 
   cookieHeader = '';
   const editedEmployeeEmail =

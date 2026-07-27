@@ -595,6 +595,9 @@ export async function editAttendanceRecord(req, res) {
       checkInTime: result.checkInTime,
       checkOutTime: result.checkOutTime,
       checkOutRecordId: result.checkOut?._id?.toString() ?? null,
+      lastEditedAt: result.checkIn.lastEditedAt ?? null,
+      lastEditedBy: result.checkIn.lastEditedBy ?? null,
+      editHistory: result.checkIn.editHistory ?? [],
     },
   });
 }

@@ -41,6 +41,28 @@ const attendanceRecordSchema = new mongoose.Schema(
     warningIssued: { type: Boolean, default: false },
     /** 1-based warning index within the calendar quarter (W1, W2, …). */
     quarterWarningIndex: { type: Number, min: 1, max: 10, default: null },
+    /** Set when an admin or team lead edits this check-in record. */
+    lastEditedAt: { type: Date, default: null },
+    lastEditedBy: {
+      id: { type: String, default: null },
+      name: { type: String, default: null, trim: true },
+    },
+    editHistory: [
+      {
+        editedAt: { type: Date, required: true },
+        editedBy: {
+          id: { type: String, required: true },
+          name: { type: String, required: true, trim: true },
+        },
+        changes: [
+          {
+            field: { type: String, required: true },
+            from: { type: mongoose.Schema.Types.Mixed, default: null },
+            to: { type: mongoose.Schema.Types.Mixed, default: null },
+          },
+        ],
+      },
+    ],
   },
   { timestamps: true },
 );

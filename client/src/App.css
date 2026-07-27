@@ -7609,7 +7609,8 @@ a.user-chip:hover {
   --attendance-row-num-width: 3rem;
   --attendance-actions-width: 9.75rem;
   --attendance-col-selected-radius: 0.5rem;
-  --attendance-day-card-height: calc(5.1rem - (2 * var(--attendance-cell-padding)));
+  --attendance-row-height: 6.75rem;
+  --attendance-day-card-height: calc(var(--attendance-row-height) - (2 * var(--attendance-cell-padding)));
   width: 100%;
   min-width: max-content;
   border-collapse: collapse;
@@ -7683,7 +7684,8 @@ a.user-chip:hover {
 
 .attendance-grid tbody th,
 .attendance-grid tbody td {
-  height: 5.1rem;
+  height: var(--attendance-row-height);
+  min-height: var(--attendance-row-height);
   padding: var(--attendance-cell-padding);
   background-clip: padding-box;
   vertical-align: middle;
@@ -8192,6 +8194,109 @@ a.user-chip:hover {
   background: var(--surface-2);
   color: var(--text-muted);
   border: 1px solid var(--border);
+}
+
+.attendance-edit-chip {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+  flex-shrink: 0;
+  margin-top: 0;
+}
+
+.attendance-edit-chip__label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.35rem;
+  height: 0.95rem;
+  padding-inline: 0.28rem;
+  border-radius: 0.2rem;
+  font-size: 0.48rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: help;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+}
+
+.attendance-edit-chip__tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.35rem);
+  z-index: 30;
+  display: none;
+  width: max-content;
+  max-width: min(16rem, 70vw);
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.45rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  font-size: 0.68rem;
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.attendance-edit-chip:hover .attendance-edit-chip__tooltip,
+.attendance-edit-chip:focus-within .attendance-edit-chip__tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.attendance-edit-chip__tooltip-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.attendance-edit-chip__tooltip-section strong {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.attendance-edit-chip__changes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.attendance-edit-chip__tooltip-history {
+  max-height: 8rem;
+  overflow-y: auto;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+}
+
+.attendance-edit-chip__history-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-bottom: 0.35rem;
+}
+
+.attendance-edit-chip__history-entry:last-child {
+  padding-bottom: 0;
+}
+
+.attendance-edit-modal__prior {
+  margin-bottom: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
+  font-size: 0.78rem;
 }
 
 .attendance-grid__times-stack {

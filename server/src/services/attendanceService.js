@@ -8,6 +8,7 @@ import {
   evaluateCheckInPolicy,
   getQuarterWarningSummaryForUsers,
   parseStatusCodeToPolicyFields,
+  statusCodeFromRecord,
 } from './attendancePolicyService.js';
 import { getHolidayDateSet } from './leaveService.js';
 import {
@@ -439,9 +440,124 @@ function snapshotAttendanceRecord(record) {
     attendanceTag: record.attendanceTag,
     warningIssued: record.warningIssued,
     quarterWarningIndex: record.quarterWarningIndex,
-    lateNote: record.lateNote,
+    lateNote: record.lateNote ?? null,
     status: record.status,
   };
+}
+
+function serializeEditActor(actor) {
+  if (!actor) return null;
+  return {
+    id: actor.id?.toString?.() ?? actor._id?.toString?.() ?? String(actor),
+    name: actor.name ?? actor.email ?? 'Unknown',
+  };
+}
+
+function serializeEditHistoryEntry(entry) {
+  if (!entry) return null;
+  return {
+    editedAt: entry.editedAt,
+    editedBy: entry.editedBy
+      ? {
+          id: entry.editedBy.id,
+          name: entry.editedBy.name,
+        }
+      : null,
+    changes: (entry.changes ?? []).map((change) => ({
+      field: change.field,
+      from: change.from ?? null,
+      to: change.to ?? null,
+    })),
+  };
+}
+
+function serializeEditMetadata(record) {
+  if (!record?.lastEditedAt) {
+    return {
+      lastEditedAt: null,
+      lastEditedBy: null,
+      editHistory: [],
+    };
+  }
+  return {
+    lastEditedAt: record.lastEditedAt,
+    lastEditedBy: record.lastEditedBy
+      ? {
+          id: record.lastEditedBy.id,
+          name: record.lastEditedBy.name,
+        }
+      : null,
+    editHistory: (record.editHistory ?? []).map(serializeEditHistoryEntry).filter(Boolean),
+  };
+}
+
+function buildAttendanceEditChanges({
+  beforeCheckIn,
+  afterCheckIn,
+  beforeCheckOut,
+  afterCheckOut,
+}) {
+  const changes = [];
+  if (!beforeCheckIn || !afterCheckIn) return changes;
+
+  const beforeCheckInTime = getISTTimeHHmm(beforeCheckIn.timestamp);
+  const afterCheckInTime = getISTTimeHHmm(afterCheckIn.timestamp);
+  if (beforeCheckInTime !== afterCheckInTime) {
+    changes.push({ field: 'checkInTime', from: beforeCheckInTime, to: afterCheckInTime });
+  }
+
+  const beforeStatus = statusCodeFromRecord(beforeCheckIn);
+  const afterStatus = statusCodeFromRecord(afterCheckIn);
+  if (beforeStatus !== afterStatus) {
+    changes.push({ field: 'statusCode', from: beforeStatus, to: afterStatus });
+  }
+
+  if (beforeCheckIn.attendanceMode !== afterCheckIn.attendanceMode) {
+    changes.push({
+      field: 'attendanceMode',
+      from: beforeCheckIn.attendanceMode,
+      to: afterCheckIn.attendanceMode,
+    });
+  }
+
+  const beforeNote = beforeCheckIn.lateNote ?? null;
+  const afterNote = afterCheckIn.lateNote ?? null;
+  if (beforeNote !== afterNote) {
+    changes.push({ field: 'lateNote', from: beforeNote, to: afterNote });
+  }
+
+  if (beforeCheckIn.status !== afterCheckIn.status) {
+    changes.push({ field: 'status', from: beforeCheckIn.status, to: afterCheckIn.status });
+  }
+
+  const beforeCheckOutTime = beforeCheckOut ? getISTTimeHHmm(beforeCheckOut.timestamp) : null;
+  const afterCheckOutTime = afterCheckOut ? getISTTimeHHmm(afterCheckOut.timestamp) : null;
+  if (beforeCheckOutTime !== afterCheckOutTime) {
+    changes.push({
+      field: 'checkOutTime',
+      from: beforeCheckOutTime,
+      to: afterCheckOutTime,
+    });
+  }
+
+  return changes;
+}
+
+function appendAttendanceEditHistory(record, { actor, changes }) {
+  const editedBy = serializeEditActor(actor);
+  if (!editedBy) return;
+
+  const editedAt = new Date();
+  record.lastEditedAt = editedAt;
+  record.lastEditedBy = editedBy;
+  if (!Array.isArray(record.editHistory)) {
+    record.editHistory = [];
+  }
+  record.editHistory.push({
+    editedAt,
+    editedBy,
+    changes,
+  });
 }
 
 function serializeAdminAttendanceListRecord(record) {
@@ -466,6 +582,7 @@ function serializeAdminAttendanceListRecord(record) {
     rejectionReasons: record.rejectionReasons ?? [],
     latitude: record.latitude,
     longitude: record.longitude,
+    ...serializeEditMetadata(record),
   };
 }
 
@@ -526,8 +643,6 @@ export async function adminEditAttendanceRecord({
     checkInRecord.rejectionReasons = [];
   }
 
-  await checkInRecord.save();
-
   let checkOutRecord = null;
   let beforeCheckOut = null;
   if (payload.checkOutTime !== undefined) {
@@ -559,6 +674,17 @@ export async function adminEditAttendanceRecord({
     }
   }
 
+  const afterCheckIn = snapshotAttendanceRecord(checkInRecord);
+  const afterCheckOut = snapshotAttendanceRecord(checkOutRecord);
+  const changes = buildAttendanceEditChanges({
+    beforeCheckIn,
+    afterCheckIn,
+    beforeCheckOut,
+    afterCheckOut,
+  });
+  appendAttendanceEditHistory(checkInRecord, { actor, changes });
+  await checkInRecord.save();
+
   auditLog('attendance_admin_edit', {
     adminId: actor._id.toString(),
     email: auditContext.email,
@@ -567,9 +693,10 @@ export async function adminEditAttendanceRecord({
     dayKey,
     before: { checkIn: beforeCheckIn, checkOut: beforeCheckOut },
     after: {
-      checkIn: snapshotAttendanceRecord(checkInRecord),
-      checkOut: snapshotAttendanceRecord(checkOutRecord),
+      checkIn: afterCheckIn,
+      checkOut: afterCheckOut,
     },
+    changes,
     ip: auditContext.ip,
     userAgent: auditContext.userAgent,
   });

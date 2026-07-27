@@ -195,6 +195,63 @@ const MODE_OPTIONS = [
   { value: 'wfh', label: 'Work From Home (WFH)' },
 ];
 
+const EDIT_FIELD_LABELS = {
+  checkInTime: 'Check-in time',
+  checkOutTime: 'Check-out time',
+  statusCode: 'Status',
+  attendanceMode: 'Work mode',
+  lateNote: 'Late note',
+  status: 'Record status',
+};
+
+function formatEditModeValue(value) {
+  if (value === 'wfh') return 'WFH';
+  if (value === 'office') return 'Office';
+  return value ?? '(empty)';
+}
+
+function formatEditChangeValue(field, value) {
+  if (value == null || value === '') return '(empty)';
+  if (field === 'attendanceMode') return formatEditModeValue(value);
+  return String(value);
+}
+
+function formatEditChangeLine(change) {
+  const label = EDIT_FIELD_LABELS[change.field] ?? change.field;
+  const from = formatEditChangeValue(change.field, change.from);
+  const to = formatEditChangeValue(change.field, change.to);
+  return `${label}: ${from} → ${to}`;
+}
+
+function formatEditTimestamp(value) {
+  const date = parseTimestamp(value);
+  if (!date) return '—';
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST_TIMEZONE,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date);
+}
+
+function pickEditMetadata(record) {
+  if (!record?.lastEditedAt) {
+    return {
+      lastEditedAt: null,
+      lastEditedBy: null,
+      editHistory: [],
+    };
+  }
+  return {
+    lastEditedAt: record.lastEditedAt,
+    lastEditedBy: record.lastEditedBy ?? null,
+    editHistory: Array.isArray(record.editHistory) ? record.editHistory : [],
+  };
+}
+
 function getCheckInMinutesIST(timestamp) {
   const date = parseTimestamp(timestamp);
   if (!date) return 0;
@@ -376,6 +433,7 @@ function classifyDayCell({
 
   if (allowedCheckIn) {
     const { statusTag, warningTag } = derivePolicyFromRecord(allowedCheckIn, policy);
+    const editMeta = pickEditMetadata(allowedCheckIn);
     return {
       kind: 'present',
       statusTag,
@@ -391,10 +449,12 @@ function classifyDayCell({
       checkOutRecordId: recordId(allowedCheckOut),
       checkInRecord: allowedCheckIn,
       checkOutRecord: allowedCheckOut ?? null,
+      ...editMeta,
     };
   }
 
   if (rejectedCheckIn) {
+    const editMeta = pickEditMetadata(rejectedCheckIn);
     return {
       kind: 'rejected',
       checkInTime: formatCompactISTTime(rejectedCheckIn.timestamp),
@@ -403,6 +463,7 @@ function classifyDayCell({
         : [],
       checkInRecordId: recordId(rejectedCheckIn),
       checkInRecord: rejectedCheckIn,
+      ...editMeta,
     };
   }
 
@@ -432,6 +493,67 @@ function AttendanceStatusTag({ code, tone, title }) {
   return (
     <span className={`attendance-tag attendance-tag--${tone}`} title={title ?? code}>
       {code}
+    </span>
+  );
+}
+
+function AttendanceUpdatedChip({ lastEditedAt, lastEditedBy, editHistory = [] }) {
+  if (!lastEditedAt) return null;
+
+  const history = editHistory.length > 0
+    ? editHistory
+    : [{
+        editedAt: lastEditedAt,
+        editedBy: lastEditedBy,
+        changes: [],
+      }];
+  const latest = history[history.length - 1];
+  const latestChanges = latest?.changes ?? [];
+
+  return (
+    <span className="attendance-edit-chip">
+      <span className="attendance-edit-chip__label">Updated</span>
+      <span className="attendance-edit-chip__tooltip" role="tooltip">
+        <span className="attendance-edit-chip__tooltip-section">
+          <strong>Latest edit</strong>
+          <span>Updated at: {formatEditTimestamp(latest?.editedAt ?? lastEditedAt)}</span>
+          <span>Updated by: {latest?.editedBy?.name ?? lastEditedBy?.name ?? 'Unknown'}</span>
+          {latestChanges.length > 0 ? (
+            <span className="attendance-edit-chip__changes">
+              {latestChanges.map((change) => (
+                <span key={`${change.field}-${change.from}-${change.to}`}>
+                  {formatEditChangeLine(change)}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span>No field changes recorded.</span>
+          )}
+        </span>
+        {history.length > 1 ? (
+          <span className="attendance-edit-chip__tooltip-section attendance-edit-chip__tooltip-history">
+            <strong>Full history</strong>
+            {[...history].reverse().map((entry, index) => (
+              <span key={`${entry.editedAt}-${index}`} className="attendance-edit-chip__history-entry">
+                <span>
+                  {formatEditTimestamp(entry.editedAt)} · {entry.editedBy?.name ?? 'Unknown'}
+                </span>
+                {(entry.changes ?? []).length > 0 ? (
+                  <span className="attendance-edit-chip__changes">
+                    {entry.changes.map((change) => (
+                      <span key={`${entry.editedAt}-${change.field}-${change.from}-${change.to}`}>
+                        {formatEditChangeLine(change)}
+                      </span>
+                    ))}
+                  </span>
+                ) : (
+                  <span>No field changes</span>
+                )}
+              </span>
+            ))}
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }
@@ -585,6 +707,11 @@ function DayCell({ cell, cardClassName }) {
           right={<AttendanceStatusTag code="RJ" tone="danger" />}
         />
         <CheckInOutTimes checkInTime={cell.checkInTime} />
+        <AttendanceUpdatedChip
+          lastEditedAt={cell.lastEditedAt}
+          lastEditedBy={cell.lastEditedBy}
+          editHistory={cell.editHistory}
+        />
       </div>
     );
   } else {
@@ -635,6 +762,11 @@ function DayCell({ cell, cardClassName }) {
             +RJ
           </span>
         ) : null}
+        <AttendanceUpdatedChip
+          lastEditedAt={cell.lastEditedAt}
+          lastEditedBy={cell.lastEditedBy}
+          editHistory={cell.editHistory}
+        />
       </div>
     );
   }
@@ -726,6 +858,7 @@ function AttendanceEditModal({
         year: 'numeric',
       }).format(dayLabel)
     : target.dayKey;
+  const priorEdit = pickEditMetadata(target.checkInRecord);
 
   return createPortal(
     <div className="modal__backdrop" role="presentation" onClick={onClose}>
@@ -753,6 +886,13 @@ function AttendanceEditModal({
         >
           <div className="modal__body">
             {error ? <div className="alert alert--error modal__alert">{error}</div> : null}
+
+            {priorEdit.lastEditedAt ? (
+              <div className="attendance-edit-modal__prior muted">
+                Last edited {formatEditTimestamp(priorEdit.lastEditedAt)} by{' '}
+                {priorEdit.lastEditedBy?.name ?? 'Unknown'}
+              </div>
+            ) : null}
 
             <label className="modal__field">
               <span className="modal__label">Check-in time (IST)</span>
@@ -1108,6 +1248,7 @@ export default function AdminAttendance() {
       checkInRecordId: cell.checkInRecordId,
       hasCheckOut: Boolean(cell.checkOutRecordId),
       cellKind: cell.kind,
+      checkInRecord: cell.checkInRecord,
     });
     setEditForm({
       checkInTime: timestampToHHmmIST(cell.checkInRecord.timestamp),

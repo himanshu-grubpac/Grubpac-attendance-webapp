@@ -585,6 +585,39 @@ async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, offic
     await seedSampleLeave(sampleEmployee, plan.leaveDay, teamLead);
   }
 
+  if (plan.wfhDay && neha && adminUser) {
+    const wfhCheckInAt = istTimestampForDayAndTime(plan.wfhDay, times.onTime[0], times.onTime[1]);
+    const demoEditedAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const editor = {
+      id: adminUser._id.toString(),
+      name: adminUser.name ?? adminUser.email ?? 'Admin',
+    };
+    await AttendanceRecord.updateOne(
+      {
+        userId: neha._id,
+        type: 'check_in',
+        timestamp: wfhCheckInAt,
+      },
+      {
+        $set: {
+          lastEditedAt: demoEditedAt,
+          lastEditedBy: editor,
+          editHistory: [
+            {
+              editedAt: demoEditedAt,
+              editedBy: editor,
+              changes: [
+                { field: 'attendanceMode', from: 'office', to: 'wfh' },
+                { field: 'checkInTime', from: '09:20', to: `${String(times.onTime[0]).padStart(2, '0')}:${String(times.onTime[1]).padStart(2, '0')}` },
+              ],
+            },
+          ],
+        },
+      },
+    );
+    console.log(`Seeded demo attendance edit history for ${neha.name ?? neha.email} on ${plan.wfhDay}.`);
+  }
+
   const absentNote = plan.absentDay
     ? `Rahul absent on ${plan.absentDay}`
     : 'Absent status visible from Tuesday onward (no past working days yet on Monday)';
