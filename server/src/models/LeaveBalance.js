@@ -15,6 +15,7 @@ const leaveBalanceSchema = new mongoose.Schema(
 );
 
 leaveBalanceSchema.index({ userId: 1, leaveTypeId: 1, year: 1 }, { unique: true });
+leaveBalanceSchema.index({ userId: 1, year: 1 });
 
 leaveBalanceSchema.methods.toSafeJSON = function toSafeJSON() {
   const typeDoc =

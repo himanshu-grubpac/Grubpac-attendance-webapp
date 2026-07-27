@@ -6,8 +6,11 @@ import {
   markAttendance,
   resolveMonthSummaryTargetUserId,
 } from '../services/attendanceService.js';
+import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
 import { attendancePayloadSchema } from '../../../shared/validation/attendance.js';
 import { paginationSchema } from '../../../shared/validation/common.js';
+
+import { getRequestAuditContext } from '../utils/auditLog.js';
 
 const monthSummaryQuerySchema = z
   .object({
@@ -39,13 +42,21 @@ export async function getToday(req, res) {
 
 export async function checkIn(req, res) {
   const payload = attendancePayloadSchema.parse(req.body);
-  const result = await markAttendance(req.user._id, 'check_in', payload);
+  const auditContext = {
+    ...getRequestAuditContext(req),
+    email: req.user.email,
+  };
+  const result = await markAttendance(req.user._id, 'check_in', payload, auditContext);
   res.status(result.status === 'allowed' ? 201 : 400).json(result);
 }
 
 export async function checkOut(req, res) {
   const payload = attendancePayloadSchema.parse(req.body);
-  const result = await markAttendance(req.user._id, 'check_out', payload);
+  const auditContext = {
+    ...getRequestAuditContext(req),
+    email: req.user.email,
+  };
+  const result = await markAttendance(req.user._id, 'check_out', payload, auditContext);
   res.status(result.status === 'allowed' ? 201 : 400).json(result);
 }
 
@@ -66,4 +77,22 @@ export async function getMonthSummary(req, res) {
   );
   const summary = await getMonthDayStatusSummary(targetUserId, monthInput);
   res.json(summary);
+}
+
+export async function getMyQuarterWarnings(req, res) {
+  res.set('Cache-Control', 'no-store');
+  const summary = await getQuarterWarningSummaryForUsers([req.user._id]);
+  const userKey = String(req.user._id);
+  const row = summary.byUser[userKey] ?? {
+    used: 0,
+    allowance: summary.allowance,
+    remaining: summary.allowance,
+  };
+
+  res.json({
+    quarter: summary.quarter,
+    allowance: summary.allowance,
+    used: row.used,
+    remaining: row.remaining,
+  });
 }

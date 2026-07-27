@@ -1,6 +1,7 @@
 import { LeaveType } from '../models/LeaveType.js';
 import { LeavePolicy, LEAVE_POLICY_POPULATE } from '../models/LeavePolicy.js';
 import { Holiday } from '../models/Holiday.js';
+import { HolidayCategory } from '../models/HolidayCategory.js';
 import { User } from '../models/User.js';
 import {
   createLeavePolicySchema,
@@ -8,6 +9,7 @@ import {
   createLeaveTypeSchema,
   adjustLeaveBalanceSchema,
   carryForwardSchema,
+  carryForwardPreviewQuerySchema,
   encashLeaveSchema,
   leaveBalanceQuerySchema,
   leaveDecisionSchema,
@@ -19,17 +21,27 @@ import {
 } from '../../../shared/validation/leave.js';
 import {
   createHolidaySchema,
+  createHolidayCategorySchema,
   holidayQuerySchema,
+  materializeRecurringSchema,
+  recurringHolidayRulesSchema,
+  updateHolidayCategorySchema,
   updateHolidaySchema,
 } from '../../../shared/validation/holidays.js';
 import { parseDateInputAsISTDay, getISTYear } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
+import {
+  getRecurringHolidayRules,
+  materializeRecurringHolidaysForYear,
+  saveRecurringHolidayRules,
+} from '../services/recurringHolidayService.js';
 import { runMonthlyAccrualJob } from '../jobs/leaveJobs.js';
 import {
   adjustBalance,
   applyYearEndCarryForward,
   getBalancesForUser,
   ensureBalancesForUser,
+  previewYearEndCarryForward,
   recordEncashment,
 } from '../services/leaveBalanceService.js';
 import {
@@ -248,6 +260,46 @@ export async function listHolidays(req, res) {
   });
 }
 
+export async function listHolidayCategories(req, res) {
+  const categories = await HolidayCategory.find().sort({ name: 1 });
+  res.json({ categories: categories.map((category) => category.toSafeJSON()) });
+}
+
+export async function createHolidayCategory(req, res) {
+  const parsed = createHolidayCategorySchema.parse(req.body);
+  const slug = parsed.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+  const reserved = new Set(['public', 'restricted', 'event']);
+  if (!slug || reserved.has(slug)) {
+    return res.status(400).json({ message: 'Choose a category name different from the built-in categories.' });
+  }
+  const existing = await HolidayCategory.findOne({ slug });
+  if (existing) return res.status(409).json({ message: 'A category with this name already exists.' });
+
+  const category = await HolidayCategory.create({ slug, name: parsed.name, color: parsed.color });
+  res.status(201).json({ category: category.toSafeJSON() });
+}
+
+export async function updateHolidayCategory(req, res) {
+  const parsed = updateHolidayCategorySchema.parse(req.body);
+  const category = await HolidayCategory.findById(req.params.id);
+  if (!category) return res.status(404).json({ message: 'Category not found.' });
+  if (parsed.name !== undefined) category.name = parsed.name;
+  if (parsed.color !== undefined) category.color = parsed.color;
+  await category.save();
+  res.json({ category: category.toSafeJSON() });
+}
+
+export async function deleteHolidayCategory(req, res) {
+  const category = await HolidayCategory.findById(req.params.id);
+  if (!category) return res.status(404).json({ message: 'Category not found.' });
+  await Holiday.updateMany({ type: category.slug }, { $set: { type: 'public' } });
+  await category.deleteOne();
+  res.json({ message: 'Category deleted. Entries using it were moved to Public holiday.' });
+}
+
 export async function createHoliday(req, res) {
   const parsed = createHolidaySchema.parse(req.body);
   const date = parseDateInputAsISTDay(parsed.date);
@@ -260,6 +312,7 @@ export async function createHoliday(req, res) {
     date,
     name: parsed.name,
     description: parsed.description ?? null,
+    type: parsed.type ?? 'public',
     isActive: parsed.isActive ?? true,
     createdBy: req.user._id,
   });
@@ -290,6 +343,7 @@ export async function updateHoliday(req, res) {
   }
   if (parsed.name !== undefined) holiday.name = parsed.name;
   if (parsed.description !== undefined) holiday.description = parsed.description;
+  if (parsed.type !== undefined) holiday.type = parsed.type;
   if (parsed.isActive !== undefined) holiday.isActive = parsed.isActive;
 
   await holiday.save();
@@ -308,6 +362,33 @@ export async function deleteHoliday(req, res) {
     holidayId: holiday._id.toString(),
   });
   res.json({ message: 'Holiday deleted successfully.' });
+}
+
+export async function listRecurringHolidayRules(req, res) {
+  const rules = await getRecurringHolidayRules();
+  res.json({ rules });
+}
+
+export async function updateRecurringHolidayRules(req, res) {
+  const parsed = recurringHolidayRulesSchema.parse(req.body);
+  const rules = await saveRecurringHolidayRules(parsed.rules, req.user._id);
+  auditLog('recurring_holiday_rules_updated', {
+    adminId: req.user._id.toString(),
+    count: rules.length,
+  });
+  res.json({ rules });
+}
+
+export async function materializeRecurringHolidays(req, res) {
+  const parsed = materializeRecurringSchema.parse(req.body);
+  const result = await materializeRecurringHolidaysForYear(parsed.year, req.user._id);
+  auditLog('recurring_holidays_materialized', {
+    adminId: req.user._id.toString(),
+    year: parsed.year,
+    created: result.created.length,
+    skipped: result.skipped.length,
+  });
+  res.json(result);
 }
 
 export async function initUserBalancesHandler(req, res) {
@@ -332,15 +413,31 @@ export async function encashLeaveBalanceHandler(req, res) {
   res.json(result);
 }
 
+export async function previewCarryForwardHandler(req, res) {
+  const parsed = carryForwardPreviewQuerySchema.parse(req.query);
+  const result = await previewYearEndCarryForward(parsed.fromYear, {
+    userId: parsed.userId,
+  });
+  res.json(result);
+}
+
 export async function carryForwardHandler(req, res) {
   const parsed = carryForwardSchema.parse(req.body);
-  const result = await applyYearEndCarryForward(parsed.fromYear);
+  const result = await applyYearEndCarryForward(parsed.fromYear, {
+    userId: parsed.userId,
+    userIds: parsed.userIds,
+    appliedBy: req.user._id,
+  });
 
   auditLog('leave_carry_forward_applied', {
     adminId: req.user._id.toString(),
     fromYear: parsed.fromYear,
     toYear: result.toYear,
     adjustments: result.adjustments,
+    totalCarried: result.totalCarried,
+    totalForfeited: result.totalForfeited,
+    userId: parsed.userId ?? null,
+    userIds: parsed.userIds ?? null,
   });
 
   res.json(result);

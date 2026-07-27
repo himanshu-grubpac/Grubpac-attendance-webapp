@@ -1,5 +1,5 @@
 import { Navigate } from 'react-router-dom';
-import { getDefaultRoute, canAccessRoute } from '../config/nav.js';
+import { getDefaultRoute, canAccessRoute, canAccessPortalRoute } from '../config/nav.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function ProtectedRoute({
@@ -8,8 +8,9 @@ export default function ProtectedRoute({
   anyPermission,
   allPermissions,
   role,
+  portal,
 }) {
-  const { user, loading, loggingOut } = useAuth();
+  const { user, loginPortal, loading, loggingOut } = useAuth();
 
   if (loading) {
     return (
@@ -41,12 +42,16 @@ export default function ProtectedRoute({
   }
 
   if (role && user.role !== role) {
-    return <Navigate to={getDefaultRoute(user)} replace />;
+    return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
+  }
+
+  if (portal && !canAccessPortalRoute(user, loginPortal, portal)) {
+    return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
   }
 
   if (permission || anyPermission || allPermissions?.length) {
     if (!canAccessRoute(user, { permission, anyPermission, allPermissions })) {
-      return <Navigate to={getDefaultRoute(user)} replace />;
+      return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
     }
   }
 

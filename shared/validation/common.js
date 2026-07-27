@@ -53,6 +53,14 @@ export const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+/** Client-generated stable browser device id (UUID stored in localStorage). */
+export const deviceIdSchema = z
+  .string()
+  .trim()
+  .min(8, 'Device id is too short.')
+  .max(64, 'Device id is too long.')
+  .optional();
+
 export function formatZodErrors(error) {
   return error.issues.map((issue) => issue.message).join(' ');
 }

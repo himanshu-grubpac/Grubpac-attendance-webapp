@@ -9,10 +9,12 @@ import {
   cancelLeaveRequestHandler,
   carryForwardHandler,
   createHoliday,
+  createHolidayCategory,
   createLeavePolicy,
   createLeaveRequestHandler,
   createLeaveType,
   deleteHoliday,
+  deleteHolidayCategory,
   encashLeaveBalanceHandler,
   getLeaveBalances,
   getLeaveRequestHandler,
@@ -20,13 +22,19 @@ import {
   getTeamCalendarHandler,
   initUserBalancesHandler,
   listHolidays,
+  materializeRecurringHolidays,
+  listHolidayCategories,
+  listRecurringHolidayRules,
   listLeavePolicies,
   listLeaveRequestsHandler,
   listLeaveTypes,
+  previewCarryForwardHandler,
   previewLeaveRequestDays,
   rejectLeaveRequestHandler,
   runLeaveAccrualJobHandler,
   updateHoliday,
+  updateHolidayCategory,
+  updateRecurringHolidayRules,
   updateLeavePolicy,
   updateLeaveType,
 } from '../controllers/leaveController.js';
@@ -82,8 +90,13 @@ router.post(
 );
 router.post(
   '/carry-forward',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(carryForwardHandler),
+);
+router.get(
+  '/carry-forward/preview',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(previewCarryForwardHandler),
 );
 router.post(
   '/jobs/accrual',
@@ -135,6 +148,10 @@ router.get(
 );
 
 router.get('/holidays', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(listHolidays));
+router.get('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(listHolidayCategories));
+router.post('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(createHolidayCategory));
+router.patch('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(updateHolidayCategory));
+router.delete('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(deleteHolidayCategory));
 router.post(
   '/holidays',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
@@ -149,6 +166,21 @@ router.delete(
   '/holidays/:id',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(deleteHoliday),
+);
+router.get(
+  '/recurring-rules',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(listRecurringHolidayRules),
+);
+router.put(
+  '/recurring-rules',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(updateRecurringHolidayRules),
+);
+router.post(
+  '/holidays/materialize-recurring',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(materializeRecurringHolidays),
 );
 
 export default router;

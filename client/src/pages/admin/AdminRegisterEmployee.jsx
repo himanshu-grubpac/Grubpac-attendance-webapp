@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { employeeInputSchema } from '@shared/validation/employee.js';
-import { PERMISSIONS } from '@shared/permissions.js';
+import { Link, useNavigate } from 'react-router-dom';
+import { buildEmployeeInputSchema, EMPLOYEE_CODE_FORMAT_HINT } from '@shared/validation/employee.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { generatePassword } from '@shared/utils/generatePassword.js';
-import { adminApi, getErrorMessage, salaryApi } from '../../services/api.js';
+import { adminApi, getErrorMessage, getFieldErrors, salaryApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
@@ -11,6 +11,7 @@ import { parseInrInput } from '../../utils/formatNumber.js';
 import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
+import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 
 const emptyForm = {
@@ -23,8 +24,10 @@ const emptyForm = {
   designation: '',
   joiningDate: '',
   endingDate: '',
-  department: '',
+  roleId: '',
   departmentId: '',
+  reportingManagerId: '',
+  managedDepartmentIds: [],
   monthlySalary: '',
   salaryEffectiveFrom: '',
 };
@@ -155,14 +158,40 @@ export default function AdminRegisterEmployee() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [roles, setRoles] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [managers, setManagers] = useState([]);
+  const [referenceLoading, setReferenceLoading] = useState(true);
+  const [referenceError, setReferenceError] = useState('');
 
   useEffect(() => {
-    adminApi
-      .listDepartments()
-      .then((departmentsData) => setDepartments(departmentsData.departments ?? []))
-      .catch(() => {
-        // Reference data is optional for the form.
+    setReferenceLoading(true);
+    setReferenceError('');
+
+    Promise.all([
+      adminApi.listRoles(),
+      adminApi.listDepartments(),
+      adminApi.listManagers({ limit: 100 }),
+    ])
+      .then(([rolesData, departmentsData, managersData]) => {
+        const nextRoles = rolesData.roles ?? [];
+        const nextDepartments = departmentsData.departments ?? [];
+        const nextManagers = managersData.managers ?? [];
+
+        setRoles(nextRoles);
+        setDepartments(nextDepartments);
+        setManagers(nextManagers);
+
+        const defaultRole = nextRoles.find((role) => role.slug === SYSTEM_ROLE_SLUGS.EMPLOYEE);
+        if (defaultRole) {
+          setForm((current) => (current.roleId ? current : { ...current, roleId: defaultRole.id }));
+        }
+      })
+      .catch((err) => {
+        setReferenceError(getErrorMessage(err));
+      })
+      .finally(() => {
+        setReferenceLoading(false);
       });
   }, []);
 
@@ -175,7 +204,11 @@ export default function AdminRegisterEmployee() {
     setSubmitting(true);
     setError('');
 
-    const validation = validateForm(employeeInputSchema, form);
+    const roleSlug = roles.find((role) => role.id === form.roleId)?.slug ?? null;
+    const validation = validateForm(
+      buildEmployeeInputSchema({ roleSlug, hasDepartments: departmentOptions.length > 0 }),
+      form,
+    );
     if (!validation.data) {
       setFieldErrors(validation.errors);
       setSubmitting(false);
@@ -196,10 +229,13 @@ export default function AdminRegisterEmployee() {
     try {
       const payload = {
         ...validation.data,
-        departmentId: form.departmentId || undefined,
+        managedDepartmentIds: validation.data.managedDepartmentIds ?? [],
       };
+      delete payload.department;
+
       const { employee } = await adminApi.registerEmployee(payload);
 
+      // Salary is saved in a second API call because register creates the user first.
       if (canManageSalary && parsedSalary !== undefined) {
         const salaryPayload = {
           monthlySalary: parsedSalary,
@@ -220,21 +256,45 @@ export default function AdminRegisterEmployee() {
 
       navigate('/admin/users');
     } catch (err) {
-      setError(getErrorMessage(err));
+      const data = err?.response?.data;
+      const serverFieldErrors = getFieldErrors(err);
+      if (data?.field) {
+        setFieldErrors({ [data.field]: data.message });
+        setError('');
+      } else if (Object.keys(serverFieldErrors).length > 0) {
+        setFieldErrors(serverFieldErrors);
+        setError('');
+      } else {
+        setError(getErrorMessage(err));
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
+  const roleOptions = roles
+    .filter((role) => role.slug !== SYSTEM_ROLE_SLUGS.ADMIN)
+    .map((role) => ({ value: role.id, label: role.name }));
+
   const departmentOptions = departments
     .filter((dept) => dept.isActive)
     .map((dept) => ({ value: dept.id, label: dept.name }));
 
+  const managerOptions = managers.map((manager) => ({
+    value: manager.id,
+    label: `${manager.name} (${manager.roleName})`,
+  }));
+
   const hasDepartmentList = departmentOptions.length > 0;
+  const formDisabled = submitting || referenceLoading;
+  const selectedRoleSlug = roles.find((role) => role.id === form.roleId)?.slug ?? null;
+  const reportingManagerRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.EMPLOYEE;
+  const managedDeptsRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
 
   return (
     <div className="page page--register-employee">
       {error ? <div className="alert alert--error">{error}</div> : null}
+      {referenceError ? <div className="alert alert--error">{referenceError}</div> : null}
 
       <form className="register-form" onSubmit={handleRegister} noValidate>
         <section className="register-section card" aria-labelledby="register-identity-title">
@@ -259,12 +319,13 @@ export default function AdminRegisterEmployee() {
                 placeholder="Enter first name"
                 maxLength={50}
                 autoComplete="given-name"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.firstName} />
             </label>
 
             <label className="register-field">
-              <RegisterLabel required>Last name</RegisterLabel>
+              <RegisterLabel optional>Last name</RegisterLabel>
               <input
                 className="input"
                 type="text"
@@ -273,6 +334,7 @@ export default function AdminRegisterEmployee() {
                 placeholder="Enter last name"
                 maxLength={50}
                 autoComplete="family-name"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.lastName} />
             </label>
@@ -287,6 +349,7 @@ export default function AdminRegisterEmployee() {
                 placeholder="username@company.com"
                 maxLength={100}
                 autoComplete="email"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.email} />
             </label>
@@ -302,6 +365,7 @@ export default function AdminRegisterEmployee() {
                 placeholder="+91 99999 99999"
                 maxLength={15}
                 autoComplete="tel"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.mobile} />
             </label>
@@ -310,8 +374,17 @@ export default function AdminRegisterEmployee() {
               <RegisterLabel required>Joining date</RegisterLabel>
               <DateField
                 value={form.joiningDate}
-                onChange={(value) => updateField('joiningDate', value)}
+                onChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    joiningDate: value,
+                    ...(current.endingDate && value && current.endingDate < value
+                      ? { endingDate: value }
+                      : {}),
+                  }))
+                }
                 aria-label="Joining date"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.joiningDate} />
             </div>
@@ -321,7 +394,9 @@ export default function AdminRegisterEmployee() {
               <DateField
                 value={form.endingDate}
                 onChange={(value) => updateField('endingDate', value)}
+                min={form.joiningDate || undefined}
                 aria-label="Ending date"
+                disabled={formDisabled}
               />
               <FieldError message={fieldErrors.endingDate} />
             </div>
@@ -332,72 +407,120 @@ export default function AdminRegisterEmployee() {
                 className="input"
                 type="text"
                 value={form.employeeCode}
-                onChange={(event) => updateField('employeeCode', event.target.value)}
-                placeholder="e.g. GBT-2026-114"
-                maxLength={50}
+                onChange={(event) => updateField('employeeCode', event.target.value.toUpperCase())}
+                placeholder="EMP001"
+                maxLength={11}
+                pattern="[A-Z]{2,5}[0-9]{3,6}"
+                aria-describedby="register-employee-code-hint"
+                disabled={formDisabled}
               />
+              <p id="register-employee-code-hint" className="muted small">
+                {EMPLOYEE_CODE_FORMAT_HINT}
+              </p>
               <FieldError message={fieldErrors.employeeCode} />
             </label>
 
             <label className="register-field">
-              <RegisterLabel optional>Designation</RegisterLabel>
+              <RegisterLabel required>Designation</RegisterLabel>
               <input
                 className="input"
                 type="text"
                 value={form.designation}
                 onChange={(event) => updateField('designation', event.target.value)}
-                placeholder="Enter designation"
+                placeholder="e.g. Senior Software Engineer"
                 maxLength={100}
+                aria-describedby="register-designation-hint"
+                disabled={formDisabled}
               />
+              <p id="register-designation-hint" className="muted small">
+                Job title shown on profile — separate from access role.
+              </p>
               <FieldError message={fieldErrors.designation} />
             </label>
 
+            <div className="register-field">
+              <RegisterLabel required>Role</RegisterLabel>
+              <SelectField
+                value={form.roleId}
+                onChange={(value) => updateField('roleId', value)}
+                options={roleOptions}
+                placeholder="Select role"
+                aria-label="Role"
+                disabled={formDisabled || roleOptions.length === 0}
+              />
+              <p id="register-role-hint" className="muted small">
+                Controls permissions and portal access. Defaults to Employee.
+              </p>
+              <FieldError message={fieldErrors.roleId} />
+            </div>
+
             {hasDepartmentList ? (
               <div className="register-field">
-                <RegisterLabel optional>Department</RegisterLabel>
+                <RegisterLabel required>Department</RegisterLabel>
                 <SelectField
                   value={form.departmentId}
-                  onChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      departmentId: value,
-                      department: value ? '' : current.department,
-                    }))
-                  }
+                  onChange={(value) => updateField('departmentId', value)}
                   options={departmentOptions}
                   placeholder="Select department"
                   aria-label="Department"
+                  disabled={formDisabled}
                 />
+                <p id="register-department-hint" className="muted small">
+                  Primary team or function where the employee works.
+                </p>
                 <FieldError message={fieldErrors.departmentId} />
               </div>
             ) : (
-              <label className="register-field">
-                <RegisterLabel optional>Department</RegisterLabel>
-                <input
-                  className="input"
-                  type="text"
-                  value={form.department}
-                  onChange={(event) => updateField('department', event.target.value)}
-                  placeholder="Enter department"
-                  maxLength={100}
-                />
-                <FieldError message={fieldErrors.department} />
-              </label>
+              <div className="register-field register-field--full">
+                <RegisterLabel>Department</RegisterLabel>
+                <p className="muted small" id="register-department-empty-hint">
+                  No departments configured yet.{' '}
+                  <Link to="/admin/departments">Create departments</Link> before assigning
+                  employees to a team.
+                </p>
+              </div>
             )}
 
-            {hasDepartmentList && !form.departmentId ? (
-              <label className="register-field register-field--department-text">
-                <RegisterLabel optional>Department (text)</RegisterLabel>
-                <input
-                  className="input"
-                  type="text"
-                  value={form.department}
-                  onChange={(event) => updateField('department', event.target.value)}
-                  placeholder="If not listed above"
-                  maxLength={100}
+            <div className="register-field">
+              <RegisterLabel required={reportingManagerRequired} optional={!reportingManagerRequired}>
+                Reporting manager
+              </RegisterLabel>
+              <SelectField
+                value={form.reportingManagerId}
+                onChange={(value) => updateField('reportingManagerId', value)}
+                options={managerOptions}
+                placeholder="Select reporting manager"
+                aria-label="Reporting manager"
+                disabled={formDisabled}
+              />
+              <p id="register-manager-hint" className="muted small">
+                {reportingManagerRequired
+                  ? 'Required for employees — used for leave approval and team reporting.'
+                  : 'Optional for this role — used for leave approval and team reporting.'}
+              </p>
+              <FieldError message={fieldErrors.reportingManagerId} />
+            </div>
+
+            {hasDepartmentList ? (
+              <div className="register-field">
+                <RegisterLabel required={managedDeptsRequired} optional={!managedDeptsRequired}>
+                  Managed departments (team scope)
+                </RegisterLabel>
+                <p className="muted small" id="register-managed-depts-hint">
+                  Teams this person oversees. Most relevant for roles with team permissions.
+                </p>
+                <MultiSelectField
+                  value={form.managedDepartmentIds ?? []}
+                  onChange={(value) => updateField('managedDepartmentIds', value)}
+                  options={departmentOptions}
+                  placeholder="Select departments"
+                  countSuffix="departments"
+                  aria-label="Managed departments (team scope)"
+                  aria-describedby="register-managed-depts-hint"
+                  disabled={formDisabled}
                 />
-                <FieldError message={fieldErrors.department} />
-              </label>
+                <FieldError message={fieldErrors.managedDepartmentIds} />
+              </div>
             ) : null}
 
             {canManageSalary ? (
@@ -409,7 +532,7 @@ export default function AdminRegisterEmployee() {
                     value={form.monthlySalary}
                     onChange={(value) => updateField('monthlySalary', value)}
                     placeholder="Optional"
-                    disabled={submitting}
+                    disabled={formDisabled}
                   />
                   <FieldError message={fieldErrors.monthlySalary} />
                 </label>
@@ -420,7 +543,7 @@ export default function AdminRegisterEmployee() {
                     value={form.salaryEffectiveFrom}
                     onChange={(value) => updateField('salaryEffectiveFrom', value)}
                     aria-label="Salary effective from"
-                    disabled={submitting}
+                    disabled={formDisabled}
                   />
                   <FieldError message={fieldErrors.salaryEffectiveFrom} />
                 </div>
@@ -433,7 +556,7 @@ export default function AdminRegisterEmployee() {
                 value={form.password}
                 onChange={(value) => updateField('password', value)}
                 error={fieldErrors.password}
-                disabled={submitting}
+                disabled={formDisabled}
               />
             </div>
           </div>
@@ -457,7 +580,11 @@ export default function AdminRegisterEmployee() {
           >
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary register-submit" disabled={submitting}>
+          <button
+            type="submit"
+            className="btn btn-primary register-submit"
+            disabled={formDisabled || !hasDepartmentList}
+          >
             <CheckIcon />
             <span>{submitting ? 'Saving…' : 'Register Employee'}</span>
           </button>

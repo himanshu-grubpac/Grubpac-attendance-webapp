@@ -18,6 +18,16 @@ const officeSettingsSchema = new mongoose.Schema(
     graceThresholdTime: { type: String, default: '09:00', trim: true },
     halfDayThresholdTime: { type: String, default: '10:00', trim: true },
     warningsPerQuarter: { type: Number, default: 3, min: 0, max: 10 },
+    /** IST weekday numbers treated as non-working (0=Sun … 6=Sat). Default Sat+Sun. */
+    weekendDays: { type: [Number], default: [0, 6] },
+    /** Recurring holiday rules materialized per calendar year. */
+    recurringHolidayRules: [{
+      nth: { type: Number, required: true },
+      weekday: { type: Number, required: true, min: 0, max: 6 },
+      months: { type: mongoose.Schema.Types.Mixed, default: 'all' },
+      type: { type: String, default: 'public', trim: true },
+      name: { type: String, required: true, trim: true, maxlength: 200 },
+    }],
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true },

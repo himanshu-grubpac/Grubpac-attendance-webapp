@@ -6,7 +6,7 @@ import { connectDatabase } from './config/db.js';
 let serverlessHandler;
 
 async function ensureDatabase() {
-  if (mongoose.connection.readyState === 0) {
+  if (mongoose.connection.readyState !== 1) {
     await connectDatabase();
   }
 }

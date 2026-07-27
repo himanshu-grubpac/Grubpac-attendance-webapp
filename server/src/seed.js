@@ -17,9 +17,17 @@ import {
   initBalancesForAllUsers,
 } from './services/leaveBalanceService.js';
 import { AttendanceRecord } from './models/AttendanceRecord.js';
+import { AuditLog } from './models/AuditLog.js';
 import { LeaveRequest } from './models/LeaveRequest.js';
 import { LeaveType } from './models/LeaveType.js';
-import { DEFAULT_ATTENDANCE_POLICY } from './services/attendancePolicyService.js';
+import { LeaveCarryForwardEntry } from './models/LeaveCarryForwardEntry.js';
+import { WeekAttendanceConfirmation } from './models/WeekAttendanceConfirmation.js';
+import { SalaryTransfer } from './models/SalaryTransfer.js';
+import { Holiday } from './models/Holiday.js';
+import {
+  DEFAULT_ATTENDANCE_POLICY,
+  parseTimeStringToMinutes,
+} from './services/attendancePolicyService.js';
 import {
   endOfDayIST,
   getISTDateInputValue,
@@ -85,6 +93,74 @@ async function wipeDatabase() {
     await mongoose.connection.db.collection(name).deleteMany({});
   }
   console.log(`Wiped ${names.length} collection(s): ${names.join(', ')}`);
+}
+
+/** Accounts that survive a full wipe — admin (env) and Himanshu's production login. */
+const HIMANSHU_EMAIL = 'salunke.himanshu@grubpac.com';
+
+function getPreservedUserEmails() {
+  return [env.adminEmail.toLowerCase(), HIMANSHU_EMAIL.toLowerCase()];
+}
+
+async function backupPreservedUsers() {
+  const emails = getPreservedUserEmails();
+  const users = await User.find({ email: { $in: emails } }).lean();
+  if (users.length > 0) {
+    console.log(`Backed up ${users.length} preserved user(s): ${users.map((u) => u.email).join(', ')}`);
+  }
+  return users;
+}
+
+async function restorePreservedUsers(backups, roleMap, departmentMap) {
+  const adminEmail = env.adminEmail.toLowerCase();
+
+  for (const doc of backups) {
+    if (doc.email === adminEmail) {
+      continue;
+    }
+
+    if (await User.findOne({ email: doc.email })) {
+      console.log(`Preserved user already present, skipped restore: ${doc.email}`);
+      continue;
+    }
+
+    const roleSlug =
+      doc.role === 'admin' ? SYSTEM_ROLE_SLUGS.ADMIN : SYSTEM_ROLE_SLUGS.EMPLOYEE;
+    const roleId = roleMap.get(roleSlug)?._id ?? roleMap.get(SYSTEM_ROLE_SLUGS.EMPLOYEE)?._id;
+
+    let departmentId = null;
+    let department = doc.department ?? undefined;
+    if (doc.department) {
+      const byName = [...departmentMap.values()].find((dept) => dept.name === doc.department);
+      if (byName) {
+        departmentId = byName._id;
+        department = byName.name;
+      }
+    }
+
+    const {
+      reportingManagerId: _rm,
+      managedDepartmentIds: _md,
+      delegateApproverId: _da,
+      createdBy: _cb,
+      roleId: _roleId,
+      departmentId: _deptId,
+      ...profile
+    } = doc;
+
+    await User.collection.insertOne({
+      ...profile,
+      roleId,
+      role: doc.role,
+      departmentId,
+      department,
+      reportingManagerId: null,
+      managedDepartmentIds: [],
+      delegateApproverId: null,
+      createdBy: null,
+    });
+    console.log(`Restored preserved user: ${doc.email}`);
+  }
 }
 
 /** Idempotently seeds one sample employee so admin-created data and multi-identifier login (email/mobile/employeeCode) can be exercised after a reseed. */
@@ -181,6 +257,7 @@ async function upsertTeamLead(roleMap, departmentMap) {
       joiningDate: new Date('2024-06-01'),
       departmentId: devDepartment?._id ?? null,
       department: devDepartment?.name ?? undefined,
+      managedDepartmentIds: devDepartment?._id ? [devDepartment._id] : [],
       passwordHash: await bcrypt.hash(password, 12),
       isActive: true,
     });
@@ -189,7 +266,9 @@ async function upsertTeamLead(roleMap, departmentMap) {
     teamLead.roleId = managerRole._id;
     teamLead.role = 'admin';
     teamLead.isActive = true;
+    teamLead.managedDepartmentIds = devDepartment?._id ? [devDepartment._id] : [];
     teamLead.passwordHash = await bcrypt.hash(password, 12);
+    teamLead.managedDepartmentIds = devDepartment?._id ? [devDepartment._id] : [];
     await teamLead.save();
     console.log(`Updated team lead: ${email}`);
   }
@@ -242,45 +321,127 @@ async function upsertTeamMembers(teamLead, roleMap, departmentMap) {
   return created;
 }
 
-function buildAttendancePayload(user, office, timestamp, type, policyFields = {}) {
+const DEMO_HOLIDAY_NAME = 'Demo Republic Day (seed)';
+
+function minutesToHourMinute(totalMinutes) {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, totalMinutes));
+  return [Math.floor(clamped / 60), clamped % 60];
+}
+
+function policyCheckInTimes(office) {
+  const graceMinutes =
+    parseTimeStringToMinutes(office.graceThresholdTime ?? DEFAULT_ATTENDANCE_POLICY.graceThresholdTime) ??
+    9 * 60;
+  const halfDayMinutes =
+    parseTimeStringToMinutes(office.halfDayThresholdTime ?? DEFAULT_ATTENDANCE_POLICY.halfDayThresholdTime) ??
+    10 * 60;
+  return {
+    onTime: minutesToHourMinute(graceMinutes - 5),
+    warn1: minutesToHourMinute(graceMinutes + 15),
+    warn2: minutesToHourMinute(graceMinutes + 30),
+    warn3: minutesToHourMinute(graceMinutes + 45),
+    halfDay: minutesToHourMinute(halfDayMinutes + 20),
+    rejectedAttempt: minutesToHourMinute(graceMinutes + 5),
+  };
+}
+
+function buildAttendancePayload(user, office, timestamp, type, fields = {}) {
+  const {
+    status = 'allowed',
+    rejectionReasons = [],
+    attendanceMode = 'office',
+    attendanceTag = null,
+    lateNote = null,
+    warningIssued = false,
+    quarterWarningIndex = null,
+    ...rest
+  } = fields;
   return {
     userId: user._id,
     type,
     timestamp,
+    attendanceMode,
     latitude: office.latitude,
     longitude: office.longitude,
     accuracyMeters: 12,
-    distanceMeters: 8,
+    distanceMeters: status === 'rejected' ? office.radiusMeters + 250 : 8,
     officeLatitude: office.latitude,
     officeLongitude: office.longitude,
     radiusMeters: office.radiusMeters,
-    status: 'allowed',
-    rejectionReasons: [],
-    attendanceTag: null,
-    warningIssued: false,
-    quarterWarningIndex: null,
-    ...policyFields,
+    status,
+    rejectionReasons,
+    attendanceTag,
+    lateNote,
+    warningIssued,
+    quarterWarningIndex,
+    ...rest,
   };
 }
 
-async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, office) {
-  const weekStart = getWeekStartDayKey();
+function planDemoWeek(workingDays, todayKey) {
+  const holidayDay = workingDays[Math.min(2, workingDays.length - 1)];
+  const absentDay = workingDays[0] < todayKey ? workingDays[0] : null;
+  const futureWorkingDays = workingDays.filter((dayKey) => dayKey > todayKey && dayKey !== holidayDay);
+
+  const dayAt = (index) => {
+    const day = workingDays[index];
+    if (!day || day > todayKey || day === holidayDay) return null;
+    return day;
+  };
+
+  const fallbackDay =
+    workingDays.find((dayKey) => dayKey <= todayKey && dayKey !== holidayDay) ?? null;
+  const resolve = (index) => dayAt(index) ?? fallbackDay;
+
+  return {
+    holidayDay,
+    absentDay,
+    leaveDay: futureWorkingDays[0] ?? null,
+    rejectedOnlyDay: futureWorkingDays[1] ?? futureWorkingDays[0] ?? null,
+    presentOfficeDay: resolve(0),
+    wfhDay: resolve(0),
+    warn1Day: resolve(1),
+    warn2Day: resolve(2),
+    warn3Day: resolve(3),
+    halfDayDay: resolve(4),
+    rejectedAttemptDay: resolve(0),
+  };
+}
+
+async function seedDemoHoliday(dayKey, adminUser) {
+  const holidayDate = parseDateInputAsISTDay(dayKey);
+  await Holiday.deleteMany({ name: DEMO_HOLIDAY_NAME });
+  await Holiday.create({
+    date: holidayDate,
+    name: DEMO_HOLIDAY_NAME,
+    description: 'Seeded public holiday for attendance grid H status testing.',
+    type: 'public',
+    isActive: true,
+    createdBy: adminUser?._id ?? null,
+  });
+  console.log(`Seeded demo holiday "${DEMO_HOLIDAY_NAME}" on ${dayKey}.`);
+}
+
+async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, office, adminUser) {
+  const todayKey = getISTDateInputValue();
+  const weekStart = getWeekStartDayKey(todayKey);
   const weekDays = buildWeekDayKeys(weekStart);
   const workingDays = weekDays.filter((dayKey) => {
     const weekday = getISTWeekday(parseDateInputAsISTDay(dayKey));
     return weekday >= 1 && weekday <= 5;
   });
 
-  if (workingDays.length < 5) {
-    console.log('Skipped sample attendance: current IST week has fewer than five working days.');
+  if (workingDays.length === 0) {
+    console.log('Skipped sample attendance: no working days in current IST week.');
     return;
   }
 
-  const [mon, tue, wed, thu, fri] = workingDays;
   const demoUsers = [...teamMembers, sampleEmployee];
   const demoUserIds = demoUsers.map((user) => user._id);
   const weekStartDate = startOfDayIST(parseDateInputAsISTDay(weekStart));
   const weekEndDate = endOfDayIST(parseDateInputAsISTDay(weekDays[6]));
+  const plan = planDemoWeek(workingDays, todayKey);
+  const times = policyCheckInTimes(office);
 
   const removed = await AttendanceRecord.deleteMany({
     userId: { $in: demoUserIds },
@@ -290,63 +451,69 @@ async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, offic
     console.log(`Cleared ${removed.deletedCount} demo attendance record(s) for current IST week.`);
   }
 
+  await LeaveRequest.deleteMany({
+    userId: { $in: demoUserIds },
+    startDate: { $lte: weekEndDate },
+    endDate: { $gte: weekStartDate },
+    reason: /Seeded approved leave for attendance grid UI testing/i,
+  });
+
+  await seedDemoHoliday(plan.holidayDay, adminUser);
+
   const [aarav, neha, rahul, priya, vikram] = teamMembers;
   const checkInScenarios = [
     {
       user: aarav,
-      dayKey: mon,
-      hour: 8,
-      minute: 55,
+      dayKey: plan.presentOfficeDay,
+      hour: times.onTime[0],
+      minute: times.onTime[1],
       attendanceTag: 'P',
-      warningIssued: false,
-      quarterWarningIndex: null,
+      attendanceMode: 'office',
       checkOut: [17, 5],
     },
     {
       user: neha,
-      dayKey: tue,
-      hour: 9,
-      minute: 15,
+      dayKey: plan.wfhDay,
+      hour: times.onTime[0],
+      minute: times.onTime[1],
       attendanceTag: 'P',
-      warningIssued: true,
-      quarterWarningIndex: 1,
+      attendanceMode: 'wfh',
     },
     {
       user: rahul,
-      dayKey: wed,
-      hour: 9,
-      minute: 45,
+      dayKey: plan.warn1Day,
+      hour: times.warn1[0],
+      minute: times.warn1[1],
+      attendanceTag: 'P',
+      warningIssued: true,
+      quarterWarningIndex: 1,
+      lateNote: 'Traffic delay on Ring Road — seeded demo late note.',
+    },
+    {
+      user: priya,
+      dayKey: plan.warn2Day,
+      hour: times.warn2[0],
+      minute: times.warn2[1],
       attendanceTag: 'P',
       warningIssued: true,
       quarterWarningIndex: 2,
+      lateNote: 'Doctor appointment ran over — seeded demo late note.',
     },
     {
       user: sampleEmployee,
-      dayKey: wed,
-      hour: 9,
-      minute: 30,
+      dayKey: plan.warn3Day,
+      hour: times.warn3[0],
+      minute: times.warn3[1],
       attendanceTag: 'P',
       warningIssued: true,
       quarterWarningIndex: 3,
     },
     {
-      user: priya,
-      dayKey: thu,
-      hour: 10,
-      minute: 20,
-      attendanceTag: 'HD',
-      warningIssued: false,
-      quarterWarningIndex: null,
-    },
-    {
       user: vikram,
-      dayKey: fri,
-      hour: 8,
-      minute: 50,
-      attendanceTag: 'P',
-      warningIssued: false,
-      quarterWarningIndex: null,
-      checkOut: [17, 0],
+      dayKey: plan.halfDayDay,
+      hour: times.halfDay[0],
+      minute: times.halfDay[1],
+      attendanceTag: 'HD',
     },
   ];
 
@@ -358,14 +525,18 @@ async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, offic
       hour,
       minute,
       attendanceTag,
-      warningIssued,
-      quarterWarningIndex,
+      attendanceMode = 'office',
+      lateNote = null,
+      warningIssued = false,
+      quarterWarningIndex = null,
       checkOut,
     } = scenario;
     const checkInAt = istTimestampForDayAndTime(dayKey, hour, minute);
     await AttendanceRecord.create(
       buildAttendancePayload(user, office, checkInAt, 'check_in', {
         attendanceTag,
+        attendanceMode,
+        lateNote,
         warningIssued,
         quarterWarningIndex,
       }),
@@ -375,17 +546,52 @@ async function seedSampleAttendance(teamMembers, sampleEmployee, teamLead, offic
     if (checkOut) {
       const [outHour, outMinute] = checkOut;
       const checkOutAt = istTimestampForDayAndTime(dayKey, outHour, outMinute);
-      await AttendanceRecord.create(buildAttendancePayload(user, office, checkOutAt, 'check_out'));
+      await AttendanceRecord.create(
+        buildAttendancePayload(user, office, checkOutAt, 'check_out', { attendanceMode }),
+      );
       created += 1;
     }
   }
 
-  await seedSampleLeave(neha, fri, teamLead);
+  if (plan.rejectedOnlyDay) {
+    const rejectedAt = istTimestampForDayAndTime(
+      plan.rejectedOnlyDay,
+      times.rejectedAttempt[0],
+      times.rejectedAttempt[1],
+    );
+    await AttendanceRecord.create(
+      buildAttendancePayload(priya, office, rejectedAt, 'check_in', {
+        status: 'rejected',
+        rejectionReasons: ['Outside office radius.'],
+      }),
+    );
+    created += 1;
+  }
+
+  const attemptAt = istTimestampForDayAndTime(
+    plan.rejectedAttemptDay,
+    times.rejectedAttempt[0],
+    times.rejectedAttempt[1],
+  );
+  await AttendanceRecord.create(
+    buildAttendancePayload(aarav, office, attemptAt, 'check_in', {
+      status: 'rejected',
+      rejectionReasons: ['Location accuracy too low.'],
+    }),
+  );
+  created += 1;
+
+  if (plan.leaveDay) {
+    await seedSampleLeave(sampleEmployee, plan.leaveDay, teamLead);
+  }
+
+  const absentNote = plan.absentDay
+    ? `Rahul absent on ${plan.absentDay}`
+    : 'Absent status visible from Tuesday onward (no past working days yet on Monday)';
 
   console.log(
     `Seeded ${created} attendance record(s) for IST week ${weekStart}–${weekDays[6]} ` +
-      `(Mon P+checkout, Tue W1, Wed W2/W3, Thu HD, Fri P+checkout; ` +
-      `Mon absent for Rahul, Fri leave for Neha, Fri pending/absent for Aarav).`,
+      `(P+OFC, P+WFH, W1–W3, HD, RJ, +RJ; holiday ${plan.holidayDay}; leave ${plan.leaveDay ?? 'n/a'}; ${absentNote}).`,
   );
 }
 
@@ -417,6 +623,193 @@ async function seedSampleLeave(employee, dayKey, approver) {
     decisionComment: 'Approved for demo data.',
   });
   console.log(`Seeded approved leave for ${employee.email} on ${dayKey}.`);
+}
+
+const SEED_AUDIT_TAG = 'device-conflict-demo';
+const SEED_SHARED_DEVICE_ID = 'seed-device-shared-001';
+const SEED_SHARED_IP = '203.0.113.50';
+const SEED_IP_ONLY_CONFLICT = '198.51.100.77';
+
+/** Idempotent demo login audit logs — two users share a device, one pair shares IP only. */
+async function seedDeviceConflictAuditLogs(teamMembers) {
+  const [aarav, neha, rahul, priya] = teamMembers;
+  if (!aarav || !neha || !rahul) {
+    console.log('Skipped device-conflict audit logs: team members not found.');
+    return;
+  }
+
+  await AuditLog.deleteMany({ 'metadata.seedTag': SEED_AUDIT_TAG });
+
+  const baseTime = Date.now() - 2 * 60 * 60 * 1000;
+  const entries = [
+    {
+      action: 'login_success',
+      userId: aarav._id,
+      email: aarav.email,
+      role: 'employee',
+      ip: SEED_SHARED_IP,
+      deviceId: SEED_SHARED_DEVICE_ID,
+      userAgent: 'Mozilla/5.0 (seed) Chrome/120',
+      status: 'success',
+      timestamp: new Date(baseTime),
+      metadata: { seedTag: SEED_AUDIT_TAG, scenario: 'device-conflict-user-a' },
+    },
+    {
+      action: 'login_success',
+      userId: neha._id,
+      email: neha.email,
+      role: 'employee',
+      ip: SEED_SHARED_IP,
+      deviceId: SEED_SHARED_DEVICE_ID,
+      userAgent: 'Mozilla/5.0 (seed) Chrome/120',
+      status: 'success',
+      timestamp: new Date(baseTime + 30 * 60 * 1000),
+      metadata: { seedTag: SEED_AUDIT_TAG, scenario: 'device-conflict-user-b' },
+    },
+    {
+      action: 'login_success',
+      userId: rahul._id,
+      email: rahul.email,
+      role: 'employee',
+      ip: SEED_IP_ONLY_CONFLICT,
+      deviceId: 'seed-device-rahul-002',
+      userAgent: 'Mozilla/5.0 (seed) Firefox/121',
+      status: 'success',
+      timestamp: new Date(baseTime + 45 * 60 * 1000),
+      metadata: { seedTag: SEED_AUDIT_TAG, scenario: 'ip-conflict-user-c' },
+    },
+    {
+      action: 'login_success',
+      userId: priya?._id ?? neha._id,
+      email: priya?.email ?? neha.email,
+      role: 'employee',
+      ip: SEED_IP_ONLY_CONFLICT,
+      deviceId: 'seed-device-priya-003',
+      userAgent: 'Mozilla/5.0 (seed) Safari/17',
+      status: 'success',
+      timestamp: new Date(baseTime + 60 * 60 * 1000),
+      metadata: { seedTag: SEED_AUDIT_TAG, scenario: 'ip-conflict-user-d' },
+    },
+    {
+      action: 'login_failed',
+      userId: null,
+      email: 'unknown.demo@grubpac.com',
+      role: null,
+      ip: SEED_SHARED_IP,
+      deviceId: SEED_SHARED_DEVICE_ID,
+      userAgent: 'Mozilla/5.0 (seed) Chrome/120',
+      status: 'failed',
+      reason: 'Invalid credentials (seed demo)',
+      timestamp: new Date(baseTime + 15 * 60 * 1000),
+      metadata: { seedTag: SEED_AUDIT_TAG, scenario: 'failed-login-same-device' },
+    },
+  ];
+
+  await AuditLog.insertMany(entries);
+  console.log(
+    `Seeded ${entries.length} login audit log(s) for device/IP conflict testing ` +
+      `(shared device: ${SEED_SHARED_DEVICE_ID}; shared IP: ${SEED_IP_ONLY_CONFLICT}).`,
+  );
+}
+
+async function seedWeekAttendanceConfirmations(teamMembers, teamLead) {
+  const todayKey = getISTDateInputValue();
+  const weekStart = getWeekStartDayKey(todayKey);
+  const demoUser = teamMembers[0];
+  if (!demoUser || !teamLead) {
+    console.log('Skipped week attendance confirmations: demo user or team lead missing.');
+    return;
+  }
+
+  await WeekAttendanceConfirmation.findOneAndUpdate(
+    { userId: demoUser._id, weekStart },
+    {
+      userId: demoUser._id,
+      weekStart,
+      confirmedBy: teamLead._id,
+      confirmedAt: new Date(),
+      notes: 'Seeded week confirmation for attendance review demo.',
+    },
+    { upsert: true, new: true },
+  );
+  console.log(`Seeded week attendance confirmation for ${demoUser.email} (week ${weekStart}).`);
+}
+
+async function seedSalaryTransfers(teamMembers, adminUser) {
+  const now = new Date();
+  const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const demoUser = teamMembers[1] ?? teamMembers[0];
+  if (!demoUser) {
+    console.log('Skipped salary transfers: no demo users.');
+    return;
+  }
+
+  const transfers = [
+    {
+      userId: demoUser._id,
+      periodKey,
+      amount: 85000,
+      currency: 'INR',
+      status: 'paid',
+      note: 'Seeded salary transfer — paid',
+      paidAt: new Date(now.getFullYear(), now.getMonth(), 1),
+      createdBy: adminUser?._id ?? null,
+      updatedBy: adminUser?._id ?? null,
+    },
+    {
+      userId: teamMembers[2]?._id ?? demoUser._id,
+      periodKey: `${now.getFullYear()}-${String(Math.max(1, now.getMonth())).padStart(2, '0')}`,
+      amount: 72000,
+      currency: 'INR',
+      status: 'pending',
+      note: 'Seeded salary transfer — pending',
+      createdBy: adminUser?._id ?? null,
+      updatedBy: adminUser?._id ?? null,
+    },
+  ];
+
+  for (const row of transfers) {
+    await SalaryTransfer.findOneAndUpdate(
+      { userId: row.userId, periodKey: row.periodKey },
+      row,
+      { upsert: true, new: true },
+    );
+  }
+  console.log(`Seeded ${transfers.length} salary transfer(s) for demo users.`);
+}
+
+async function seedLeaveCarryForwardDemo(employee, adminUser) {
+  if (!employee) {
+    console.log('Skipped leave carry-forward demo: employee missing.');
+    return;
+  }
+
+  const clType = await LeaveType.findOne({ code: 'CL' });
+  if (!clType) {
+    console.log('Skipped leave carry-forward demo: CL leave type missing.');
+    return;
+  }
+
+  const fromYear = getISTYear() - 1;
+  const toYear = getISTYear();
+
+  await LeaveCarryForwardEntry.findOneAndUpdate(
+    { userId: employee._id, leaveTypeId: clType._id, fromYear },
+    {
+      userId: employee._id,
+      leaveTypeId: clType._id,
+      fromYear,
+      toYear,
+      remaining: 5,
+      carried: 3,
+      forfeited: 2,
+      appliedBy: adminUser?._id ?? employee._id,
+    },
+    { upsert: true, new: true },
+  );
+  console.log(
+    `Seeded leave carry-forward entry for ${employee.email} (${fromYear} → ${toYear}, CL).`,
+  );
 }
 
 async function migrateUsers(roleMap) {
@@ -455,7 +848,9 @@ async function migrateUsers(roleMap) {
 export async function seedDatabase({ wipe = false } = {}) {
   await connectDatabase();
 
+  let preservedUsers = [];
   if (wipe) {
+    preservedUsers = await backupPreservedUsers();
     await wipeDatabase();
   }
 
@@ -508,6 +903,10 @@ export async function seedDatabase({ wipe = false } = {}) {
   const teamLead = await upsertTeamLead(roleMap, departmentMap);
   const teamMembers = await upsertTeamMembers(teamLead, roleMap, departmentMap);
 
+  if (preservedUsers.length > 0) {
+    await restorePreservedUsers(preservedUsers, roleMap, departmentMap);
+  }
+
   await migrateUsers(roleMap);
 
   await seedLeaveTypesAndPolicies();
@@ -534,8 +933,19 @@ export async function seedDatabase({ wipe = false } = {}) {
   }
 
   const officeDoc = await OfficeSettings.findOne();
+  const adminUser = await User.findOne({ email: adminEmail });
   if (sampleEmployee) {
-    await seedSampleAttendance(teamMembers, sampleEmployee, teamLead, officeDoc ?? env.defaultOffice);
+    await seedSampleAttendance(
+      teamMembers,
+      sampleEmployee,
+      teamLead,
+      officeDoc ?? env.defaultOffice,
+      adminUser,
+    );
+    await seedDeviceConflictAuditLogs(teamMembers);
+    await seedWeekAttendanceConfirmations(teamMembers, teamLead);
+    await seedSalaryTransfers(teamMembers, adminUser);
+    await seedLeaveCarryForwardDemo(sampleEmployee, adminUser);
   }
 }
 

@@ -1,16 +1,28 @@
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import {
   salaryExportQuerySchema,
+  salaryStructureQuerySchema,
   salarySummaryQuerySchema,
+  salaryTransferListQuerySchema,
+  generateSalaryTransfersSchema,
+  updateSalaryTransferStatusSchema,
+  updateSalarySettingsSchema,
   updateUserSalarySchema,
 } from '../../../shared/validation/salary.js';
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
 import {
   buildSalaryExportWorkbook,
+  buildSalaryMonthMeta,
+  generatePendingSalaryTransfers,
+  getSalarySettingsPayload,
   getSalarySummaryForUser,
+  listSalaryStructure,
   listSalarySummariesForMonth,
+  listSalaryTransfers,
   loadSalarySubject,
+  updateSalarySettings,
+  updateSalaryTransferStatus,
   updateUserSalary,
 } from '../services/salaryService.js';
 
@@ -54,7 +66,31 @@ export async function getSalarySummaryHandler(req, res) {
 export async function listSalarySummariesHandler(req, res) {
   const { month } = salaryExportQuerySchema.parse(req.query);
   const summaries = await listSalarySummariesForMonth(month);
-  res.json({ month, summaries });
+  const meta = await buildSalaryMonthMeta(month, summaries);
+  res.json({ month, summaries, meta });
+}
+
+export async function getSalarySettingsHandler(req, res) {
+  const result = await getSalarySettingsPayload();
+  res.json(result);
+}
+
+export async function updateSalarySettingsHandler(req, res) {
+  const parsed = updateSalarySettingsSchema.parse(req.body);
+  const result = await updateSalarySettings(parsed, req.user._id);
+
+  auditLog('salary_settings_updated', {
+    adminId: req.user._id.toString(),
+    fieldsUpdated: Object.keys(parsed),
+  });
+
+  res.json(result);
+}
+
+export async function listSalaryStructureHandler(req, res) {
+  const parsed = salaryStructureQuerySchema.parse(req.query);
+  const result = await listSalaryStructure(parsed);
+  res.json(result);
 }
 
 export async function exportSalaryHandler(req, res) {
@@ -93,4 +129,49 @@ export async function getUserSalaryHandler(req, res) {
       salaryCurrency: 'INR',
     },
   });
+}
+
+export async function listSalaryTransfersHandler(req, res) {
+  const parsed = salaryTransferListQuerySchema.parse(req.query);
+  const result = await listSalaryTransfers(parsed);
+  res.json(result);
+}
+
+export async function generateSalaryTransfersHandler(req, res) {
+  const parsed = generateSalaryTransfersSchema.parse(req.body);
+  const result = await generatePendingSalaryTransfers(parsed.month, req.user._id);
+
+  auditLog('salary_transfers_generated', {
+    adminId: req.user._id.toString(),
+    month: parsed.month,
+    created: result.created,
+    skipped: result.skipped,
+  });
+
+  const listResult = await listSalaryTransfers({
+    month: parsed.month,
+    page: 1,
+    limit: 20,
+  });
+
+  res.status(result.created > 0 ? 201 : 200).json({
+    ...result,
+    month: parsed.month,
+    transfers: listResult.transfers,
+    stats: listResult.stats,
+    pagination: listResult.pagination,
+  });
+}
+
+export async function updateSalaryTransferHandler(req, res) {
+  const parsed = updateSalaryTransferStatusSchema.parse(req.body);
+  const transfer = await updateSalaryTransferStatus(req.params.id, parsed, req.user._id);
+
+  auditLog('salary_transfer_updated', {
+    adminId: req.user._id.toString(),
+    transferId: transfer.id,
+    status: transfer.status,
+  });
+
+  res.json({ transfer });
 }

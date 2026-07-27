@@ -9,11 +9,19 @@ function hasAllPermissions(userPermissions, permissions = []) {
   return permissions.every((permission) => hasPermission(userPermissions, permission));
 }
 
-export function getDefaultRoute(user) {
-  if (hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)) {
-    return '/admin/dashboard';
+export function resolveLoginPortal(loginPortal, user) {
+  if (loginPortal === 'admin' || loginPortal === 'employee') {
+    return loginPortal;
   }
-  return '/employee/dashboard';
+  if (hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)) {
+    return 'admin';
+  }
+  return 'employee';
+}
+
+export function getDefaultRoute(user, loginPortal) {
+  const portal = resolveLoginPortal(loginPortal, user);
+  return portal === 'admin' ? '/admin/dashboard' : '/employee/dashboard';
 }
 
 /**
@@ -96,16 +104,24 @@ export const NAV_ITEMS = [
     permission: PERMISSIONS.LEAVE_APPROVE,
   },
   {
+    to: '/admin/leave/streaks',
+    label: 'Streaks',
+    icon: '⚡',
+    section: 'Leaves',
+    portal: 'admin',
+    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+  },
+  {
     to: '/admin/leave/team-calendar',
     label: 'Calendar management',
     icon: '▣',
     section: 'Leaves',
     portal: 'admin',
-    anyPermission: [PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_READ_ALL],
+    permission: PERMISSIONS.LEAVE_MANAGE_POLICIES,
   },
   {
     to: '/admin/office-settings',
-    label: 'Geolocation',
+    label: 'Geolocation & Timings',
     icon: '⌖',
     section: 'Operations',
     portal: 'admin',
@@ -139,7 +155,7 @@ export const NAV_ITEMS = [
   },
   {
     to: '/employee/leave/apply',
-    label: 'Apply leave',
+    label: 'Apply leave / WFH',
     icon: '＋',
     section: 'Leave',
     portal: 'employee',
@@ -204,10 +220,9 @@ export function resolveNavItemActive(to, { isActive, location }) {
   return isActive;
 }
 
-export function getVisibleNavItems(user) {
+export function getVisibleNavItems(user, loginPortal) {
   const permissions = user?.permissions ?? [];
-  const hasAdminNav = hasAnyPermission(permissions, ADMIN_PORTAL_PERMISSIONS);
-  const portal = hasAdminNav ? 'admin' : 'employee';
+  const portal = resolveLoginPortal(loginPortal, user);
 
   return NAV_ITEMS.filter((item) => {
     if (item.portal && item.portal !== portal) {
@@ -310,10 +325,10 @@ function navItemAllowed(item, permissions) {
   return true;
 }
 
-export function getBottomNavItems(user) {
+export function getBottomNavItems(user, loginPortal) {
   const permissions = user?.permissions ?? [];
-  const isAdmin = hasAnyPermission(permissions, ADMIN_PORTAL_PERMISSIONS);
-  const template = isAdmin ? ADMIN_BOTTOM_NAV : EMPLOYEE_BOTTOM_NAV;
+  const portal = resolveLoginPortal(loginPortal, user);
+  const template = portal === 'admin' ? ADMIN_BOTTOM_NAV : EMPLOYEE_BOTTOM_NAV;
 
   return template
     .map((item) => {
@@ -336,29 +351,28 @@ export function getBottomNavItems(user) {
     .filter(Boolean);
 }
 
-export function getMoreNavItems(user) {
+export function getMoreNavItems(user, loginPortal) {
   const permissions = user?.permissions ?? [];
-  const bottomItems = getBottomNavItems(user);
+  const portal = resolveLoginPortal(loginPortal, user);
+  const bottomItems = getBottomNavItems(user, loginPortal);
   const bottomRoutes = new Set(
     bottomItems.filter((item) => item.to).map((item) => item.to),
   );
 
-  const isAdmin = hasAnyPermission(permissions, ADMIN_PORTAL_PERMISSIONS);
-
-  const moreLinks = getVisibleNavItems(user).filter((item) => {
+  const moreLinks = getVisibleNavItems(user, loginPortal).filter((item) => {
     if (bottomRoutes.has(item.to)) {
       return false;
     }
-    if (isAdmin && item.to === '/admin/dashboard') {
+    if (portal === 'admin' && item.to === '/admin/dashboard') {
       return false;
     }
-    if (!isAdmin && item.to === '/employee/dashboard') {
+    if (portal === 'employee' && item.to === '/employee/dashboard') {
       return false;
     }
     return true;
   });
 
-  if (isAdmin) {
+  if (portal === 'admin') {
     return moreLinks;
   }
 
@@ -407,8 +421,8 @@ export function resolveBottomNavActive(pathname, bottomItems, moreRoutes = []) {
   return null;
 }
 
-export function isMoreNavActive(pathname, user) {
-  const moreRoutes = getMoreNavItems(user).map((item) => item.to);
+export function isMoreNavActive(pathname, user, loginPortal) {
+  const moreRoutes = getMoreNavItems(user, loginPortal).map((item) => item.to);
   const normalized = pathname.replace(/\/+$/, '') || '/';
   return moreRoutes.some(
     (route) => normalized === route || normalized.startsWith(`${route}/`),
@@ -427,4 +441,9 @@ export function canAccessRoute(user, { permission, anyPermission, allPermissions
     return hasPermission(permissions, permission);
   }
   return Boolean(user);
+}
+
+export function canAccessPortalRoute(user, loginPortal, routePortal) {
+  if (!user || !routePortal) return true;
+  return resolveLoginPortal(loginPortal, user) === routePortal;
 }

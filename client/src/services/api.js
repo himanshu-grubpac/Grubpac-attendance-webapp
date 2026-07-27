@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getDeviceFingerprint } from '../utils/deviceFingerprint.js';
 
 let csrfToken = null;
 
@@ -45,10 +46,14 @@ api.interceptors.response.use(
 );
 
 export const authApi = {
-  adminLogin: (identifier, password) =>
-    api.post('/auth/admin/login', { identifier, password }).then((r) => r.data),
-  employeeLogin: (identifier, password) =>
-    api.post('/auth/user/login', { identifier, password }).then((r) => r.data),
+  adminLogin: (identifier, password) => {
+    const { deviceId } = getDeviceFingerprint();
+    return api.post('/auth/admin/login', { identifier, password, deviceId }).then((r) => r.data);
+  },
+  employeeLogin: (identifier, password) => {
+    const { deviceId } = getDeviceFingerprint();
+    return api.post('/auth/user/login', { identifier, password, deviceId }).then((r) => r.data);
+  },
   logout: () => api.post('/auth/logout').then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
   updateProfile: (payload) =>
@@ -93,13 +98,30 @@ export const adminApi = {
       .then((r) => r.data);
   },
   getOfficeSettings: () =>
-    api.get('/admin/office-settings').then((r) => r.data),
+    api
+      .get('/admin/office-settings', {
+        params: { _: Date.now() },
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      })
+      .then((r) => r.data),
   updateOfficeSettings: (payload) =>
-    api.put('/admin/office-settings', payload).then((r) => r.data),
+    api
+      .put('/admin/office-settings', payload, {
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      })
+      .then((r) => r.data),
   listAttendance: (params) =>
     api.get('/admin/attendance', { params }).then((r) => r.data),
   getQuarterWarnings: () =>
     api.get('/admin/attendance/quarter-warnings').then((r) => r.data),
+  listWeekConfirmations: (weekStart) =>
+    api.get('/admin/attendance/week-confirmations', { params: { weekStart } }).then((r) => r.data),
+  confirmWeekAttendance: (payload) =>
+    api.post('/admin/attendance/week-confirmations', payload).then((r) => r.data),
+  unconfirmWeekAttendance: (params) =>
+    api.delete('/admin/attendance/week-confirmations', { params }).then((r) => r.data),
+  editAttendanceRecord: (id, payload) =>
+    api.patch(`/admin/attendance/records/${id}`, payload).then((r) => r.data),
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
@@ -107,14 +129,38 @@ export const adminApi = {
 
 export const attendanceApi = {
   getToday: () => api.get('/attendance/today').then((r) => r.data),
-  checkIn: (payload) =>
-    api.post('/attendance/check-in', payload).then((r) => r.data),
-  checkOut: (payload) =>
-    api.post('/attendance/check-out', payload).then((r) => r.data),
+  checkIn: (payload, attendanceMode = 'office', lateNote) => {
+    const { deviceId } = getDeviceFingerprint();
+    return api
+      .post('/attendance/check-in', {
+        ...payload,
+        deviceId,
+        attendanceMode,
+        ...(lateNote ? { lateNote } : {}),
+      })
+      .then((r) => r.data);
+  },
+  checkOut: (payload, attendanceMode = 'office') => {
+    const { deviceId } = getDeviceFingerprint();
+    return api
+      .post('/attendance/check-out', {
+        ...payload,
+        deviceId,
+        attendanceMode,
+      })
+      .then((r) => r.data);
+  },
   getHistory: (params = {}) =>
     api.get('/attendance/history', { params }).then((r) => r.data),
   getMonthSummary: (params = {}) =>
     api.get('/attendance/month-summary', { params }).then((r) => r.data),
+  getQuarterWarnings: () =>
+    api
+      .get('/attendance/quarter-warnings', {
+        params: { _: Date.now() },
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      })
+      .then((r) => r.data),
 };
 
 export const notificationsApi = {
@@ -144,12 +190,22 @@ export const leaveApi = {
     api.post(`/leave/requests/${id}/reject`, payload).then((r) => r.data),
   getTeamCalendar: (params = {}) => api.get('/leave/team-calendar', { params }).then((r) => r.data),
   listHolidays: (params = {}) => api.get('/leave/holidays', { params }).then((r) => r.data),
+  listHolidayCategories: () => api.get('/leave/holiday-categories').then((r) => r.data),
+  createHolidayCategory: (payload) => api.post('/leave/holiday-categories', payload).then((r) => r.data),
+  updateHolidayCategory: (id, payload) => api.patch(`/leave/holiday-categories/${id}`, payload).then((r) => r.data),
+  deleteHolidayCategory: (id) => api.delete(`/leave/holiday-categories/${id}`).then((r) => r.data),
   createHoliday: (payload) => api.post('/leave/holidays', payload).then((r) => r.data),
   updateHoliday: (id, payload) => api.patch(`/leave/holidays/${id}`, payload).then((r) => r.data),
   deleteHoliday: (id) => api.delete(`/leave/holidays/${id}`).then((r) => r.data),
+  listRecurringHolidayRules: () => api.get('/leave/recurring-rules').then((r) => r.data),
+  updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
+  materializeRecurringHolidays: (payload) =>
+    api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
   encashBalance: (userId, payload) =>
     api.post(`/leave/balances/${userId}/encash`, payload).then((r) => r.data),
   applyCarryForward: (payload) => api.post('/leave/carry-forward', payload).then((r) => r.data),
+  previewCarryForward: (params = {}) =>
+    api.get('/leave/carry-forward/preview', { params }).then((r) => r.data),
   runAccrualJob: () => api.post('/leave/jobs/accrual').then((r) => r.data),
 };
 
@@ -171,6 +227,16 @@ export const salaryApi = {
     api.get('/salary/summaries', { params: { month } }).then((r) => r.data),
   exportSummary: (month) =>
     api.get('/salary/export', { params: { month }, responseType: 'blob' }).then((r) => r.data),
+  getSettings: () => api.get('/salary/settings').then((r) => r.data),
+  updateSettings: (payload) => api.patch('/salary/settings', payload).then((r) => r.data),
+  listStructure: (params = {}) =>
+    api.get('/salary/structure', { params }).then((r) => r.data),
+  listTransfers: (params = {}) =>
+    api.get('/salary/transfers', { params }).then((r) => r.data),
+  generateTransfers: (payload) =>
+    api.post('/salary/transfers/generate', payload).then((r) => r.data),
+  updateTransfer: (id, payload) =>
+    api.patch(`/salary/transfers/${id}`, payload).then((r) => r.data),
 };
 
 export function getErrorMessage(error) {

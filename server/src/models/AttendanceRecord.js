@@ -13,6 +13,13 @@ const attendanceRecordSchema = new mongoose.Schema(
       enum: ['check_in', 'check_out'],
       required: true,
     },
+    /** Employee-selected work location for this attendance day. */
+    attendanceMode: {
+      type: String,
+      enum: ['office', 'wfh'],
+      required: true,
+      default: 'office',
+    },
     timestamp: { type: Date, required: true, default: Date.now },
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true },
@@ -27,8 +34,10 @@ const attendanceRecordSchema = new mongoose.Schema(
       required: true,
     },
     rejectionReasons: [{ type: String }],
-    /** Present (P) or half-day (HD) per office policy — set on allowed check-in. */
-    attendanceTag: { type: String, enum: ['P', 'HD'], default: null },
+    /** Present (P), half-day (HD), or leave-violation (LV) when warnings exhausted — set on allowed check-in. */
+    attendanceTag: { type: String, enum: ['P', 'HD', 'LV'], default: null },
+    /** Optional note when check-in is after the grace threshold. */
+    lateNote: { type: String, default: null, trim: true, maxlength: 500 },
     warningIssued: { type: Boolean, default: false },
     /** 1-based warning index within the calendar quarter (W1, W2, …). */
     quarterWarningIndex: { type: Number, min: 1, max: 10, default: null },

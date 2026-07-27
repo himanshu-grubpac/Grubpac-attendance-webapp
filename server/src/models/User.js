@@ -24,8 +24,13 @@ const userSchema = new mongoose.Schema(
       ref: 'Department',
       default: null,
     },
+    /** Departments this user may manage (team-lead scoping). Empty → fall back to direct reports. */
+    managedDepartmentIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
+    }],
     firstName: { type: String, required: true, trim: true },
-    lastName: { type: String, required: true, trim: true },
+    lastName: { type: String, trim: true, default: '' },
     /** Full display name — derived from firstName + lastName on save. Kept for backward compat with UI reading user.name. */
     name: { type: String, required: true, trim: true },
     email: {
@@ -102,6 +107,9 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     department: departmentDoc?.name ?? this.department ?? null,
     departmentId: departmentDoc?._id?.toString() ?? this.departmentId?.toString?.() ?? null,
     departmentName: departmentDoc?.name ?? null,
+    managedDepartmentIds: (this.managedDepartmentIds ?? []).map((id) =>
+      id?._id?.toString?.() ?? id?.toString?.() ?? String(id),
+    ),
     reportingManagerId:
       managerDoc?._id?.toString() ?? this.reportingManagerId?.toString?.() ?? null,
     reportingManagerName: managerDoc?.name ?? null,

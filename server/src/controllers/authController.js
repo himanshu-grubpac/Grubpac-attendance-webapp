@@ -65,12 +65,16 @@ function buildIdentifierQuery(identifier) {
 
 export async function loginUser(body, portal, auditContext = {}) {
   const parsed = loginSchema.parse(body);
+  const loginAuditContext = {
+    ...auditContext,
+    ...(parsed.deviceId ? { deviceId: parsed.deviceId } : {}),
+  };
   const found = await User.findOne(buildIdentifierQuery(parsed.identifier));
   if (!found) {
     auditLog('login_failed', {
       identifier: parsed.identifier,
       reason: 'invalid_or_inactive',
-      ...auditContext,
+      ...loginAuditContext,
     });
     const error = new Error('Invalid credentials.');
     error.statusCode = 401;
@@ -83,7 +87,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     auditLog('login_failed', {
       identifier: parsed.identifier,
       reason: 'invalid_or_inactive',
-      ...auditContext,
+      ...loginAuditContext,
     });
     const error = new Error('Invalid credentials.');
     error.statusCode = 401;
@@ -98,22 +102,9 @@ export async function loginUser(body, portal, auditContext = {}) {
       reason: 'wrong_portal',
       role: user.role,
       portal,
-      ...auditContext,
+      ...loginAuditContext,
     });
     const error = new Error('You do not have access to this portal.');
-    error.statusCode = 403;
-    throw error;
-  }
-
-  if (portal === 'employee' && hasAdminPortalAccess(permissions)) {
-    auditLog('login_failed', {
-      identifier: parsed.identifier,
-      reason: 'wrong_portal',
-      role: user.role,
-      portal,
-      ...auditContext,
-    });
-    const error = new Error('This account uses the Admin portal. Switch to the Admin tab to sign in.');
     error.statusCode = 403;
     throw error;
   }
@@ -124,7 +115,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       reason: 'wrong_portal',
       role: user.role,
       portal,
-      ...auditContext,
+      ...loginAuditContext,
     });
     const error = new Error('You do not have access to this portal.');
     error.statusCode = 403;
@@ -136,7 +127,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     auditLog('login_failed', {
       identifier: parsed.identifier,
       reason: 'bad_password',
-      ...auditContext,
+      ...loginAuditContext,
     });
     const error = new Error('Invalid credentials.');
     error.statusCode = 401;
@@ -151,7 +142,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     role: user.role,
     email: user.email,
     portal,
-    ...auditContext,
+    ...loginAuditContext,
   });
 
   const csrfToken = generateCsrfToken();
@@ -159,7 +150,10 @@ export async function loginUser(body, portal, auditContext = {}) {
   return {
     token: signToken(user),
     csrfToken,
-    user: user.toSafeJSON(),
+    user: {
+      ...user.toSafeJSON(),
+      loginPortal: portal,
+    },
   };
 }
 

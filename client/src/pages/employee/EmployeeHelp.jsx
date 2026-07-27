@@ -105,35 +105,37 @@ export default function EmployeeHelp() {
         <div className="card card--form">
           <p className="card__section-title">New ticket</p>
           <form className="form-grid" onSubmit={handleSubmit}>
-            <label className="field">
-              <span className="label">Title</span>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(event) => updateField('title', event.target.value)}
-                required
-                maxLength={200}
-                placeholder="Brief summary of the issue"
-              />
-            </label>
-            <label className="field form-field--sm">
-              <span className="label">Category</span>
-              <SelectField
-                value={form.category}
-                onChange={(value) => updateField('category', value)}
-                options={CATEGORY_OPTIONS}
-                aria-label="Category"
-              />
-            </label>
-            <label className="field form-field--sm">
-              <span className="label">Priority</span>
-              <SelectField
-                value={form.priority}
-                onChange={(value) => updateField('priority', value)}
-                options={PRIORITY_OPTIONS}
-                aria-label="Priority"
-              />
-            </label>
+            <div className="form-grid__full form-grid help-ticket-form__meta-row">
+              <label className="field">
+                <span className="label">Title</span>
+                <input
+                  type="text"
+                  value={form.title}
+                  onChange={(event) => updateField('title', event.target.value)}
+                  required
+                  maxLength={200}
+                  placeholder="Brief summary of the issue"
+                />
+              </label>
+              <label className="field">
+                <span className="label">Category</span>
+                <SelectField
+                  value={form.category}
+                  onChange={(value) => updateField('category', value)}
+                  options={CATEGORY_OPTIONS}
+                  aria-label="Category"
+                />
+              </label>
+              <label className="field">
+                <span className="label">Priority</span>
+                <SelectField
+                  value={form.priority}
+                  onChange={(value) => updateField('priority', value)}
+                  options={PRIORITY_OPTIONS}
+                  aria-label="Priority"
+                />
+              </label>
+            </div>
             <label className="field form-grid__full">
               <span className="label">Description</span>
               <textarea

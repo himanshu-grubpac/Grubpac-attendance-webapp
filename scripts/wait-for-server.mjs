@@ -1,5 +1,7 @@
 const HEALTH_URL = process.env.API_HEALTH_URL ?? 'http://localhost:5000/api/health';
-const MAX_WAIT_MS = Number(process.env.SERVER_WAIT_MS ?? 30_000);
+// The in-memory MongoDB replica set can take longer than 30 seconds to start,
+// particularly on its first run while its binary is prepared.
+const MAX_WAIT_MS = Number(process.env.SERVER_WAIT_MS ?? 90_000);
 const POLL_MS = 400;
 
 function sleep(ms) {

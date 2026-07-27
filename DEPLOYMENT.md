@@ -126,6 +126,27 @@ Do not point production users at API Gateway or localhost.
 
 ---
 
+## Local testing — shared-device detection (Login Logs)
+
+The app stores a stable browser device id in `localStorage` under `attendance.deviceId` on first visit. Every admin and employee login sends this `deviceId` to the API along with the public IP and user agent.
+
+**Quick test (same browser = same device):**
+
+1. Start locally: `npm run dev` from the project root.
+2. Open Chrome DevTools → Application → Local Storage → confirm `attendance.deviceId` exists (or refresh once to create it).
+3. Log in as **User A** (employee or admin portal).
+4. Log out, then log in as **User B** in the **same browser** (do not clear site data).
+5. Sign in as an admin and open **Login Logs** (`/admin/audit-logs`).
+6. Both User A and User B rows should show:
+   - **Device** — same truncated id (first 8 chars; hover for full uuid).
+   - **Conflict** — orange **Shared device** badge on both rows.
+   - Tooltip — lists the other account with reason `shared device`.
+7. Optional: enable **Conflicts only** filter and click **Apply Filters** to hide non-conflicting rows.
+
+**Same network only (no shared device):** use two different browsers (or incognito + normal) on the same Wi‑Fi. Rows may show **Same network** (IP match within 24h) instead of **Shared device**.
+
+---
+
 ## Security notes
 
 - Do **not** put AWS access keys, JWT secrets, or MongoDB passwords in this file, git, or tickets.

@@ -1,9 +1,21 @@
 import { useEffect, useState } from 'react';
 import { officeSchema } from '@shared/validation/office.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { validateForm } from '../../utils/validation.js';
 import FieldError from '../../components/FieldError.jsx';
+import TimeField from '../../components/TimeField.jsx';
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: 'Sunday' },
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+  { value: 6, label: 'Saturday' },
+];
 
 const emptyOffice = {
   name: '',
@@ -17,12 +29,13 @@ const emptyOffice = {
   graceThresholdTime: '09:00',
   halfDayThresholdTime: '10:00',
   warningsPerQuarter: 3,
+  weekendDays: [0, 6],
 };
 
 export default function AdminOfficeSettings() {
+  const { showSuccess } = useToast();
   const [form, setForm] = useState(emptyOffice);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -45,6 +58,7 @@ export default function AdminOfficeSettings() {
             graceThresholdTime: settings.graceThresholdTime ?? '09:00',
             halfDayThresholdTime: settings.halfDayThresholdTime ?? '10:00',
             warningsPerQuarter: settings.warningsPerQuarter ?? 3,
+            weekendDays: Array.isArray(settings.weekendDays) ? settings.weekendDays : [0, 6],
           });
         }
       })
@@ -60,7 +74,7 @@ export default function AdminOfficeSettings() {
         latitude: String(position.latitude),
         longitude: String(position.longitude),
       }));
-      setMessage(
+      showSuccess(
         `Office centre captured with ±${position.accuracyMeters.toFixed(1)} m accuracy.`,
       );
     } catch {
@@ -71,7 +85,6 @@ export default function AdminOfficeSettings() {
   async function handleSubmit(event) {
     event.preventDefault();
     setSaving(true);
-    setMessage('');
     setError('');
     setFieldErrors({});
 
@@ -82,11 +95,12 @@ export default function AdminOfficeSettings() {
       radiusMeters: Number(form.radiusMeters),
       maxAccuracyMeters: Number(form.maxAccuracyMeters),
       sandwichLeaveEnabled: Boolean(form.sandwichLeaveEnabled),
-      officeStartTime: form.officeStartTime.trim(),
-      officeEndTime: form.officeEndTime.trim(),
-      graceThresholdTime: form.graceThresholdTime.trim(),
-      halfDayThresholdTime: form.halfDayThresholdTime.trim(),
+      officeStartTime: form.officeStartTime,
+      officeEndTime: form.officeEndTime,
+      graceThresholdTime: form.graceThresholdTime,
+      halfDayThresholdTime: form.halfDayThresholdTime,
       warningsPerQuarter: Number(form.warningsPerQuarter),
+      weekendDays: form.weekendDays,
     };
 
     const validation = validateForm(officeSchema, payload);
@@ -97,8 +111,24 @@ export default function AdminOfficeSettings() {
     }
 
     try {
-      await adminApi.updateOfficeSettings(validation.data);
-      setMessage('Office settings saved.');
+      const result = await adminApi.updateOfficeSettings(validation.data);
+      const updatedSettings = result.settings ?? validation.data;
+      setForm((current) => ({
+        ...current,
+        officeStartTime: updatedSettings.officeStartTime,
+        officeEndTime: updatedSettings.officeEndTime,
+        graceThresholdTime: updatedSettings.graceThresholdTime,
+        halfDayThresholdTime: updatedSettings.halfDayThresholdTime,
+      }));
+      window.dispatchEvent(
+        new CustomEvent('attendance:office-policy-updated', { detail: updatedSettings }),
+      );
+      try {
+        localStorage.setItem('attendance.office-policy-updated', JSON.stringify(updatedSettings));
+      } catch {
+        // Storage can be unavailable in restricted browser contexts.
+      }
+      showSuccess('Office settings saved.');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -159,7 +189,7 @@ export default function AdminOfficeSettings() {
           <label className="form-field--sm">
             Radius (metres, max 5000)
             <input
-              className="input input--narrow"
+              className="input input--narrow input--no-spinner"
               type="number"
               min="1"
               max="5000"
@@ -194,50 +224,53 @@ export default function AdminOfficeSettings() {
           <div className="form-grid__full">
             <p className="card__section-title">Office hours &amp; attendance policy</p>
             <p className="muted small">
-              Mon–Fri working days. Times are IST (24-hour). Attendance history and check-in
-              evaluation use these thresholds.
+              Mon–Fri working days. Times use the IST 12-hour AM/PM picker. Attendance history
+              and check-in evaluation use these thresholds.
             </p>
           </div>
           <label className="form-field--sm">
             Office start (Mon–Fri)
-            <input
-              className="input input--narrow"
-              type="time"
-              value={form.officeStartTime}
-              onChange={(e) => setForm({ ...form, officeStartTime: e.target.value })}
-            />
+            <TimeField value={form.officeStartTime} onChange={(officeStartTime) => setForm({ ...form, officeStartTime })} aria-label="Office start time" />
             <FieldError message={fieldErrors.officeStartTime} />
           </label>
           <label className="form-field--sm">
             Office end (Mon–Fri)
-            <input
-              className="input input--narrow"
-              type="time"
-              value={form.officeEndTime}
-              onChange={(e) => setForm({ ...form, officeEndTime: e.target.value })}
-            />
+            <TimeField value={form.officeEndTime} onChange={(officeEndTime) => setForm({ ...form, officeEndTime })} aria-label="Office end time" />
             <FieldError message={fieldErrors.officeEndTime} />
           </label>
           <label className="form-field--sm">
             Grace / warning threshold
-            <input
-              className="input input--narrow"
-              type="time"
-              value={form.graceThresholdTime}
-              onChange={(e) => setForm({ ...form, graceThresholdTime: e.target.value })}
-            />
+            <TimeField value={form.graceThresholdTime} onChange={(graceThresholdTime) => setForm({ ...form, graceThresholdTime })} aria-label="Warning threshold time" />
             <FieldError message={fieldErrors.graceThresholdTime} />
           </label>
           <label className="form-field--sm">
             Half-day threshold
-            <input
-              className="input input--narrow"
-              type="time"
-              value={form.halfDayThresholdTime}
-              onChange={(e) => setForm({ ...form, halfDayThresholdTime: e.target.value })}
-            />
+            <TimeField value={form.halfDayThresholdTime} onChange={(halfDayThresholdTime) => setForm({ ...form, halfDayThresholdTime })} aria-label="Half-day threshold time" />
             <FieldError message={fieldErrors.halfDayThresholdTime} />
           </label>
+          <fieldset className="form-grid__full office-weekend-fieldset">
+            <legend className="label">Weekend days (non-working)</legend>
+            <div className="office-weekend-options">
+              {WEEKDAY_OPTIONS.map((option) => (
+                <label key={option.value} className="office-weekend-option">
+                  <input
+                    type="checkbox"
+                    checked={form.weekendDays.includes(option.value)}
+                    onChange={() => {
+                      setForm((current) => {
+                        const next = new Set(current.weekendDays ?? []);
+                        if (next.has(option.value)) next.delete(option.value);
+                        else next.add(option.value);
+                        return { ...current, weekendDays: [...next].sort((a, b) => a - b) };
+                      });
+                    }}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
+            </div>
+            <FieldError message={fieldErrors.weekendDays} />
+          </fieldset>
           <label className="form-field--sm">
             Warnings per quarter
             <input
@@ -271,10 +304,9 @@ export default function AdminOfficeSettings() {
             </button>
           </div>
         </form>
-        {(geoError || message || error) && (
+        {(geoError || error) && (
           <div className="page-alerts alert--inset">
             {geoError && <div className="alert alert--error">{geoError}</div>}
-            {message && <div className="alert alert--success">{message}</div>}
             {error && <div className="alert alert--error">{error}</div>}
           </div>
         )}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { attendanceApi, getErrorMessage } from '../../services/api.js';
 import { formatISTDateTime } from '../../utils/datetime.js';
+import { formatHistoryModeShort, formatHistoryShortCode, formatQuarterWarningBalance } from '../../utils/attendanceOutcome.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 
@@ -10,12 +11,17 @@ function statusBadgeClass(status) {
   return 'badge badge-muted';
 }
 
+function attendanceModeLabel(mode) {
+  return mode === 'wfh' ? 'Work from Home' : 'Office';
+}
+
 export default function EmployeeHistory() {
   const [records, setRecords] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [quarterWarnings, setQuarterWarnings] = useState(null);
 
   async function loadHistory(nextPage = 1) {
     setLoading(true);
@@ -34,11 +40,17 @@ export default function EmployeeHistory() {
 
   useEffect(() => {
     loadHistory(1);
+    attendanceApi.getQuarterWarnings().then(setQuarterWarnings).catch(() => setQuarterWarnings(null));
   }, []);
 
   return (
     <div className="page">
       <div className="card card--table">
+        {quarterWarnings ? (
+          <p className="employee-history__quarter muted small">
+            {formatQuarterWarningBalance(quarterWarnings)}
+          </p>
+        ) : null}
         {error && <div className="alert alert--error">{error}</div>}
 
         {loading ? (
@@ -62,6 +74,8 @@ export default function EmployeeHistory() {
                   <tr>
                     <th>Type</th>
                     <th>Status</th>
+                    <th>Outcome</th>
+                    <th>Mode</th>
                     <th>Time (IST)</th>
                   </tr>
                 </thead>
@@ -72,6 +86,18 @@ export default function EmployeeHistory() {
                       <td data-label="Status">
                         <span className={statusBadgeClass(record.status)}>
                           {record.status}
+                        </span>
+                      </td>
+                      <td data-label="Outcome">
+                        {formatHistoryShortCode(record) ? (
+                          <span className="badge badge-muted">{formatHistoryShortCode(record)}</span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td data-label="Mode">
+                        <span className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}`}>
+                          {formatHistoryModeShort(record) ?? attendanceModeLabel(record.attendanceMode)}
                         </span>
                       </td>
                       <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>

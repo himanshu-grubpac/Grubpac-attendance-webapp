@@ -27,6 +27,10 @@ import {
   validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
+import {
+  resolveLeaveApprovalUserIds,
+  resolveTeamScopedUserIds,
+} from './teamScopeService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -446,34 +450,24 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
       // Admin/HR sees all pending
     } else {
-      const directReports = await User.find({
-        reportingManagerId: actor._id,
-        isActive: true,
-      }).select('_id');
-      const delegatedManagers = await User.find({
-        delegateApproverId: actor._id,
-        isActive: true,
-      }).select('_id');
-      const managerIds = delegatedManagers.map((item) => item._id);
-      const delegatedReports =
-        managerIds.length > 0
-          ? await User.find({
-              reportingManagerId: { $in: managerIds },
-              isActive: true,
-            }).select('_id')
-          : [];
-      const reportIds = [
-        ...directReports.map((item) => item._id),
-        ...delegatedReports.map((item) => item._id),
-      ];
+      const reportIds = await resolveLeaveApprovalUserIds(actor);
       filter.userId = { $in: reportIds };
     }
   } else if (scope === 'team') {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
       throwError('You do not have permission to view team leave.', 403);
     }
-    const reports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id');
-    filter.userId = { $in: reports.map((item) => item._id) };
+    if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+      // unscoped
+    } else {
+      const reportIds = await resolveTeamScopedUserIds(
+        actor,
+        permissions,
+        PERMISSIONS.LEAVE_READ_ALL,
+        PERMISSIONS.LEAVE_READ_TEAM,
+      );
+      filter.userId = { $in: reportIds ?? [] };
+    }
   } else if (scope === 'all') {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
       throwError('You do not have permission to view all leave requests.', 403);
@@ -488,7 +482,17 @@ export async function listLeaveRequests(actor, permissions, query) {
     filter.status = query.status;
   }
 
-  if (query.year) {
+  if (query.month) {
+    const [yearStr, monthStr] = query.month.split('-');
+    const year = Number(yearStr);
+    const monthNum = Number(monthStr);
+    const monthStart = parseDateInputAsISTDay(`${year}-${String(monthNum).padStart(2, '0')}-01`);
+    const lastDay = new Date(Date.UTC(year, monthNum, 0)).getUTCDate();
+    const monthEnd = parseDateInputAsISTDay(
+      `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+    );
+    filter.startDate = { $gte: monthStart, $lte: monthEnd };
+  } else if (query.year) {
     const yearStart = parseDateInputAsISTDay(`${query.year}-01-01`);
     const yearEnd = parseDateInputAsISTDay(`${query.year}-12-31`);
     filter.startDate = { $gte: yearStart, $lte: yearEnd };
@@ -535,8 +539,13 @@ export async function getTeamCalendar(actor, permissions, query) {
   if (query.departmentId) {
     userFilter.departmentId = query.departmentId;
   } else if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
-    const reports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id');
-    userFilter._id = { $in: reports.map((item) => item._id) };
+    const scopedIds = await resolveTeamScopedUserIds(
+      actor,
+      permissions,
+      PERMISSIONS.LEAVE_READ_ALL,
+      PERMISSIONS.LEAVE_READ_TEAM,
+    );
+    userFilter._id = { $in: scopedIds ?? [] };
   }
 
   const users = await User.find(userFilter).select('name email departmentId');

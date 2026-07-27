@@ -19,10 +19,9 @@ import AdminEmployeeDetail from './pages/admin/AdminEmployeeDetail.jsx';
 import AdminRegisterEmployee from './pages/admin/AdminRegisterEmployee.jsx';
 import AdminAuditLogs from './pages/admin/AdminAuditLogs.jsx';
 import AdminLeaveApprovals from './pages/admin/AdminLeaveApprovals.jsx';
-import AdminLeaveBalanceAdjust from './pages/admin/AdminLeaveBalanceAdjust.jsx';
-import AdminLeaveHolidays from './pages/admin/AdminLeaveHolidays.jsx';
 import AdminLeavePolicies from './pages/admin/AdminLeavePolicies.jsx';
 import AdminTeamLeaveCalendar from './pages/admin/AdminTeamLeaveCalendar.jsx';
+import AdminStreaks from './pages/admin/AdminStreaks.jsx';
 import EmployeeDashboard from './pages/employee/EmployeeDashboard.jsx';
 import EmployeeApplyLeave from './pages/employee/EmployeeApplyLeave.jsx';
 import EmployeeLeaveBalances from './pages/employee/EmployeeLeaveBalances.jsx';
@@ -56,7 +55,7 @@ export default function App() {
               <Route
                 path="admin/dashboard"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.USERS_READ}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_READ}>
                     <AdminDashboard />
                   </ProtectedRoute>
                 }
@@ -64,7 +63,7 @@ export default function App() {
               <Route
                 path="admin/users/register"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.USERS_WRITE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_WRITE}>
                     <AdminRegisterEmployee />
                   </ProtectedRoute>
                 }
@@ -72,7 +71,7 @@ export default function App() {
               <Route
                 path="admin/users/bulk-upload"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.USERS_WRITE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_WRITE}>
                     <AdminBulkUpload />
                   </ProtectedRoute>
                 }
@@ -80,7 +79,7 @@ export default function App() {
               <Route
                 path="admin/users/:id"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.USERS_READ}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_READ}>
                     <AdminEmployeeDetail />
                   </ProtectedRoute>
                 }
@@ -88,7 +87,7 @@ export default function App() {
               <Route
                 path="admin/users"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.USERS_READ}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_READ}>
                     <AdminUsers />
                   </ProtectedRoute>
                 }
@@ -96,7 +95,7 @@ export default function App() {
               <Route
                 path="admin/roles"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.ROLES_MANAGE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.ROLES_MANAGE}>
                     <AdminRoles />
                   </ProtectedRoute>
                 }
@@ -104,7 +103,7 @@ export default function App() {
               <Route
                 path="admin/departments"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.DEPARTMENTS_MANAGE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.DEPARTMENTS_MANAGE}>
                     <AdminDepartments />
                   </ProtectedRoute>
                 }
@@ -112,7 +111,7 @@ export default function App() {
               <Route
                 path="admin/office-settings"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.OFFICE_MANAGE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.OFFICE_MANAGE}>
                     <AdminOfficeSettings />
                   </ProtectedRoute>
                 }
@@ -121,6 +120,7 @@ export default function App() {
                 path="admin/attendance"
                 element={
                   <ProtectedRoute
+                    portal="admin"
                     anyPermission={[
                       PERMISSIONS.ATTENDANCE_READ_ALL,
                       PERMISSIONS.ATTENDANCE_READ_TEAM,
@@ -133,7 +133,7 @@ export default function App() {
               <Route
                 path="admin/audit-logs"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.AUDIT_READ}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.AUDIT_READ}>
                     <AdminAuditLogs />
                   </ProtectedRoute>
                 }
@@ -141,7 +141,7 @@ export default function App() {
               <Route
                 path="admin/leave/approvals"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_APPROVE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_APPROVE}>
                     <AdminLeaveApprovals />
                   </ProtectedRoute>
                 }
@@ -149,41 +149,43 @@ export default function App() {
               <Route
                 path="admin/leave/team-calendar"
                 element={
-                  <ProtectedRoute
-                    anyPermission={[PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_READ_ALL]}
-                  >
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
                     <AdminTeamLeaveCalendar />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/leave/streaks"
+                element={
+                  <ProtectedRoute
+                    portal="admin"
+                    anyPermission={[PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM]}
+                  >
+                    <AdminStreaks />
                   </ProtectedRoute>
                 }
               />
               <Route
                 path="admin/leave/policies"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
                     <AdminLeavePolicies />
                   </ProtectedRoute>
                 }
               />
               <Route
                 path="admin/leave/holidays"
-                element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
-                    <AdminLeaveHolidays />
-                  </ProtectedRoute>
-                }
+                element={<Navigate to="/admin/leave/team-calendar" replace />}
               />
               <Route
                 path="admin/leave/balances"
-                element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_ADJUST_BALANCES}>
-                    <AdminLeaveBalanceAdjust />
-                  </ProtectedRoute>
-                }
+                element={<Navigate to="/admin/leave/team-calendar" replace />}
               />
               <Route
                 path="admin/salary"
                 element={
                   <ProtectedRoute
+                    portal="admin"
                     allPermissions={[PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ]}
                   >
                     <AdminSalarySummary />
@@ -193,7 +195,7 @@ export default function App() {
               <Route
                 path="admin/profile"
                 element={
-                  <ProtectedRoute anyPermission={ADMIN_PORTAL_PERMISSIONS}>
+                  <ProtectedRoute portal="admin" anyPermission={ADMIN_PORTAL_PERMISSIONS}>
                     <ProfilePage />
                   </ProtectedRoute>
                 }
@@ -201,7 +203,7 @@ export default function App() {
               <Route
                 path="admin/change-password"
                 element={
-                  <ProtectedRoute anyPermission={ADMIN_PORTAL_PERMISSIONS}>
+                  <ProtectedRoute portal="admin" anyPermission={ADMIN_PORTAL_PERMISSIONS}>
                     <ChangePassword />
                   </ProtectedRoute>
                 }
@@ -209,7 +211,7 @@ export default function App() {
               <Route
                 path="employee/dashboard"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
                     <EmployeeDashboard />
                   </ProtectedRoute>
                 }
@@ -217,7 +219,7 @@ export default function App() {
               <Route
                 path="employee/history"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
                     <EmployeeHistory />
                   </ProtectedRoute>
                 }
@@ -225,7 +227,7 @@ export default function App() {
               <Route
                 path="employee/leave/balances"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_READ}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_READ}>
                     <EmployeeLeaveBalances />
                   </ProtectedRoute>
                 }
@@ -233,7 +235,7 @@ export default function App() {
               <Route
                 path="employee/leave/apply"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_APPLY}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_APPLY}>
                     <EmployeeApplyLeave />
                   </ProtectedRoute>
                 }
@@ -241,7 +243,7 @@ export default function App() {
               <Route
                 path="employee/leave/requests"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.LEAVE_READ}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_READ}>
                     <EmployeeMyLeaveRequests />
                   </ProtectedRoute>
                 }
@@ -249,7 +251,7 @@ export default function App() {
               <Route
                 path="employee/pay-estimate"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.SALARY_READ}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.SALARY_READ}>
                     <EmployeePayEstimate />
                   </ProtectedRoute>
                 }
@@ -257,7 +259,10 @@ export default function App() {
               <Route
                 path="employee/help"
                 element={
-                  <ProtectedRoute anyPermission={[PERMISSIONS.HELP_READ, PERMISSIONS.HELP_WRITE]}>
+                  <ProtectedRoute
+                    portal="employee"
+                    anyPermission={[PERMISSIONS.HELP_READ, PERMISSIONS.HELP_WRITE]}
+                  >
                     <EmployeeHelp />
                   </ProtectedRoute>
                 }
@@ -265,7 +270,10 @@ export default function App() {
               <Route
                 path="employee/help/:id"
                 element={
-                  <ProtectedRoute anyPermission={[PERMISSIONS.HELP_READ, PERMISSIONS.HELP_WRITE]}>
+                  <ProtectedRoute
+                    portal="employee"
+                    anyPermission={[PERMISSIONS.HELP_READ, PERMISSIONS.HELP_WRITE]}
+                  >
                     <HelpTicketDetail backTo="/employee/help" />
                   </ProtectedRoute>
                 }
@@ -273,7 +281,7 @@ export default function App() {
               <Route
                 path="admin/help/team"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.HELP_MANAGE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.HELP_MANAGE}>
                     <AdminHelpTeam />
                   </ProtectedRoute>
                 }
@@ -281,7 +289,7 @@ export default function App() {
               <Route
                 path="admin/help/team/:id"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.HELP_MANAGE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.HELP_MANAGE}>
                     <HelpTicketDetail backTo="/admin/help/team" canUpdateStatus />
                   </ProtectedRoute>
                 }
@@ -290,6 +298,7 @@ export default function App() {
                 path="admin/help/tickets"
                 element={
                   <ProtectedRoute
+                    portal="admin"
                     allPermissions={[PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE]}
                   >
                     <AdminHelpTickets />
@@ -300,6 +309,7 @@ export default function App() {
                 path="admin/help/tickets/:id"
                 element={
                   <ProtectedRoute
+                    portal="admin"
                     allPermissions={[PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE]}
                   >
                     <HelpTicketDetail backTo="/admin/help/tickets" canUpdateStatus />
@@ -309,7 +319,7 @@ export default function App() {
               <Route
                 path="employee/profile"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
                     <ProfilePage />
                   </ProtectedRoute>
                 }
@@ -317,7 +327,7 @@ export default function App() {
               <Route
                 path="employee/change-password"
                 element={
-                  <ProtectedRoute permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.ATTENDANCE_READ_OWN}>
                     <ChangePassword />
                   </ProtectedRoute>
                 }

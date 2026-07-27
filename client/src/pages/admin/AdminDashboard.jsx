@@ -5,7 +5,7 @@ import { adminApi, getErrorMessage } from '../../services/api.js';
 const KPI_CARDS = [
   {
     key: 'pendingLeave',
-    label: 'Pending Leave',
+    label: 'View Leave Requests',
     icon: '✓',
     to: '/admin/leave/approvals',
     getValue: (summary) => summary.pendingLeaveRequests,

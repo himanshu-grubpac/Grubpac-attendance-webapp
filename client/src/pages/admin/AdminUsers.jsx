@@ -7,11 +7,12 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { IST_TIMEZONE } from '../../utils/datetime.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
-import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
+
+const EMPLOYEE_PAGE_SIZE = 10;
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All' },
@@ -108,21 +109,39 @@ export default function AdminUsers() {
   const [pagination, setPagination] = useState(null);
   const [stats, setStats] = useState(null);
   const [departments, setDepartments] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [newThisMonthFilter, setNewThisMonthFilter] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMoreRef = useRef(null);
   const debouncedSearch = useDebouncedValue(search, 350);
   const skipDebouncedSearchRef = useRef(true);
   const requestKeyRef = useRef('');
   const statusFilterRef = useRef(statusFilter);
   const departmentFilterRef = useRef(departmentFilter);
+  const newThisMonthFilterRef = useRef(newThisMonthFilter);
+  const statsRef = useRef(stats);
   statusFilterRef.current = statusFilter;
   departmentFilterRef.current = departmentFilter;
+  const roleFilterRef = useRef(roleFilter);
+  roleFilterRef.current = roleFilter;
+  statsRef.current = stats;
   const [listError, setListError] = useState('');
   const [statsError, setStatsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [statsLoading, setStatsLoading] = useState(true);
+
+  const roleOptions = useMemo(
+    () => [
+      { value: '', label: 'All roles' },
+      ...roles.map((role) => ({ value: role.id, label: role.name })),
+    ],
+    [roles],
+  );
 
   const departmentOptions = useMemo(
     () => [
@@ -154,22 +173,37 @@ export default function AdminUsers() {
     nextPage = 1,
     nextStatus = '',
     nextDepartment = '',
+    nextRole = '',
+    nextNewThisMonth = false,
+    monthKey = null,
+    append = false,
   } = {}) => {
-    const requestKey = `${query ?? ''}|${nextPage}|${nextStatus}|${nextDepartment}`;
+    const effectiveMonthKey = monthKey ?? statsRef.current?.monthKey;
+    const createdAfter =
+      nextNewThisMonth && effectiveMonthKey ? `${effectiveMonthKey}-01` : undefined;
+    const requestKey = `${query ?? ''}|${nextPage}|${nextStatus}|${nextDepartment}|${nextRole}|${createdAfter ?? ''}|${append}`;
     requestKeyRef.current = requestKey;
-    setLoading(true);
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     try {
       const params = {
         search: query || undefined,
         page: nextPage,
-        limit: 20,
+        limit: EMPLOYEE_PAGE_SIZE,
       };
       if (nextStatus) params.isActive = nextStatus;
       if (nextDepartment) params.departmentId = nextDepartment;
+      if (nextRole) params.roleId = nextRole;
+      if (createdAfter) params.createdAfter = createdAfter;
 
       const data = await adminApi.listEmployees(params);
       if (requestKeyRef.current !== requestKey) return;
-      setEmployees(data.employees);
+      setEmployees((current) =>
+        append ? [...current, ...(data.employees ?? [])] : (data.employees ?? []),
+      );
       setPagination(data.pagination);
       setPage(nextPage);
       setListError('');
@@ -179,6 +213,7 @@ export default function AdminUsers() {
     } finally {
       if (requestKeyRef.current === requestKey) {
         setLoading(false);
+        setLoadingMore(false);
       }
     }
   }, []);
@@ -191,7 +226,11 @@ export default function AdminUsers() {
       .catch(() => {
         // Department filter remains optional.
       });
-    loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '' });
+    adminApi
+      .listRoles()
+      .then((data) => setRoles(data.roles ?? []))
+      .catch(() => {});
+    loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '', nextRole: '' });
   }, [loadEmployees, loadStats]);
 
   useEffect(() => {
@@ -204,17 +243,109 @@ export default function AdminUsers() {
       nextPage: 1,
       nextStatus: statusFilterRef.current,
       nextDepartment: departmentFilterRef.current,
+      nextRole: roleFilterRef.current,
+      nextNewThisMonth: newThisMonthFilterRef.current,
     });
   }, [debouncedSearch, loadEmployees]);
 
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (!entry?.isIntersecting || loading || loadingMore) return;
+        if (!pagination || page >= pagination.totalPages) return;
+        loadEmployees({
+          query: search,
+          nextPage: page + 1,
+          nextStatus: statusFilter,
+          nextDepartment: departmentFilter,
+          nextRole: roleFilter,
+          nextNewThisMonth: newThisMonthFilter,
+          append: true,
+        });
+      },
+      { rootMargin: '120px' },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    departmentFilter,
+    loadEmployees,
+    loading,
+    loadingMore,
+    newThisMonthFilter,
+    page,
+    pagination,
+    roleFilter,
+    search,
+    statusFilter,
+  ]);
+
+  function clearFilters() {
+    setSearch('');
+    setStatusFilter('');
+    setDepartmentFilter('');
+    setRoleFilter('');
+    setNewThisMonthFilter(false);
+    skipDebouncedSearchRef.current = true;
+    loadEmployees({
+      query: '',
+      nextPage: 1,
+      nextStatus: '',
+      nextDepartment: '',
+      nextRole: '',
+      nextNewThisMonth: false,
+    });
+  }
+
+  function handleRoleChange(value) {
+    setRoleFilter(value);
+    loadEmployees({
+      query: search,
+      nextPage: 1,
+      nextStatus: statusFilter,
+      nextDepartment: departmentFilter,
+      nextRole: value,
+      nextNewThisMonth: newThisMonthFilter,
+    });
+  }
+
   function handleStatusChange(value) {
     setStatusFilter(value);
-    loadEmployees({ query: search, nextPage: 1, nextStatus: value });
+    loadEmployees({
+      query: search,
+      nextPage: 1,
+      nextStatus: value,
+      nextDepartment: departmentFilter,
+      nextNewThisMonth: newThisMonthFilter,
+    });
   }
 
   function handleDepartmentChange(value) {
     setDepartmentFilter(value);
-    loadEmployees({ query: search, nextPage: 1, nextDepartment: value });
+    loadEmployees({
+      query: search,
+      nextPage: 1,
+      nextStatus: statusFilter,
+      nextDepartment: value,
+      nextNewThisMonth: newThisMonthFilter,
+    });
+  }
+
+  function handleNewThisMonthToggle() {
+    const next = !newThisMonthFilter;
+    setNewThisMonthFilter(next);
+    loadEmployees({
+      query: search,
+      nextPage: 1,
+      nextStatus: statusFilter,
+      nextDepartment: departmentFilter,
+      nextNewThisMonth: next,
+    });
   }
 
   function goToEmployee(employee) {
@@ -238,6 +369,7 @@ export default function AdminUsers() {
             nextPage: page,
             nextStatus: statusFilter,
             nextDepartment: departmentFilter,
+            nextNewThisMonth: newThisMonthFilter,
           }),
           loadStats(),
         ]);
@@ -294,7 +426,11 @@ export default function AdminUsers() {
     event.stopPropagation();
   }
 
-  const hasActiveFilters = Boolean(search || statusFilter || departmentFilter);
+  const hasActiveFilters = Boolean(
+    search || statusFilter || departmentFilter || roleFilter || newThisMonthFilter,
+  );
+  const newThisMonthHint = formatJoinedSinceHint(stats?.monthKey);
+  const pageSize = pagination?.limit ?? EMPLOYEE_PAGE_SIZE;
 
   return (
     <div className="page page--employees">
@@ -307,8 +443,47 @@ export default function AdminUsers() {
                 const hint =
                   typeof card.hint === 'function' ? card.hint(stats) : card.hint;
                 const value = stats?.[card.statKey];
+                const isNewThisMonthCard = card.key === 'newThisMonth';
+                const isSelected = isNewThisMonthCard && newThisMonthFilter;
+                const cardClassName = [
+                  'employees-stat card',
+                  isNewThisMonthCard ? 'employees-stat--clickable surface--clickable' : '',
+                  isSelected ? 'employees-stat--selected' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+
+                if (isNewThisMonthCard) {
+                  return (
+                    <button
+                      key={card.key}
+                      type="button"
+                      className={cardClassName}
+                      onClick={handleNewThisMonthToggle}
+                      disabled={statsLoading || !stats?.monthKey}
+                      aria-pressed={newThisMonthFilter}
+                      aria-label={`${card.label}: ${typeof value === 'number' ? value : 'unknown'}. ${hint}. ${
+                        newThisMonthFilter
+                          ? 'Showing new employees in the list below. Click to show all employees.'
+                          : 'Click to show new employees in the list below.'
+                      }`}
+                    >
+                      <div className="employees-stat__head">
+                        <span className="employees-stat__label">{card.label}</span>
+                        <span className="employees-stat__icon" aria-hidden="true">
+                          {card.icon}
+                        </span>
+                      </div>
+                      <strong className="employees-stat__value">
+                        {typeof value === 'number' ? value : '—'}
+                      </strong>
+                      <p className="employees-stat__hint muted small">{hint}</p>
+                    </button>
+                  );
+                }
+
                 return (
-                  <article key={card.key} className="employees-stat card">
+                  <article key={card.key} className={cardClassName}>
                     <div className="employees-stat__head">
                       <span className="employees-stat__label">{card.label}</span>
                       <span className="employees-stat__icon" aria-hidden="true">
@@ -334,7 +509,15 @@ export default function AdminUsers() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search employee name, code…"
               ariaLabel="Search employees"
-              onEnter={() => loadEmployees({ query: search, nextPage: 1 })}
+              onEnter={() =>
+                loadEmployees({
+                  query: search,
+                  nextPage: 1,
+                  nextStatus: statusFilter,
+                  nextDepartment: departmentFilter,
+                  nextNewThisMonth: newThisMonthFilter,
+                })
+              }
             />
 
             <label className="field-inline filter-bar__field employees-toolbar__field">
@@ -348,6 +531,16 @@ export default function AdminUsers() {
             </label>
 
             <label className="field-inline filter-bar__field employees-toolbar__field">
+              <span className="label">Role</span>
+              <SelectField
+                value={roleFilter}
+                onChange={handleRoleChange}
+                options={roleOptions}
+                aria-label="Role filter"
+              />
+            </label>
+
+            <label className="field-inline filter-bar__field employees-toolbar__field">
               <span className="label">Status</span>
               <SelectField
                 value={statusFilter}
@@ -356,6 +549,14 @@ export default function AdminUsers() {
                 aria-label="Status filter"
               />
             </label>
+
+            {hasActiveFilters ? (
+              <div className="filter-bar__field employees-toolbar__clear">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              </div>
+            ) : null}
           </div>
 
           {canWriteUsers ? (
@@ -369,19 +570,39 @@ export default function AdminUsers() {
 
         {listError ? <div className="alert alert--error">{listError}</div> : null}
 
+        {newThisMonthFilter ? (
+          <p className="employees-filter-notice muted small" role="status">
+            Showing employees {newThisMonthHint.toLowerCase()}.
+          </p>
+        ) : null}
+
         {loading ? (
           <TableSkeleton />
         ) : employees.length === 0 ? (
           <EmptyState
             icon={EMPTY_ICONS.users}
-            title={hasActiveFilters ? 'No employees match these filters' : 'No employees yet'}
+            title={
+              newThisMonthFilter && !search && !statusFilter && !departmentFilter
+                ? 'No new employees this month'
+                : hasActiveFilters
+                  ? 'No employees match these filters'
+                  : 'No employees yet'
+            }
             description={
-              hasActiveFilters
-                ? 'Try adjusting search or filters, or clear them to browse the full directory.'
-                : 'Register an employee to build your directory and manage access from here.'
+              newThisMonthFilter && !search && !statusFilter && !departmentFilter
+                ? `No employees were registered ${newThisMonthHint.toLowerCase()}.`
+                : hasActiveFilters
+                  ? 'Try adjusting search or filters, or clear them to browse the full directory.'
+                  : 'Register an employee to build your directory and manage access from here.'
             }
             action={
-              !hasActiveFilters && canWriteUsers ? (
+              hasActiveFilters ? (
+                <button type="button" className="btn btn-primary btn-sm" onClick={clearFilters}>
+                  {newThisMonthFilter && !search && !statusFilter && !departmentFilter
+                    ? 'Show all employees'
+                    : 'Clear filters'}
+                </button>
+              ) : !hasActiveFilters && canWriteUsers ? (
                 <Link to="/admin/users/register" className="btn btn-primary btn-sm">
                   Register employee
                 </Link>
@@ -394,6 +615,9 @@ export default function AdminUsers() {
               <table className="table data-table employees-table">
                 <thead>
                   <tr>
+                    <th scope="col" className="employees-table__col-row-num">
+                      #
+                    </th>
                     <th>Name</th>
                     <th>Email</th>
                     <th>Mobile</th>
@@ -404,8 +628,9 @@ export default function AdminUsers() {
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map((employee) => {
+                  {employees.map((employee, index) => {
                     const actionItems = getActionItems(employee);
+                    const rowNumber = index + 1;
                     return (
                       <tr
                         key={employee.id}
@@ -416,6 +641,13 @@ export default function AdminUsers() {
                         role="link"
                         aria-label={`Open ${employee.name}`}
                       >
+                        <td
+                          data-label="#"
+                          className="employees-table__row-num"
+                          aria-label={`Row ${rowNumber}`}
+                        >
+                          {rowNumber}
+                        </td>
                         <td data-label="Name" className="employees-table__name">
                           <Link
                             to={`/admin/users/${employee.id}`}
@@ -465,18 +697,13 @@ export default function AdminUsers() {
               </table>
             </div>
 
-            <PaginationBar
-              pagination={pagination}
-              onPageChange={(nextPage) =>
-                loadEmployees({
-                  query: search,
-                  nextPage,
-                  nextStatus: statusFilter,
-                  nextDepartment: departmentFilter,
-                })
-              }
-              entityLabel="employees"
-            />
+            {pagination && employees.length > 0 ? (
+              <p className="employees-scroll-hint muted small" role="status">
+                Showing {employees.length} of {pagination.total} employees
+                {loadingMore ? ' · Loading more…' : ''}
+              </p>
+            ) : null}
+            <div ref={loadMoreRef} className="employees-scroll-sentinel" aria-hidden="true" />
           </>
         )}
       </section>

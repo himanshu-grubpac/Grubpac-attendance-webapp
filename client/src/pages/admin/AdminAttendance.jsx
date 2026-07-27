@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import TimeField, { isValidHHmmTime, normalizeHHmmTime } from '../../components/TimeField.jsx';
+import SelectField from '../../components/SelectField.jsx';
 import {
   IST_TIMEZONE,
   getISTDateInputValue,
@@ -22,12 +26,12 @@ const STATUS_LEGEND = [
   { code: 'P', label: 'Present', tone: 'success' },
   { code: 'A', label: 'Absent', tone: 'danger' },
   { code: 'HD', label: 'Half Day', tone: 'warning' },
-  { code: 'L', label: 'Late', tone: 'late' },
   { code: 'H', label: 'Holiday', tone: 'muted' },
   { code: 'LV', label: 'Leave', tone: 'info' },
   { code: 'OFC', label: 'Office', tone: 'office' },
   { code: 'WFH', label: 'WFH', tone: 'wfh' },
-  { code: 'warning', label: 'Warning', tone: 'warning', icon: true },
+  { code: 'W', label: 'Warning (late)', tone: 'warning' },
+  { code: 'RJ', label: 'Rejected check-in', tone: 'danger' },
 ];
 
 const SUMMARY_CARDS = [
@@ -101,6 +105,23 @@ function buildWeekDayKeys(weekStartKey) {
   return Array.from({ length: 7 }, (_, index) => addDaysToDayKey(weekStartKey, index));
 }
 
+function formatDayPickerLabel(dayKey) {
+  const date = parseDayKeyToDate(dayKey);
+  if (!date) return dayKey;
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: IST_TIMEZONE,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function getEditableWeekDays(cells, weekDayKeys) {
+  return weekDayKeys
+    .map((dayKey, index) => ({ dayKey, cell: cells[index] }))
+    .filter(({ cell }) => Boolean(cell?.checkInRecordId && cell.checkInRecord));
+}
+
 function formatWeekRangeLabel(weekStartKey, weekEndKey) {
   const startDate = parseDayKeyToDate(weekStartKey);
   const endDate = parseDayKeyToDate(weekEndKey);
@@ -129,6 +150,50 @@ function formatCompactISTTime(value) {
     hour12: true,
   }).format(date);
 }
+
+function timestampToHHmmIST(value) {
+  const date = parseTimestamp(value);
+  if (!date) return '09:00';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: IST_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '09';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
+  return normalizeHHmmTime(`${hour}:${minute}`) ?? '09:00';
+}
+
+function recordId(record) {
+  if (!record) return null;
+  return record.id ?? record._id?.toString?.() ?? String(record._id);
+}
+
+function statusCodeFromCheckInRecord(record) {
+  if (record?.quarterWarningIndex && record?.warningIssued) {
+    return `W${record.quarterWarningIndex}`;
+  }
+  return record?.attendanceTag ?? 'P';
+}
+
+function buildStatusOptions(warningsPerQuarter = 3) {
+  const allowance = Math.max(1, Math.min(10, Number(warningsPerQuarter) || 3));
+  const options = [
+    { value: 'P', label: 'Present (P)' },
+    { value: 'HD', label: 'Half Day (HD)' },
+    { value: 'LV', label: 'Leave Violation (LV)' },
+  ];
+  for (let index = 1; index <= allowance; index += 1) {
+    options.push({ value: `W${index}`, label: `Warning ${index} (W${index})` });
+  }
+  return options;
+}
+
+const MODE_OPTIONS = [
+  { value: 'office', label: 'Office (OFC)' },
+  { value: 'wfh', label: 'Work From Home (WFH)' },
+];
 
 function getCheckInMinutesIST(timestamp) {
   const date = parseTimestamp(timestamp);
@@ -240,12 +305,12 @@ function uniqueMonthsForWeek(dayKeys) {
   return [...new Set(dayKeys.map((key) => key.slice(0, 7)))];
 }
 
-async function fetchAllDayRecords(date) {
+async function fetchWeekRecords(weekStartKey) {
   const records = [];
   let page = 1;
   let totalPages = 1;
   do {
-    const data = await adminApi.listAttendance({ date, page, limit: 100 });
+    const data = await adminApi.listAttendance({ weekStart: weekStartKey, page, limit: 100 });
     records.push(...(data.records ?? []));
     totalPages = data.pagination?.totalPages ?? 1;
     page += 1;
@@ -315,10 +380,17 @@ function classifyDayCell({
       kind: 'present',
       statusTag,
       warningTag,
-      modeTag: 'OFC',
+      modeTag: allowedCheckIn.attendanceMode === 'wfh' ? 'WFH' : 'OFC',
       checkInTime: formatCompactISTTime(allowedCheckIn.timestamp),
       checkOutTime: formatCompactISTTime(allowedCheckOut?.timestamp),
+      lateNote: allowedCheckIn.lateNote ?? null,
+      checkInLocationHref: mapsLocationHref(allowedCheckIn),
+      checkOutLocationHref: mapsLocationHref(allowedCheckOut),
       hasRejectedAttempt: Boolean(rejectedCheckIn),
+      checkInRecordId: recordId(allowedCheckIn),
+      checkOutRecordId: recordId(allowedCheckOut),
+      checkInRecord: allowedCheckIn,
+      checkOutRecord: allowedCheckOut ?? null,
     };
   }
 
@@ -329,6 +401,8 @@ function classifyDayCell({
       rejectionReasons: Array.isArray(rejectedCheckIn.rejectionReasons)
         ? rejectedCheckIn.rejectionReasons.filter(Boolean)
         : [],
+      checkInRecordId: recordId(rejectedCheckIn),
+      checkInRecord: rejectedCheckIn,
     };
   }
 
@@ -341,9 +415,22 @@ function classifyDayCell({
   return { kind: 'pending' };
 }
 
-function AttendanceStatusTag({ code, tone }) {
+function formatLateNoteTitle(lateNote) {
+  const text = typeof lateNote === 'string' ? lateNote.trim() : '';
+  return text ? `Late note: ${text}` : undefined;
+}
+
+function buildCheckInHoverTitle({ lateNote, checkInLocationHref }) {
+  const parts = [];
+  const lateTitle = formatLateNoteTitle(lateNote);
+  if (lateTitle) parts.push(lateTitle);
+  if (checkInLocationHref) parts.push('Open check-in location');
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function AttendanceStatusTag({ code, tone, title }) {
   return (
-    <span className={`attendance-tag attendance-tag--${tone}`} title={code}>
+    <span className={`attendance-tag attendance-tag--${tone}`} title={title ?? code}>
       {code}
     </span>
   );
@@ -379,26 +466,41 @@ function dayCardModifiers(cell, dayKey, todayKey, isDaySelected) {
     mods.push('attendance-day-card--rejected');
   } else if (cell.kind === 'present') {
     mods.push(
-      cell.statusTag === 'HD' ? 'attendance-day-card--half-day' : 'attendance-day-card--present',
+      cell.statusTag === 'HD' || cell.statusTag === 'LV'
+        ? 'attendance-day-card--half-day'
+        : 'attendance-day-card--present',
     );
+    if (cell.modeTag && cell.warningTag) mods.push('attendance-day-card--stacked');
   }
   if (dayKey === todayKey) mods.push('attendance-day-card--today');
   if (isDaySelected) mods.push('attendance-day-card--selected');
   return mods.join(' ');
 }
 
-function CheckInOutTimes({ checkInTime, checkOutTime }) {
+function CheckInOutTimes({
+  checkInTime,
+  checkOutTime,
+  checkInLocationHref,
+  checkOutLocationHref,
+  lateNote,
+}) {
   if (!checkInTime && !checkOutTime) {
     return <span className="attendance-grid__empty">—</span>;
   }
 
+  const checkInTitle = buildCheckInHoverTitle({ lateNote, checkInLocationHref });
+
   return (
     <div className="attendance-grid__times-stack">
       {checkInTime ? (
-        <span className="attendance-grid__time attendance-grid__time--in">{checkInTime}</span>
+        checkInLocationHref ? (
+          <a className="attendance-grid__time attendance-grid__time--in attendance-grid__location-link" href={checkInLocationHref} target="_blank" rel="noreferrer" title={checkInTitle}>{checkInTime}</a>
+        ) : <span className="attendance-grid__time attendance-grid__time--in" title={checkInTitle}>{checkInTime}</span>
       ) : null}
       {checkOutTime ? (
-        <span className="attendance-grid__time attendance-grid__time--out">{checkOutTime}</span>
+        checkOutLocationHref ? (
+          <a className="attendance-grid__time attendance-grid__time--out attendance-grid__location-link" href={checkOutLocationHref} target="_blank" rel="noreferrer" title="Open check-out location">{checkOutTime}</a>
+        ) : <span className="attendance-grid__time attendance-grid__time--out">{checkOutTime}</span>
       ) : null}
     </div>
   );
@@ -423,6 +525,7 @@ function DayCellBadgeRow({ left, right, centered = false }) {
 
 function presentStatusTone(statusTag) {
   if (statusTag === 'P') return 'success';
+  if (statusTag === 'LV') return 'info';
   if (statusTag === 'L') return 'late';
   return 'warning';
 }
@@ -431,7 +534,13 @@ function modeTagTone(modeTag) {
   return modeTag === 'WFH' ? 'wfh' : 'office';
 }
 
+function mapsLocationHref(record) {
+  if (!Number.isFinite(record?.latitude) || !Number.isFinite(record?.longitude)) return null;
+  return `https://www.google.com/maps?q=${record.latitude},${record.longitude}`;
+}
+
 function DayCell({ cell, cardClassName }) {
+  const cellTitle = formatLateNoteTitle(cell?.lateNote);
   let inner = null;
 
   if (!cell || cell.kind === 'future' || cell.kind === 'pending') {
@@ -481,13 +590,22 @@ function DayCell({ cell, cardClassName }) {
   } else {
     const statusRight = cell.warningTag ? (
       <>
-        <AttendanceStatusTag code={cell.warningTag} tone="warning" />
-        <AttendanceStatusTag code={cell.statusTag} tone={presentStatusTone(cell.statusTag)} />
+        <AttendanceStatusTag
+          code={cell.warningTag}
+          tone="warning"
+          title={cellTitle ?? cell.warningTag}
+        />
+        <AttendanceStatusTag
+          code={cell.statusTag}
+          tone={presentStatusTone(cell.statusTag)}
+          title={cellTitle ?? cell.statusTag}
+        />
       </>
     ) : (
       <AttendanceStatusTag
         code={cell.statusTag}
         tone={presentStatusTone(cell.statusTag)}
+        title={cellTitle ?? cell.statusTag}
       />
     );
 
@@ -496,12 +614,22 @@ function DayCell({ cell, cardClassName }) {
         <DayCellBadgeRow
           left={
             cell.modeTag ? (
-              <AttendanceStatusTag code={cell.modeTag} tone={modeTagTone(cell.modeTag)} />
+              <AttendanceStatusTag
+                code={cell.modeTag}
+                tone={modeTagTone(cell.modeTag)}
+                title={cellTitle ?? cell.modeTag}
+              />
             ) : null
           }
           right={statusRight}
         />
-        <CheckInOutTimes checkInTime={cell.checkInTime} checkOutTime={cell.checkOutTime} />
+        <CheckInOutTimes
+          checkInTime={cell.checkInTime}
+          checkOutTime={cell.checkOutTime}
+          checkInLocationHref={cell.checkInLocationHref}
+          checkOutLocationHref={cell.checkOutLocationHref}
+          lateNote={cell.lateNote}
+        />
         {cell.hasRejectedAttempt ? (
           <span className="attendance-grid__note" title="Additional rejected check-in attempt">
             +RJ
@@ -511,7 +639,7 @@ function DayCell({ cell, cardClassName }) {
     );
   }
 
-  return <div className={cardClassName}>{inner}</div>;
+  return <div className={cardClassName} title={cellTitle}>{inner}</div>;
 }
 
 function GridSkeleton() {
@@ -522,6 +650,179 @@ function GridSkeleton() {
       <div className="skeleton skeleton--row" />
       <div className="skeleton skeleton--row" />
     </div>
+  );
+}
+
+function AttendanceDayPickerModal({ target, onClose, onSelectDay }) {
+  const titleId = useId();
+  if (!target) return null;
+
+  return createPortal(
+    <div className="modal__backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal modal--compact attendance-day-picker-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="modal__header">
+          <h2 id={titleId} className="modal__title">
+            Select day to edit
+          </h2>
+          <p className="modal__lead muted">
+            {target.employee.name} · {target.editableDays.length} days with check-in this week
+          </p>
+        </header>
+        <div className="modal__body attendance-day-picker-modal__list">
+          {target.editableDays.map(({ dayKey, cell }) => (
+            <button
+              key={dayKey}
+              type="button"
+              className="attendance-day-picker-modal__option"
+              onClick={() => onSelectDay(dayKey, cell)}
+            >
+              <span className="attendance-day-picker-modal__day">{formatDayPickerLabel(dayKey)}</span>
+              {cell.checkInTime ? (
+                <span className="attendance-day-picker-modal__time muted">
+                  In {cell.checkInTime}
+                  {cell.checkOutTime ? ` · Out ${cell.checkOutTime}` : ''}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+        <footer className="modal__footer">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function AttendanceEditModal({
+  target,
+  form,
+  error,
+  saving,
+  statusOptions,
+  onClose,
+  onChange,
+  onSubmit,
+}) {
+  const titleId = useId();
+  if (!target) return null;
+
+  const dayLabel = parseDayKeyToDate(target.dayKey);
+  const formattedDay = dayLabel
+    ? new Intl.DateTimeFormat('en-US', {
+        timeZone: IST_TIMEZONE,
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }).format(dayLabel)
+    : target.dayKey;
+
+  return createPortal(
+    <div className="modal__backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal modal--compact attendance-edit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="modal__header">
+          <h2 id={titleId} className="modal__title">
+            Edit attendance
+          </h2>
+          <p className="modal__lead muted">
+            {target.employee.name} · {formattedDay}
+          </p>
+        </header>
+        <form
+          className="modal__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <div className="modal__body">
+            {error ? <div className="alert alert--error modal__alert">{error}</div> : null}
+
+            <label className="modal__field">
+              <span className="modal__label">Check-in time (IST)</span>
+              <TimeField
+                value={form.checkInTime}
+                onChange={(value) => onChange({ checkInTime: value })}
+                disabled={saving}
+                aria-label="Check-in time"
+              />
+            </label>
+
+            {target.hasCheckOut ? (
+              <label className="modal__field">
+                <span className="modal__label">Check-out time (IST)</span>
+                <TimeField
+                  value={form.checkOutTime}
+                  onChange={(value) => onChange({ checkOutTime: value })}
+                  disabled={saving}
+                  aria-label="Check-out time"
+                />
+              </label>
+            ) : null}
+
+            <label className="modal__field">
+              <span className="modal__label">Attendance status</span>
+              <SelectField
+                value={form.statusCode}
+                onChange={(value) => onChange({ statusCode: value })}
+                options={statusOptions}
+                disabled={saving}
+                aria-label="Attendance status"
+              />
+            </label>
+
+            <label className="modal__field">
+              <span className="modal__label">Work mode</span>
+              <SelectField
+                value={form.attendanceMode}
+                onChange={(value) => onChange({ attendanceMode: value })}
+                options={MODE_OPTIONS}
+                disabled={saving}
+                aria-label="Work mode"
+              />
+            </label>
+
+            <label className="modal__field">
+              <span className="modal__label">Late note (optional)</span>
+              <textarea
+                className="input"
+                rows={3}
+                maxLength={500}
+                value={form.lateNote}
+                onChange={(event) => onChange({ lateNote: event.target.value })}
+                disabled={saving}
+                placeholder="Reason for late arrival, if applicable"
+              />
+            </label>
+          </div>
+          <footer className="modal__footer">
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn--primary" disabled={saving}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -539,12 +840,16 @@ function WarningBalanceCell({ summary, rejectedCount }) {
   }
 
   const { used, allowance } = summary;
+  const remaining = summary.remaining ?? Math.max(0, allowance - used);
   const pct = allowance > 0 ? Math.min(100, Math.round((used / allowance) * 100)) : 0;
+  const remainingLabel =
+    remaining > 0 ? `${remaining} left` : remaining === 0 && allowance > 0 ? 'None left' : null;
 
   return (
     <div className="attendance-warnings-cell">
       <span className="attendance-warnings-cell__count">
         {used}/{allowance}
+        {remainingLabel ? ` · ${remainingLabel}` : ''}
       </span>
       <span
         className="attendance-warnings-cell__bar"
@@ -561,6 +866,8 @@ function WarningBalanceCell({ summary, rejectedCount }) {
 }
 
 export default function AdminAttendance() {
+  const { showSuccess, showError } = useToast();
+  const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const [weekStart, setWeekStart] = useState(() => getWeekStartDayKey());
   const [selectedDayKey, setSelectedDayKey] = useState(() => getISTDateInputValue());
   const [employees, setEmployees] = useState([]);
@@ -569,7 +876,20 @@ export default function AdminAttendance() {
   const [holidaySet, setHolidaySet] = useState(new Set());
   const [policy, setPolicy] = useState(DEFAULT_POLICY);
   const [quarterWarnings, setQuarterWarnings] = useState({ byUser: {}, quarter: null, allowance: 3 });
-  const [selectedRows, setSelectedRows] = useState(() => new Set());
+  const [weekConfirmations, setWeekConfirmations] = useState({});
+  const [confirmingUserId, setConfirmingUserId] = useState(null);
+  const [unconfirmingUserId, setUnconfirmingUserId] = useState(null);
+  const [editPickerTarget, setEditPickerTarget] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm] = useState({
+    checkInTime: '09:00',
+    checkOutTime: '',
+    statusCode: 'P',
+    attendanceMode: 'office',
+    lateNote: '',
+  });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -578,26 +898,40 @@ export default function AdminAttendance() {
   const todayKey = getISTDateInputValue();
   const isCurrentWeek = weekStart === getWeekStartDayKey(todayKey);
 
+  const loadOfficePolicy = useCallback(async () => {
+    try {
+      const officeResponse = await adminApi.getOfficeSettings();
+      setPolicy(resolvePolicy(officeResponse.settings));
+    } catch {
+      // Keep the last known policy when the settings request fails.
+    }
+  }, []);
+
   const loadWeek = useCallback(async () => {
     setLoading(true);
     setError('');
-    setSelectedRows(new Set());
     try {
       const dayKeys = buildWeekDayKeys(weekStart);
       const years = [...new Set(dayKeys.map((key) => key.slice(0, 4)))];
 
-      const [employeeList, officeResponse, warningResponse, ...dayResults] = await Promise.all([
-        fetchActiveEmployees(),
-        adminApi.getOfficeSettings().catch(() => ({ settings: null })),
-        adminApi.getQuarterWarnings().catch(() => ({ byUser: {}, quarter: null, allowance: 3 })),
-        ...dayKeys.map((date) => fetchAllDayRecords(date)),
-      ]);
+      const [employeeList, officeResponse, warningResponse, confirmationResponse, weekRecords] =
+        await Promise.all([
+          fetchActiveEmployees(),
+          adminApi.getOfficeSettings().catch(() => ({ settings: null })),
+          adminApi.getQuarterWarnings().catch(() => ({ byUser: {}, quarter: null, allowance: 3 })),
+          adminApi.listWeekConfirmations(weekStart).catch(() => ({ confirmations: [] })),
+          fetchWeekRecords(weekStart),
+        ]);
 
-      const resolvedPolicy = resolvePolicy(officeResponse.settings);
-      setPolicy(resolvedPolicy);
+      setPolicy(resolvePolicy(officeResponse.settings));
       setQuarterWarnings(warningResponse);
+      const confirmationMap = {};
+      for (const row of confirmationResponse.confirmations ?? []) {
+        confirmationMap[String(row.userId)] = row;
+      }
+      setWeekConfirmations(confirmationMap);
 
-      const allRecords = dayResults.flat();
+      const allRecords = weekRecords;
       const months = uniqueMonthsForWeek(dayKeys);
       const holidayResponses = await Promise.all(
         years.map((year) =>
@@ -648,6 +982,49 @@ export default function AdminAttendance() {
   useEffect(() => {
     loadWeek();
   }, [loadWeek]);
+
+  useEffect(() => {
+    function applyOfficePolicy(settings) {
+      if (!settings) return;
+      setPolicy(resolvePolicy(settings));
+    }
+
+    function handlePolicyUpdate(event) {
+      applyOfficePolicy(event.detail);
+    }
+
+    function handleStorageUpdate(event) {
+      if (event.key !== 'attendance.office-policy-updated' || !event.newValue) return;
+      try {
+        applyOfficePolicy(JSON.parse(event.newValue));
+      } catch {
+        // Ignore invalid cached event data.
+      }
+    }
+
+    function handlePolicyRefresh() {
+      loadOfficePolicy();
+      loadWeek();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        loadOfficePolicy();
+        loadWeek();
+      }
+    }
+
+    window.addEventListener('attendance:office-policy-updated', handlePolicyUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    window.addEventListener('focus', handlePolicyRefresh);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('attendance:office-policy-updated', handlePolicyUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+      window.removeEventListener('focus', handlePolicyRefresh);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [loadOfficePolicy, loadWeek]);
 
   useEffect(() => {
     setSelectedDayKey((current) => {
@@ -716,6 +1093,98 @@ export default function AdminAttendance() {
   }, [gridRows]);
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
+  const statusOptions = useMemo(
+    () => buildStatusOptions(policy.warningsPerQuarter),
+    [policy.warningsPerQuarter],
+  );
+
+  function openEditForDay(employee, dayKey, cell) {
+    if (!cell?.checkInRecordId || !cell.checkInRecord) return;
+
+    setEditPickerTarget(null);
+    setEditTarget({
+      employee,
+      dayKey,
+      checkInRecordId: cell.checkInRecordId,
+      hasCheckOut: Boolean(cell.checkOutRecordId),
+      cellKind: cell.kind,
+    });
+    setEditForm({
+      checkInTime: timestampToHHmmIST(cell.checkInRecord.timestamp),
+      checkOutTime: cell.checkOutRecord ? timestampToHHmmIST(cell.checkOutRecord.timestamp) : '',
+      statusCode: statusCodeFromCheckInRecord(cell.checkInRecord),
+      attendanceMode: cell.checkInRecord.attendanceMode ?? 'office',
+      lateNote: cell.checkInRecord.lateNote ?? '',
+    });
+    setEditError('');
+  }
+
+  function openEditForRow(employee, cells) {
+    const editableDays = getEditableWeekDays(cells, weekDays);
+    if (editableDays.length === 0) return;
+
+    if (editableDays.length === 1) {
+      const { dayKey, cell } = editableDays[0];
+      openEditForDay(employee, dayKey, cell);
+      return;
+    }
+
+    setEditPickerTarget({ employee, editableDays });
+  }
+
+  function closeEditPickerModal() {
+    setEditPickerTarget(null);
+  }
+
+  function closeEditModal() {
+    if (editSaving) return;
+    setEditTarget(null);
+    setEditError('');
+  }
+
+  function patchEditForm(patch) {
+    setEditForm((current) => ({ ...current, ...patch }));
+  }
+
+  async function saveAttendanceEdit() {
+    if (!editTarget?.checkInRecordId) return;
+    if (!isValidHHmmTime(editForm.checkInTime)) {
+      setEditError('Enter a valid check-in time.');
+      return;
+    }
+    if (editTarget.hasCheckOut && editForm.checkOutTime && !isValidHHmmTime(editForm.checkOutTime)) {
+      setEditError('Enter a valid check-out time.');
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError('');
+    try {
+      const payload = {
+        checkInTime: normalizeHHmmTime(editForm.checkInTime),
+        statusCode: editForm.statusCode,
+        attendanceMode: editForm.attendanceMode,
+        lateNote: editForm.lateNote.trim() ? editForm.lateNote.trim() : null,
+      };
+      if (editTarget.hasCheckOut) {
+        payload.checkOutTime = editForm.checkOutTime
+          ? normalizeHHmmTime(editForm.checkOutTime)
+          : null;
+      }
+
+      await adminApi.editAttendanceRecord(editTarget.checkInRecordId, payload);
+      const employeeName = editTarget.employee.name;
+      setEditTarget(null);
+      await loadWeek();
+      showSuccess(`Attendance updated for ${employeeName}.`);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setEditError(message);
+      showError(message);
+    } finally {
+      setEditSaving(false);
+    }
+  }
 
   function goToPreviousWeek() {
     setWeekStart((current) => addDaysToDayKey(current, -7));
@@ -730,12 +1199,56 @@ export default function AdminAttendance() {
     setSelectedDayKey(todayKey);
   }
 
-  function toggleRowSelected(employeeId) {
-    setSelectedRows((current) => {
-      const next = new Set(current);
-      if (next.has(employeeId)) next.delete(employeeId);
-      else next.add(employeeId);
-      return next;
+  async function confirmWeekForEmployee(employeeId, employeeName) {
+    setConfirmingUserId(employeeId);
+    setError('');
+    try {
+      const result = await adminApi.confirmWeekAttendance({
+        userId: employeeId,
+        weekStart,
+      });
+      setWeekConfirmations((current) => ({
+        ...current,
+        [String(employeeId)]: result.confirmation,
+      }));
+      showSuccess(`Week attendance confirmed for ${employeeName}.`);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      showError(message);
+    } finally {
+      setConfirmingUserId(null);
+    }
+  }
+
+  async function unconfirmWeekForEmployee(employeeId, employeeName) {
+    await requestConfirm({
+      title: 'Undo week confirmation?',
+      message: `Remove confirmation for ${employeeName} for this week?`,
+      confirmLabel: 'Undo',
+      variant: 'danger',
+      onConfirm: async () => {
+        setUnconfirmingUserId(employeeId);
+        setError('');
+        try {
+          await adminApi.unconfirmWeekAttendance({
+            userId: employeeId,
+            weekStart,
+          });
+          setWeekConfirmations((current) => {
+            const next = { ...current };
+            delete next[String(employeeId)];
+            return next;
+          });
+          showSuccess(`Week confirmation undone for ${employeeName}.`);
+        } catch (err) {
+          const message = getErrorMessage(err);
+          setError(message);
+          showError(message);
+        } finally {
+          setUnconfirmingUserId(null);
+        }
+      },
     });
   }
 
@@ -880,11 +1393,20 @@ export default function AdminAttendance() {
               <tbody>
                 {gridRows.map(({ employee, cells, rejectedCount }, rowIndex) => {
                   const id = employee.id;
-                  const isRowSelected = selectedRows.has(id);
+                  const confirmation = weekConfirmations[String(id)];
+                  const isConfirming = confirmingUserId === id;
+                  const isUnconfirming = unconfirmingUserId === id;
                   const designation = employeeDesignation(employee);
                   const email = employee.email ?? null;
+                  const editableWeekDays = getEditableWeekDays(cells, weekDays);
+                  const canEditWeek = editableWeekDays.length > 0;
+                  const editButtonTitle = canEditWeek
+                    ? editableWeekDays.length === 1
+                      ? `Edit ${formatDayPickerLabel(editableWeekDays[0].dayKey)} attendance`
+                      : `Edit attendance (${editableWeekDays.length} days with check-in this week)`
+                    : 'No check-in to edit this week';
                   return (
-                    <tr key={id} className={isRowSelected ? 'attendance-grid__row--selected' : undefined}>
+                    <tr key={id}>
                       <td className="attendance-grid__row-num">{rowIndex + 1}</td>
                       <th scope="row" className="attendance-grid__employee">
                         <div className="attendance-grid__employee-inner">
@@ -937,35 +1459,39 @@ export default function AdminAttendance() {
                       })}
                       <td className="attendance-grid__actions">
                         <div className="attendance-grid__actions-inner">
-                          <Link
-                            to={`/admin/users/${id}`}
-                            className="attendance-grid__edit"
-                            aria-label={`View ${employee.name} profile`}
-                            title="View employee profile"
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm attendance-grid__edit"
+                            disabled={!canEditWeek || isConfirming || isUnconfirming || editSaving}
+                            title={editButtonTitle}
+                            aria-label={
+                              canEditWeek
+                                ? `Edit attendance for ${employee.name}, ${editableWeekDays.length} day${editableWeekDays.length === 1 ? '' : 's'} available`
+                                : 'Edit unavailable — no check-in this week'
+                            }
+                            onClick={() => openEditForRow(employee, cells)}
                           >
-                            <svg
-                              className="attendance-grid__edit-icon"
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden="true"
+                            Edit
+                          </button>
+                          {confirmation ? (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm attendance-grid__undo"
+                              disabled={isUnconfirming || isConfirming}
+                              onClick={() => unconfirmWeekForEmployee(id, employee.name)}
                             >
-                              <path d="M12 20h9" />
-                              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                            </svg>
-                          </Link>
-                          <input
-                            type="checkbox"
-                            className="attendance-grid__select"
-                            checked={isRowSelected}
-                            onChange={() => toggleRowSelected(id)}
-                            aria-label={`Select ${employee.name}`}
-                          />
+                              {isUnconfirming ? '…' : 'Undo'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm attendance-grid__confirm"
+                              disabled={isConfirming || isUnconfirming}
+                              onClick={() => confirmWeekForEmployee(id, employee.name)}
+                            >
+                              {isConfirming ? '…' : 'Confirm'}
+                            </button>
+                          )}
                         </div>
                       </td>
                       <td className="attendance-grid__warnings">
@@ -1004,6 +1530,7 @@ export default function AdminAttendance() {
           </div>
           <p className="attendance-legend__note muted small">
             * Weekend and holiday statuses are automatically pre-marked unless overtime is logged.
+            Late arrivals are shown as W1/W2/W3 warning tags alongside Present — not a separate L code.
           </p>
         </section>
 
@@ -1025,29 +1552,38 @@ export default function AdminAttendance() {
             Attendance Policy (Quarterly)
           </h2>
           <ul className="attendance-policy__list">
+            <li>Employees receive {policy.warningsPerQuarter} warning chances per quarter (3 months).</li>
             <li>
-              {policy.warningsPerQuarter} warnings allowed per quarter (3 months).
+              With warnings remaining, check-in after {formatPolicyTime(policy.graceThresholdTime)} and before{' '}
+              {formatPolicyTime(policy.halfDayThresholdTime)} is marked as a full day with the next warning.
             </li>
-            <li>
-              Check-in after {formatPolicyTime(policy.graceThresholdTime)} &amp; before{' '}
-              {formatPolicyTime(policy.halfDayThresholdTime)} → Warning issued (if warnings
-              remaining).
-            </li>
-            <li>
-              Check-in after {formatPolicyTime(policy.halfDayThresholdTime)} → Marked as Half Day.
-            </li>
-            <li>
-              If 0 warnings remaining, check-in after {formatPolicyTime(policy.graceThresholdTime)}{' '}
-              → Half Day.
-            </li>
+            <li>With 0 warnings remaining, any check-in after {formatPolicyTime(policy.graceThresholdTime)} before the half-day threshold is marked as LV (leave violation).</li>
+            <li>Check-in at or after {formatPolicyTime(policy.halfDayThresholdTime)} is marked as Half Day.</li>
+            <li>With 0 warnings remaining after the half-day threshold, check-in is still Half Day.</li>
           </ul>
           <p className="attendance-policy__note muted small">
-            Office hours Mon–Fri {formatPolicyTime(policy.officeStartTime)} –{' '}
-            {formatPolicyTime(policy.officeEndTime)} IST. Thresholds are configured on the
-            Geolocation page.
+            Office hours are Monday to Friday, {formatPolicyTime(policy.officeStartTime)} to{' '}
+            {formatPolicyTime(policy.officeEndTime)} IST. Saturday and Sunday are non-working days.
+            Thresholds are configured on the Geolocation page.
           </p>
         </section>
       </div>
+      {confirmDialog}
+      <AttendanceDayPickerModal
+        target={editPickerTarget}
+        onClose={closeEditPickerModal}
+        onSelectDay={(dayKey, cell) => openEditForDay(editPickerTarget.employee, dayKey, cell)}
+      />
+      <AttendanceEditModal
+        target={editTarget}
+        form={editForm}
+        error={editError}
+        saving={editSaving}
+        statusOptions={statusOptions}
+        onClose={closeEditModal}
+        onChange={patchEditForm}
+        onSubmit={saveAttendanceEdit}
+      />
     </div>
   );
 }

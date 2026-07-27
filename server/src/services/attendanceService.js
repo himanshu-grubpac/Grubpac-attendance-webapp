@@ -4,8 +4,16 @@ import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
-import { evaluateCheckInPolicy } from './attendancePolicyService.js';
+import {
+  evaluateCheckInPolicy,
+  getQuarterWarningSummaryForUsers,
+  parseStatusCodeToPolicyFields,
+} from './attendancePolicyService.js';
 import { getHolidayDateSet } from './leaveService.js';
+import {
+  isUserInTeamScope,
+  resolveTeamScopedUserIds,
+} from './teamScopeService.js';
 import {
   endOfDayIST,
   formatISTDateTime,
@@ -15,6 +23,8 @@ import {
   parseDateInputAsISTDay,
   parseMonthInputAsISTRange,
   startOfDayIST,
+  buildISTTimestampFromDayAndTime,
+  getISTTimeHHmm,
 } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
 
@@ -55,6 +65,10 @@ function buildTodayStatus(records, office) {
       longitude: office.longitude,
       radiusMeters: office.radiusMeters,
       maxAccuracyMeters: office.maxAccuracyMeters,
+      graceThresholdTime: office.graceThresholdTime ?? '09:00',
+      halfDayThresholdTime: office.halfDayThresholdTime ?? '10:00',
+      warningsPerQuarter: office.warningsPerQuarter ?? 3,
+      weekendDays: office.weekendDays ?? [0, 6],
     },
   };
 }
@@ -67,16 +81,24 @@ export async function getTodayStatus(userId) {
   return buildTodayStatus(records, office);
 }
 
-export async function markAttendance(userId, type, payload) {
+export async function markAttendance(userId, type, payload, auditContext = {}) {
   const session = await mongoose.startSession();
 
   try {
     let result;
     await session.withTransaction(async () => {
       const office = await getOfficeSettings();
-      const geo = evaluateGeoAttendance({ ...payload, office });
       const records = await getTodayRecords(userId, session);
       const today = buildTodayStatus(records, office);
+      const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
+      const attendanceMode = type === 'check_out' && existingCheckIn
+        ? existingCheckIn.attendanceMode ?? 'office'
+        : payload.attendanceMode;
+      const geo = evaluateGeoAttendance({
+        ...payload,
+        office,
+        enforceOfficeRadius: attendanceMode === 'office',
+      });
 
       const businessReasons = [];
       if (type === 'check_in' && !today.canCheckIn) {
@@ -103,6 +125,7 @@ export async function markAttendance(userId, type, payload) {
           {
             userId,
             type,
+            attendanceMode,
             timestamp: new Date(),
             latitude: payload.latitude,
             longitude: payload.longitude,
@@ -113,6 +136,7 @@ export async function markAttendance(userId, type, payload) {
             radiusMeters: office.radiusMeters,
             status,
             rejectionReasons,
+            lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
             ...policyFields,
           },
         ],
@@ -121,14 +145,35 @@ export async function markAttendance(userId, type, payload) {
 
       auditLog('attendance_marked', {
         userId: userId.toString(),
+        email: auditContext.email,
         type,
+        attendanceMode,
         status,
         distanceMeters: geo.distanceMeters,
         accuracyMeters: payload.accuracyMeters,
+        deviceId: payload.deviceId ?? auditContext.deviceId,
+        ip: auditContext.ip,
+        userAgent: auditContext.userAgent,
       });
 
       result = { record, office, status, rejectionReasons };
     });
+
+    if (type === 'check_in' && result?.status === 'allowed') {
+      const summary = await getQuarterWarningSummaryForUsers([userId]);
+      const userKey = String(userId);
+      const row = summary.byUser[userKey] ?? {
+        used: 0,
+        allowance: summary.allowance,
+        remaining: summary.allowance,
+      };
+      result.quarterWarnings = {
+        quarter: summary.quarter,
+        allowance: summary.allowance,
+        used: row.used,
+        remaining: row.remaining,
+      };
+    }
 
     return result;
   } finally {
@@ -157,7 +202,15 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
   };
 }
 
-export async function getAdminAttendance({ userId, date, page = 1, limit = 20, actor, permissions }) {
+export async function getAdminAttendance({
+  userId,
+  date,
+  weekStart,
+  page = 1,
+  limit = 20,
+  actor,
+  permissions,
+}) {
   const query = {};
   if (userId) {
     query.userId = userId;
@@ -167,25 +220,36 @@ export async function getAdminAttendance({ userId, date, page = 1, limit = 20, a
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && canReadTeam && actor?._id) {
-    const directReports = await User.find({
-      reportingManagerId: actor._id,
-      isActive: true,
-    }).select('_id');
-    const reportIds = directReports.map((item) => item._id);
+    const scopedIds = await resolveTeamScopedUserIds(
+      actor,
+      permissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
 
-    if (userId && !reportIds.some((id) => id.toString() === userId.toString())) {
-      return {
-        records: [],
-        pagination: { page, limit, total: 0, totalPages: 1 },
-      };
-    }
-
-    if (!userId) {
-      query.userId = { $in: reportIds };
+    if (userId) {
+      const allowed = scopedIds === null || scopedIds.some((id) => id.toString() === userId.toString());
+      if (!allowed) {
+        return {
+          records: [],
+          pagination: { page, limit, total: 0, totalPages: 1 },
+        };
+      }
+    } else if (scopedIds !== null) {
+      query.userId = { $in: scopedIds };
     }
   }
 
-  if (date) {
+  if (weekStart) {
+    const weekStartDay = parseDateInputAsISTDay(weekStart);
+    if (weekStartDay) {
+      const weekEndDay = new Date(weekStartDay.getTime() + 6 * 24 * 60 * 60 * 1000);
+      query.timestamp = {
+        $gte: startOfDayIST(weekStartDay),
+        $lte: endOfDayIST(weekEndDay),
+      };
+    }
+  } else if (date) {
     const istDay = parseDateInputAsISTDay(date);
     if (istDay) {
       query.timestamp = {
@@ -206,7 +270,7 @@ export async function getAdminAttendance({ userId, date, page = 1, limit = 20, a
   ]);
 
   return {
-    records,
+    records: records.map(serializeAdminAttendanceListRecord),
     pagination: {
       page,
       limit,
@@ -216,15 +280,28 @@ export async function getAdminAttendance({ userId, date, page = 1, limit = 20, a
   };
 }
 
-async function loadPresentDaySet(userId, monthStart, monthEnd) {
+/** Maps IST day key → calendar status (`present` | `half_day`). Legacy rows without tag count as present. */
+export function monthCalendarStatusForCheckInTag(attendanceTag) {
+  if (attendanceTag === 'HD' || attendanceTag === 'LV') return 'half_day';
+  return 'present';
+}
+
+async function loadCheckInDayStatusMap(userId, monthStart, monthEnd) {
   const records = await AttendanceRecord.find({
     userId,
     type: 'check_in',
     status: 'allowed',
     timestamp: { $gte: monthStart, $lte: monthEnd },
-  }).select('timestamp');
+  }).select('timestamp attendanceTag');
 
-  return new Set(records.map((record) => getISTDateInputValue(record.timestamp)));
+  const map = new Map();
+  for (const record of records) {
+    map.set(
+      getISTDateInputValue(record.timestamp),
+      monthCalendarStatusForCheckInTag(record.attendanceTag),
+    );
+  }
+  return map;
 }
 
 async function loadApprovedLeaveDaySet(userId, monthStart, monthEnd, holidayDates) {
@@ -261,11 +338,13 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
   }
 
   const { year, monthKey, start, end, daysInMonth } = range;
+  const office = await getOfficeSettings();
+  const weekendDays = office?.weekendDays ?? [0, 6];
   const holidayDates = await getHolidayDateSet(year);
   const todayKey = getISTDateInputValue();
 
-  const [presentDaySet, leaveDaySet] = await Promise.all([
-    loadPresentDaySet(userId, start, end),
+  const [checkInDayStatusMap, leaveDaySet] = await Promise.all([
+    loadCheckInDayStatusMap(userId, start, end),
     loadApprovedLeaveDaySet(userId, start, end, holidayDates),
   ]);
 
@@ -274,7 +353,7 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
     const dayKey = `${monthKey}-${String(dayNum).padStart(2, '0')}`;
     const dayDate = parseDateInputAsISTDay(dayKey);
 
-    if (isWeekendIST(dayDate)) {
+    if (isWeekendIST(dayDate, weekendDays)) {
       days[dayKey] = 'weekend';
       continue;
     }
@@ -286,8 +365,8 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
       days[dayKey] = 'future';
       continue;
     }
-    if (presentDaySet.has(dayKey)) {
-      days[dayKey] = 'present';
+    if (checkInDayStatusMap.has(dayKey)) {
+      days[dayKey] = checkInDayStatusMap.get(dayKey);
       continue;
     }
     if (leaveDaySet.has(dayKey)) {
@@ -330,11 +409,13 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
   }
 
   if (!canReadAll) {
-    const directReports = await User.find({
-      reportingManagerId: actor._id,
-      isActive: true,
-    }).select('_id');
-    const allowed = directReports.some((item) => item._id.toString() === requestedUserId);
+    const allowed = await isUserInTeamScope(
+      actor,
+      permissions,
+      requestedUserId,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
     if (!allowed) {
       throwError('You do not have permission to view this employee\'s attendance.', 403);
     }
@@ -346,4 +427,158 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
   }
 
   return target._id;
+}
+
+function snapshotAttendanceRecord(record) {
+  if (!record) return null;
+  return {
+    id: record._id.toString(),
+    type: record.type,
+    timestamp: record.timestamp,
+    attendanceMode: record.attendanceMode,
+    attendanceTag: record.attendanceTag,
+    warningIssued: record.warningIssued,
+    quarterWarningIndex: record.quarterWarningIndex,
+    lateNote: record.lateNote,
+    status: record.status,
+  };
+}
+
+function serializeAdminAttendanceListRecord(record) {
+  const populatedUser = record.userId?._id != null ? record.userId : null;
+  return {
+    id: record._id.toString(),
+    _id: record._id.toString(),
+    userId: populatedUser
+      ? {
+          ...(populatedUser.toObject?.() ?? populatedUser),
+          id: populatedUser._id.toString(),
+        }
+      : record.userId?.toString?.() ?? record.userId,
+    type: record.type,
+    timestamp: record.timestamp,
+    attendanceMode: record.attendanceMode,
+    attendanceTag: record.attendanceTag,
+    warningIssued: record.warningIssued,
+    quarterWarningIndex: record.quarterWarningIndex,
+    lateNote: record.lateNote ?? null,
+    status: record.status,
+    rejectionReasons: record.rejectionReasons ?? [],
+    latitude: record.latitude,
+    longitude: record.longitude,
+  };
+}
+
+export async function adminEditAttendanceRecord({
+  recordId,
+  payload,
+  actor,
+  permissions,
+  auditContext = {},
+}) {
+  if (!mongoose.isValidObjectId(recordId)) {
+    throwError('Attendance record not found.', 404);
+  }
+
+  const checkInRecord = await AttendanceRecord.findById(recordId);
+  if (!checkInRecord || checkInRecord.type !== 'check_in') {
+    throwError('Attendance record not found.', 404);
+  }
+
+  const allowed = await isUserInTeamScope(
+    actor,
+    permissions,
+    checkInRecord.userId,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+  if (!allowed) {
+    throwError('You do not have permission to edit this attendance record.', 403);
+  }
+
+  const dayKey = getISTDateInputValue(checkInRecord.timestamp);
+  const istDay = parseDateInputAsISTDay(dayKey);
+  if (!istDay) {
+    throwError('Invalid attendance day on record.');
+  }
+
+  const dayStart = startOfDayIST(istDay);
+  const dayEnd = endOfDayIST(istDay);
+  const newCheckInTs = buildISTTimestampFromDayAndTime(dayKey, payload.checkInTime);
+  if (!newCheckInTs) {
+    throwError('Invalid check-in time.');
+  }
+  if (newCheckInTs < dayStart || newCheckInTs > dayEnd) {
+    throwError('Check-in time must fall within the attendance day (IST).');
+  }
+
+  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode);
+  const beforeCheckIn = snapshotAttendanceRecord(checkInRecord);
+
+  checkInRecord.timestamp = newCheckInTs;
+  checkInRecord.attendanceMode = payload.attendanceMode;
+  checkInRecord.attendanceTag = policyFields.attendanceTag;
+  checkInRecord.warningIssued = policyFields.warningIssued;
+  checkInRecord.quarterWarningIndex = policyFields.quarterWarningIndex;
+  checkInRecord.lateNote = payload.lateNote ?? null;
+  if (checkInRecord.status === 'rejected') {
+    checkInRecord.status = 'allowed';
+    checkInRecord.rejectionReasons = [];
+  }
+
+  await checkInRecord.save();
+
+  let checkOutRecord = null;
+  let beforeCheckOut = null;
+  if (payload.checkOutTime !== undefined) {
+    checkOutRecord = await AttendanceRecord.findOne({
+      userId: checkInRecord.userId,
+      type: 'check_out',
+      status: 'allowed',
+      timestamp: { $gte: dayStart, $lte: dayEnd },
+    }).sort({ timestamp: 1 });
+
+    if (payload.checkOutTime) {
+      const newCheckOutTs = buildISTTimestampFromDayAndTime(dayKey, payload.checkOutTime);
+      if (!newCheckOutTs) {
+        throwError('Invalid check-out time.');
+      }
+      if (newCheckOutTs <= newCheckInTs) {
+        throwError('Check-out time must be after check-in time.');
+      }
+      if (newCheckOutTs > dayEnd) {
+        throwError('Check-out time must fall within the attendance day (IST).');
+      }
+
+      if (checkOutRecord) {
+        beforeCheckOut = snapshotAttendanceRecord(checkOutRecord);
+        checkOutRecord.timestamp = newCheckOutTs;
+        checkOutRecord.attendanceMode = payload.attendanceMode;
+        await checkOutRecord.save();
+      }
+    }
+  }
+
+  auditLog('attendance_admin_edit', {
+    adminId: actor._id.toString(),
+    email: auditContext.email,
+    recordId: recordId.toString(),
+    userId: checkInRecord.userId.toString(),
+    dayKey,
+    before: { checkIn: beforeCheckIn, checkOut: beforeCheckOut },
+    after: {
+      checkIn: snapshotAttendanceRecord(checkInRecord),
+      checkOut: snapshotAttendanceRecord(checkOutRecord),
+    },
+    ip: auditContext.ip,
+    userAgent: auditContext.userAgent,
+  });
+
+  return {
+    checkIn: checkInRecord,
+    checkOut: checkOutRecord,
+    dayKey,
+    checkInTime: getISTTimeHHmm(checkInRecord.timestamp),
+    checkOutTime: checkOutRecord ? getISTTimeHHmm(checkOutRecord.timestamp) : null,
+  };
 }

@@ -7,6 +7,7 @@ const auditLogSchema = new mongoose.Schema(
     email: { type: String, trim: true, lowercase: true },
     role: { type: String, trim: true },
     ip: { type: String, trim: true },
+    deviceId: { type: String, trim: true },
     userAgent: { type: String, trim: true },
     metadata: { type: mongoose.Schema.Types.Mixed },
     status: { type: String, enum: ['success', 'failed'] },
@@ -19,5 +20,7 @@ const auditLogSchema = new mongoose.Schema(
 auditLogSchema.index({ timestamp: -1 });
 auditLogSchema.index({ userId: 1, timestamp: -1 });
 auditLogSchema.index({ action: 1, timestamp: -1 });
+auditLogSchema.index({ deviceId: 1, timestamp: -1 });
+auditLogSchema.index({ ip: 1, timestamp: -1 });
 
 export const AuditLog = mongoose.model('AuditLog', auditLogSchema);

@@ -18,7 +18,7 @@ const HERO_FEATURES = [
 ];
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, login, loginPortal } = useAuth();
   const navigate = useNavigate();
   const [role, setRole] = useState('employee');
   const [identifier, setIdentifier] = useState('');
@@ -28,7 +28,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
-    return <Navigate to={getDefaultRoute(user)} replace />;
+    return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
   }
 
   async function handleSubmit(event) {
@@ -42,8 +42,12 @@ export default function LoginPage() {
     setFieldErrors({});
     setSubmitting(true);
     try {
-      const loggedIn = await login(role, validation.data.identifier, validation.data.password);
-      navigate(getDefaultRoute(loggedIn));
+      const { user: loggedIn, loginPortal: signedInPortal } = await login(
+        role,
+        validation.data.identifier,
+        validation.data.password,
+      );
+      navigate(getDefaultRoute(loggedIn, signedInPortal));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

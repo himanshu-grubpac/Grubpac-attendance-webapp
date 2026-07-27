@@ -16,6 +16,7 @@ function buildPersistPayload(action, meta = {}) {
     email,
     role,
     ip,
+    deviceId,
     userAgent,
     reason,
     status,
@@ -42,6 +43,7 @@ function buildPersistPayload(action, meta = {}) {
     email,
     role,
     ip,
+    deviceId: deviceId || undefined,
     userAgent,
     metadata,
     status: resolvedStatus,
@@ -55,8 +57,15 @@ export function getRequestAuditContext(req) {
     req.ip ||
     (typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : undefined);
 
+  const rawDeviceId = req.body?.deviceId;
+  const deviceId =
+    typeof rawDeviceId === 'string' && rawDeviceId.trim().length > 0
+      ? rawDeviceId.trim()
+      : undefined;
+
   return {
     ip: ip || undefined,
+    deviceId,
     userAgent: req.headers['user-agent'] || undefined,
   };
 }

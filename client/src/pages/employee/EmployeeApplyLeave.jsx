@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { createLeaveRequestSchema } from '@shared/validation/leave.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
 
@@ -22,11 +24,11 @@ const DURATION_OPTIONS = [
 ];
 
 export default function EmployeeApplyLeave() {
+  const { showSuccess } = useToast();
   const [types, setTypes] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [preview, setPreview] = useState(null);
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -81,7 +83,6 @@ export default function EmployeeApplyLeave() {
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
-    setMessage('');
     setError('');
 
     const payload = {
@@ -100,7 +101,7 @@ export default function EmployeeApplyLeave() {
     setFieldErrors({});
     try {
       await leaveApi.createRequest(validation.data);
-      setMessage('Leave request submitted. Your manager will be notified.');
+      showSuccess('Leave request submitted. Your manager will be notified.');
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
     } catch (err) {
@@ -114,12 +115,11 @@ export default function EmployeeApplyLeave() {
 
   return (
     <div className="page page--form">
-      {(message || error) && (
+      {error ? (
         <div className="page-alerts">
-          {message && <div className="alert alert--success">{message}</div>}
-          {error && <div className="alert alert--error">{error}</div>}
+          <div className="alert alert--error">{error}</div>
         </div>
-      )}
+      ) : null}
 
       <form className="card card--form form-grid form-grid--stacked" onSubmit={handleSubmit}>
         <p className="card__section-title form-grid__full">Leave details</p>
@@ -139,23 +139,28 @@ export default function EmployeeApplyLeave() {
         <div className="form-grid__full form-grid form-grid--dates">
         <label className="form-field--sm">
           <span className="label">Start date (IST)</span>
-          <input
-            className="input--narrow"
-            type="date"
+          <DateField
             value={form.startDate}
-            onChange={(event) => setForm({ ...form, startDate: event.target.value })}
+            onChange={(value) =>
+              setForm((current) => ({
+                ...current,
+                startDate: value,
+                ...(current.halfDay ? { endDate: value } : {}),
+              }))
+            }
+            aria-label="Start date"
           />
           <FieldError message={fieldErrors.startDate} />
         </label>
 
         <label className="form-field--sm">
           <span className="label">End date (IST)</span>
-          <input
-            className="input--narrow"
-            type="date"
+          <DateField
             value={form.endDate}
+            onChange={(value) => setForm({ ...form, endDate: value })}
+            min={form.startDate || undefined}
             disabled={Boolean(form.halfDay)}
-            onChange={(event) => setForm({ ...form, endDate: event.target.value })}
+            aria-label="End date"
           />
           <FieldError message={fieldErrors.endDate} />
         </label>

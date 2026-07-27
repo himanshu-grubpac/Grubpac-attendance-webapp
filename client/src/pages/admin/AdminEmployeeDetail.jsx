@@ -2,9 +2,11 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { adminResetPasswordSchema } from '@shared/validation/auth.js';
-import { PERMISSIONS } from '@shared/permissions.js';
-import { adminApi, getErrorMessage, salaryApi } from '../../services/api.js';
+import { buildEmployeeProfileUpdateSchema } from '@shared/validation/employee.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { adminApi, getErrorMessage, getFieldErrors, salaryApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { formatISTDate, formatISTDateTime } from '../../utils/datetime.js';
@@ -18,6 +20,7 @@ import InrInput from '../../components/InrInput.jsx';
 import PasswordInput from '../../components/PasswordInput.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import PageLoading from '../../components/PageLoading.jsx';
+import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { formatInrCurrency, formatInrInput, parseInrInput } from '../../utils/formatNumber.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
@@ -32,10 +35,13 @@ const emptyOrgForm = {
   departmentId: '',
   reportingManagerId: '',
   delegateApproverId: '',
+  managedDepartmentIds: [],
   monthlySalary: '',
   salaryEffectiveFrom: '',
   firstName: '',
   lastName: '',
+  email: '',
+  mobile: '',
   designation: '',
   joiningDate: '',
   endingDate: '',
@@ -57,10 +63,16 @@ function displayValue(value) {
   return value;
 }
 
-function DetailLabel({ children, optional = false }) {
+function DetailLabel({ children, required = false, optional = false }) {
   return (
     <span className="label employee-detail-label">
       {children}
+      {required ? (
+        <span className="register-label__required" aria-hidden="true">
+          {' '}
+          *
+        </span>
+      ) : null}
       {optional ? <span className="employee-detail-label__optional muted"> (Optional)</span> : null}
     </span>
   );
@@ -82,15 +94,22 @@ function EmploymentEditFields({
   roles,
   departments,
   managers,
+  fieldErrors,
 }) {
   function updateField(key, value) {
     setOrgForm((current) => ({ ...current, [key]: value }));
   }
 
+  const activeDepartments = departments.filter((dept) => dept.isActive);
+  const hasDepartments = activeDepartments.length > 0;
+  const selectedRoleSlug = roles.find((role) => role.id === orgForm.roleId)?.slug ?? null;
+  const reportingManagerRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.EMPLOYEE;
+  const managedDeptsRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
+
   return (
     <div className="employee-detail-form__grid">
       <label className="employee-detail-field-control">
-        <DetailLabel>First name</DetailLabel>
+        <DetailLabel required>First name</DetailLabel>
         <input
           className="input"
           type="text"
@@ -99,10 +118,11 @@ function EmploymentEditFields({
           maxLength={50}
           autoComplete="given-name"
         />
+        <FieldError message={fieldErrors.firstName} />
       </label>
 
       <label className="employee-detail-field-control">
-        <DetailLabel>Last name</DetailLabel>
+        <DetailLabel optional>Last name</DetailLabel>
         <input
           className="input"
           type="text"
@@ -111,27 +131,64 @@ function EmploymentEditFields({
           maxLength={50}
           autoComplete="family-name"
         />
+        <FieldError message={fieldErrors.lastName} />
       </label>
 
       <label className="employee-detail-field-control">
-        <DetailLabel optional>Designation</DetailLabel>
+        <DetailLabel required>Email</DetailLabel>
+        <input
+          className="input"
+          type="email"
+          value={orgForm.email}
+          onChange={(e) => updateField('email', e.target.value)}
+          maxLength={254}
+          autoComplete="email"
+        />
+        <FieldError message={fieldErrors.email} />
+      </label>
+
+      <label className="employee-detail-field-control">
+        <DetailLabel required>Mobile</DetailLabel>
+        <input
+          className="input"
+          type="text"
+          inputMode="numeric"
+          value={orgForm.mobile}
+          onChange={(e) => updateField('mobile', e.target.value)}
+          maxLength={15}
+          autoComplete="tel"
+        />
+        <FieldError message={fieldErrors.mobile} />
+      </label>
+
+      <label className="employee-detail-field-control">
+        <DetailLabel required>Designation</DetailLabel>
         <input
           className="input"
           type="text"
           value={orgForm.designation}
           onChange={(e) => updateField('designation', e.target.value)}
-          placeholder="Optional"
           maxLength={100}
         />
+        <FieldError message={fieldErrors.designation} />
       </label>
 
       <div className="employee-detail-field-control">
-        <DetailLabel>Joining date</DetailLabel>
+        <DetailLabel required>Joining date</DetailLabel>
         <DateField
           value={orgForm.joiningDate}
-          onChange={(value) => updateField('joiningDate', value)}
+          onChange={(value) =>
+            setOrgForm((current) => ({
+              ...current,
+              joiningDate: value,
+              ...(current.endingDate && value && current.endingDate < value
+                ? { endingDate: value }
+                : {}),
+            }))
+          }
           aria-label="Joining date"
         />
+        <FieldError message={fieldErrors.joiningDate} />
       </div>
 
       <div className="employee-detail-field-control">
@@ -139,37 +196,52 @@ function EmploymentEditFields({
         <DateField
           value={orgForm.endingDate}
           onChange={(value) => updateField('endingDate', value)}
+          min={orgForm.joiningDate || undefined}
           aria-label="Ending date"
         />
+        <FieldError message={fieldErrors.endingDate} />
       </div>
 
       <div className="employee-detail-field-control">
-        <DetailLabel>Role</DetailLabel>
+        <DetailLabel required>Role</DetailLabel>
         <SelectField
           value={orgForm.roleId}
           onChange={(value) => updateField('roleId', value)}
           options={roles
-            .filter((role) => role.slug !== 'admin')
+            .filter((role) => role.slug !== SYSTEM_ROLE_SLUGS.ADMIN)
             .map((role) => ({ value: role.id, label: role.name }))}
+          placeholder="Select role"
           aria-label="Role"
         />
+        <FieldError message={fieldErrors.roleId} />
       </div>
 
-      <div className="employee-detail-field-control">
-        <DetailLabel>Department</DetailLabel>
-        <SelectField
-          value={orgForm.departmentId}
-          onChange={(value) => updateField('departmentId', value)}
-          options={departments
-            .filter((dept) => dept.isActive)
-            .map((dept) => ({ value: dept.id, label: dept.name }))}
-          placeholder="Select department"
-          aria-label="Department"
-        />
-      </div>
+      {hasDepartments ? (
+        <div className="employee-detail-field-control">
+          <DetailLabel required>Department</DetailLabel>
+          <SelectField
+            value={orgForm.departmentId}
+            onChange={(value) => updateField('departmentId', value)}
+            options={activeDepartments.map((dept) => ({ value: dept.id, label: dept.name }))}
+            placeholder="Select department"
+            aria-label="Department"
+          />
+          <FieldError message={fieldErrors.departmentId} />
+        </div>
+      ) : (
+        <div className="employee-detail-field-control employee-detail-field-control--full">
+          <DetailLabel>Department</DetailLabel>
+          <p className="muted small">
+            No departments configured yet.{' '}
+            <Link to="/admin/departments">Create departments</Link> before assigning employees.
+          </p>
+        </div>
+      )}
 
       <div className="employee-detail-field-control">
-        <DetailLabel optional>Reporting manager</DetailLabel>
+        <DetailLabel required={reportingManagerRequired} optional={!reportingManagerRequired}>
+          Reporting manager
+        </DetailLabel>
         <SelectField
           value={orgForm.reportingManagerId}
           onChange={(value) => updateField('reportingManagerId', value)}
@@ -182,7 +254,29 @@ function EmploymentEditFields({
           placeholder="Select reporting manager"
           aria-label="Reporting manager"
         />
+        <FieldError message={fieldErrors.reportingManagerId} />
       </div>
+
+      {hasDepartments ? (
+        <div className="employee-detail-field-control">
+          <DetailLabel required={managedDeptsRequired} optional={!managedDeptsRequired}>
+            Managed departments (team scope)
+          </DetailLabel>
+          <p className="muted small" id="employee-managed-depts-hint">
+            Teams this person oversees. Most relevant for roles with team permissions.
+          </p>
+          <MultiSelectField
+            value={orgForm.managedDepartmentIds ?? []}
+            onChange={(value) => updateField('managedDepartmentIds', value)}
+            options={activeDepartments.map((dept) => ({ value: dept.id, label: dept.name }))}
+            placeholder="Select departments"
+            countSuffix="departments"
+            aria-label="Managed departments (team scope)"
+            aria-describedby="employee-managed-depts-hint"
+          />
+          <FieldError message={fieldErrors.managedDepartmentIds} />
+        </div>
+      ) : null}
 
       <div className="employee-detail-field-control employee-detail-field-control--full">
         <DetailLabel optional>Delegate approver (while manager away)</DetailLabel>
@@ -198,6 +292,7 @@ function EmploymentEditFields({
           placeholder="Select delegate approver"
           aria-label="Delegate approver"
         />
+        <FieldError message={fieldErrors.delegateApproverId} />
       </div>
     </div>
   );
@@ -233,6 +328,7 @@ function SalaryEditFields({ orgForm, setOrgForm }) {
 }
 
 export default function AdminEmployeeDetail() {
+  const { showSuccess } = useToast();
   const { id } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { hasPermission } = useAuth();
@@ -257,14 +353,13 @@ export default function AdminEmployeeDetail() {
 
   const [orgEditing, setOrgEditing] = useState(false);
   const [orgForm, setOrgForm] = useState(emptyOrgForm);
+  const [orgFieldErrors, setOrgFieldErrors] = useState({});
   const [orgSubmitting, setOrgSubmitting] = useState(false);
-  const [orgMessage, setOrgMessage] = useState('');
   const [orgError, setOrgError] = useState('');
 
   const [resetOpen, setResetOpen] = useState(false);
   const [resetForm, setResetForm] = useState(emptyResetForm);
   const [resetFieldErrors, setResetFieldErrors] = useState({});
-  const [resetMessage, setResetMessage] = useState('');
   const [resetError, setResetError] = useState('');
   const [resetSubmitting, setResetSubmitting] = useState(false);
 
@@ -314,6 +409,7 @@ export default function AdminEmployeeDetail() {
       departmentId: emp.departmentId ?? '',
       reportingManagerId: emp.reportingManagerId ?? '',
       delegateApproverId: emp.delegateApproverId ?? '',
+      managedDepartmentIds: Array.isArray(emp.managedDepartmentIds) ? emp.managedDepartmentIds : [],
       monthlySalary:
         emp.monthlySalary != null && emp.monthlySalary !== ''
           ? formatInrInput(emp.monthlySalary)
@@ -323,6 +419,8 @@ export default function AdminEmployeeDetail() {
         : '',
       firstName: emp.firstName ?? '',
       lastName: emp.lastName ?? '',
+      email: emp.email ?? '',
+      mobile: emp.mobile ?? '',
       designation: emp.designation ?? '',
       joiningDate: emp.joiningDate ? String(emp.joiningDate).slice(0, 10) : '',
       endingDate: emp.endingDate ? String(emp.endingDate).slice(0, 10) : '',
@@ -338,7 +436,7 @@ export default function AdminEmployeeDetail() {
   function openOrgEdit() {
     if (!employee) return;
     setOrgForm(buildOrgFormFromEmployee(employee));
-    setOrgMessage('');
+    setOrgFieldErrors({});
     setOrgError('');
     setOrgEditing(true);
     setResetOpen(false);
@@ -350,7 +448,7 @@ export default function AdminEmployeeDetail() {
   function closeOrgEdit() {
     setOrgEditing(false);
     setOrgForm(emptyOrgForm);
-    setOrgMessage('');
+    setOrgFieldErrors({});
     setOrgError('');
     clearEditParam();
   }
@@ -358,7 +456,6 @@ export default function AdminEmployeeDetail() {
   function openReset() {
     setResetForm(emptyResetForm);
     setResetFieldErrors({});
-    setResetMessage('');
     setResetError('');
     setResetOpen(true);
     setOrgEditing(false);
@@ -368,7 +465,6 @@ export default function AdminEmployeeDetail() {
     setResetOpen(false);
     setResetForm(emptyResetForm);
     setResetFieldErrors({});
-    setResetMessage('');
     setResetError('');
     clearEditParam();
   }
@@ -392,7 +488,7 @@ export default function AdminEmployeeDetail() {
 
     if (editParam === 'employment' || editParam === 'org') {
       setOrgForm(buildOrgFormFromEmployee(employee));
-      setOrgMessage('');
+      setOrgFieldErrors({});
       setOrgError('');
       setOrgEditing(true);
       setResetOpen(false);
@@ -402,7 +498,6 @@ export default function AdminEmployeeDetail() {
     } else if (editParam === 'reset') {
       setResetForm(emptyResetForm);
       setResetFieldErrors({});
-      setResetMessage('');
       setResetError('');
       setResetOpen(true);
       setOrgEditing(false);
@@ -462,20 +557,42 @@ export default function AdminEmployeeDetail() {
     if (!employee) return;
 
     setOrgSubmitting(true);
-    setOrgMessage('');
     setOrgError('');
+    setOrgFieldErrors({});
+
+    const activeDepartments = departments.filter((dept) => dept.isActive);
+    const roleSlug = roles.find((role) => role.id === orgForm.roleId)?.slug ?? null;
+    const validation = validateForm(
+      buildEmployeeProfileUpdateSchema({
+        roleSlug,
+        hasDepartments: activeDepartments.length > 0,
+      }),
+      {
+        ...orgForm,
+        managedDepartmentIds: orgForm.managedDepartmentIds ?? [],
+      },
+    );
+
+    if (!validation.data) {
+      setOrgFieldErrors(validation.errors);
+      setOrgSubmitting(false);
+      return;
+    }
 
     try {
       await adminApi.updateEmployee(employee.id, {
-        roleId: orgForm.roleId || undefined,
-        departmentId: orgForm.departmentId || null,
-        reportingManagerId: orgForm.reportingManagerId || null,
+        roleId: validation.data.roleId,
+        departmentId: validation.data.departmentId ?? null,
+        reportingManagerId: validation.data.reportingManagerId ?? null,
         delegateApproverId: orgForm.delegateApproverId || null,
-        firstName: orgForm.firstName || undefined,
-        lastName: orgForm.lastName || undefined,
-        designation: orgForm.designation || null,
-        joiningDate: orgForm.joiningDate || undefined,
-        endingDate: orgForm.endingDate || null,
+        managedDepartmentIds: validation.data.managedDepartmentIds ?? [],
+        firstName: validation.data.firstName,
+        lastName: validation.data.lastName,
+        email: validation.data.email,
+        mobile: validation.data.mobile,
+        designation: validation.data.designation,
+        joiningDate: validation.data.joiningDate,
+        endingDate: validation.data.endingDate ?? null,
       });
 
       if (canManageSalary) {
@@ -499,11 +616,17 @@ export default function AdminEmployeeDetail() {
         }
       }
 
-      setOrgMessage('Employment details updated.');
+      showSuccess('Employment details updated.');
       await loadEmployee();
       closeOrgEdit();
     } catch (err) {
-      setOrgError(getErrorMessage(err));
+      const serverFieldErrors = getFieldErrors(err);
+      if (Object.keys(serverFieldErrors).length > 0) {
+        setOrgFieldErrors(serverFieldErrors);
+        setOrgError('');
+      } else {
+        setOrgError(getErrorMessage(err));
+      }
     } finally {
       setOrgSubmitting(false);
     }
@@ -514,7 +637,6 @@ export default function AdminEmployeeDetail() {
     if (!employee) return;
 
     setResetSubmitting(true);
-    setResetMessage('');
     setResetError('');
 
     const validation = validateForm(adminResetPasswordSchema, resetForm);
@@ -533,7 +655,7 @@ export default function AdminEmployeeDetail() {
       variant: 'danger',
       onConfirm: async () => {
         const result = await adminApi.resetEmployeePassword(employee.id, validation.data);
-        setResetMessage(result.message || 'Password reset successfully.');
+        showSuccess(result.message || 'Password reset successfully.');
         setResetForm(emptyResetForm);
       },
     });
@@ -680,6 +802,7 @@ export default function AdminEmployeeDetail() {
                 roles={roles}
                 departments={departments}
                 managers={managers}
+                fieldErrors={orgFieldErrors}
               />
             </section>
 
@@ -714,7 +837,6 @@ export default function AdminEmployeeDetail() {
               </button>
             </div>
 
-            {orgMessage ? <div className="alert alert--success">{orgMessage}</div> : null}
             {orgError ? <div className="alert alert--error">{orgError}</div> : null}
           </form>
         ) : (
@@ -873,9 +995,6 @@ export default function AdminEmployeeDetail() {
                       />
                       <FieldError message={resetFieldErrors.confirmPassword} />
                     </label>
-                    {resetMessage ? (
-                      <div className="alert alert--success modal__alert">{resetMessage}</div>
-                    ) : null}
                     {resetError ? (
                       <div className="alert alert--error modal__alert">{resetError}</div>
                     ) : null}

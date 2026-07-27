@@ -4,6 +4,7 @@ const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const STATUS_LABELS = {
   present: 'Present',
+  half_day: 'Half day',
   leave: 'Leave',
   holiday: 'Holiday',
   absent: 'Absent / LOP',
@@ -111,7 +112,7 @@ export default function MonthCalendar({
       )}
 
       <div className="month-calendar__legend" aria-label="Calendar legend">
-        {['present', 'leave', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
+        {['present', 'half_day', 'leave', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
           <span key={status} className="month-calendar__legend-item">
             <span className={`month-calendar__swatch month-calendar__swatch--${status}`} aria-hidden="true" />
             {STATUS_LABELS[status]}

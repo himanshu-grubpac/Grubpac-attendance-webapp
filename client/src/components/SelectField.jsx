@@ -87,7 +87,12 @@ export default function SelectField({
       close();
     }
 
-    function handleScroll() {
+    function handleScroll(event) {
+      // Selecting a deeply nested option scrolls the listbox itself into view.
+      // That internal scroll must not dismiss the picker.
+      if (event?.target instanceof Node && panelRef.current?.contains(event.target)) {
+        return;
+      }
       close();
     }
 

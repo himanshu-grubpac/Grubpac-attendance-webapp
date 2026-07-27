@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ADMIN_PORTAL_PERMISSIONS, hasAnyPermission } from '@shared/permissions.js';
+import { getDefaultRoute } from '../config/nav.js';
 import { BRANDING } from '../config/branding.js';
 import {
   getBottomNavItems,
@@ -66,7 +66,14 @@ function PageToolbar() {
 }
 
 /** Mobile-only account menu (desktop account lives in sidebar footer). */
-function MobileAvatarMenu({ user, profilePath, onLogout, loggingOut }) {
+function MobileAvatarMenu({
+  user,
+  profilePath,
+  onLogout,
+  loggingOut,
+  canSwitchPortal,
+  onSwitchPortal,
+}) {
   const [open, setOpen] = useState(false);
   const { mode, setMode } = useTheme();
   const menuRef = useRef(null);
@@ -111,6 +118,19 @@ function MobileAvatarMenu({ user, profilePath, onLogout, loggingOut }) {
           <Link to={profilePath} className="avatar-menu__item" role="menuitem" onClick={() => setOpen(false)}>
             Account settings
           </Link>
+          {canSwitchPortal ? (
+            <button
+              type="button"
+              className="avatar-menu__item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onSwitchPortal();
+              }}
+            >
+              Switch portal
+            </button>
+          ) : null}
           <button
             type="button"
             className="avatar-menu__item"
@@ -141,7 +161,15 @@ function MobileAvatarMenu({ user, profilePath, onLogout, loggingOut }) {
   );
 }
 
-function SidebarAccountFooter({ user, profilePath, collapsed, onLogout, loggingOut }) {
+function SidebarAccountFooter({
+  user,
+  profilePath,
+  collapsed,
+  onLogout,
+  loggingOut,
+  canSwitchPortal,
+  onSwitchPortal,
+}) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef(null);
   const location = useLocation();
@@ -179,6 +207,22 @@ function SidebarAccountFooter({ user, profilePath, collapsed, onLogout, loggingO
             </span>
             <span>Account settings</span>
           </Link>
+          {canSwitchPortal ? (
+            <button
+              type="button"
+              className="sidebar-account__menu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onSwitchPortal();
+              }}
+            >
+              <span className="sidebar-account__menu-icon" aria-hidden="true">
+                ⇄
+              </span>
+              <span>Switch portal</span>
+            </button>
+          ) : null}
           <div className="sidebar-account__menu-sep" role="separator" aria-hidden="true" />
           <button
             type="button"
@@ -309,7 +353,7 @@ function BottomNav({ items, activeKey, onMore }) {
 }
 
 function AppLayoutShell() {
-  const { user, logout, loggingOut } = useAuth();
+  const { user, logout, loggingOut, loginPortal, switchPortal, canSwitchPortal } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const { meta } = usePageMetaContext();
@@ -317,10 +361,10 @@ function AppLayoutShell() {
   const [collapsed, setCollapsed] = useState(readCollapsedPreference);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const navItems = useMemo(() => getVisibleNavItems(user), [user]);
-  const bottomNavItems = useMemo(() => getBottomNavItems(user), [user]);
-  const moreNavItems = useMemo(() => getMoreNavItems(user), [user]);
-  const isAdminPortal = hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS);
+  const navItems = useMemo(() => getVisibleNavItems(user, loginPortal), [user, loginPortal]);
+  const bottomNavItems = useMemo(() => getBottomNavItems(user, loginPortal), [user, loginPortal]);
+  const moreNavItems = useMemo(() => getMoreNavItems(user, loginPortal), [user, loginPortal]);
+  const isAdminPortal = loginPortal === 'admin';
   const profilePath = isAdminPortal ? '/admin/profile' : '/employee/profile';
 
   const sections = useMemo(() => {
@@ -380,6 +424,12 @@ function AppLayoutShell() {
       },
     });
   }, [loggingOut, logout, navigate, requestConfirm]);
+
+  const handleSwitchPortal = useCallback(() => {
+    const nextPortal = loginPortal === 'admin' ? 'employee' : 'admin';
+    switchPortal(nextPortal);
+    navigate(getDefaultRoute(user, nextPortal), { replace: true });
+  }, [loginPortal, switchPortal, navigate, user]);
 
   return (
     <div className={`app-layout${collapsed ? ' app-layout--collapsed' : ''}`}>
@@ -451,6 +501,8 @@ function AppLayoutShell() {
             collapsed={collapsed}
             onLogout={handleLogout}
             loggingOut={loggingOut}
+            canSwitchPortal={canSwitchPortal}
+            onSwitchPortal={handleSwitchPortal}
           />
         </div>
       </aside>
@@ -473,6 +525,8 @@ function AppLayoutShell() {
               profilePath={profilePath}
               onLogout={handleLogout}
               loggingOut={loggingOut}
+              canSwitchPortal={canSwitchPortal}
+              onSwitchPortal={handleSwitchPortal}
             />
           </div>
         </div>

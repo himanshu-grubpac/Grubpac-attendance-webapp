@@ -63,6 +63,37 @@ export function getISTDateInputValue(date = new Date()) {
   }).format(date);
 }
 
+/** HH:mm (24h) for an instant in IST. */
+export function getISTTimeHHmm(timestamp) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: IST_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(timestamp));
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
+  return `${hour}:${minute}`;
+}
+
+/** Build an instant from an IST calendar day (YYYY-MM-DD) and HH:mm time. */
+export function buildISTTimestampFromDayAndTime(dayKey, timeHHmm) {
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayKey ?? '').trim());
+  const timeMatch = /^(\d{1,2}):(\d{2})$/.exec(String(timeHHmm ?? '').trim());
+  if (!dayMatch || !timeMatch) {
+    return null;
+  }
+  const year = Number(dayMatch[1]);
+  const month = Number(dayMatch[2]);
+  const day = Number(dayMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if (!year || !month || !day || hour > 23 || minute > 59) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0) - IST_OFFSET_MS);
+}
+
 export function getISTYear(date = new Date()) {
   return Number(getISTDateInputValue(date).slice(0, 4));
 }
@@ -80,13 +111,13 @@ export function getISTWeekday(date = new Date()) {
   return map[weekday] ?? 0;
 }
 
-export function isWeekendIST(date = new Date()) {
+export function isWeekendIST(date = new Date(), weekendDays = [0, 6]) {
   const day = getISTWeekday(date);
-  return day === 0 || day === 6;
+  return (weekendDays ?? [0, 6]).includes(day);
 }
 
-export function isWorkingDayIST(date, holidayDates = new Set()) {
-  if (isWeekendIST(date)) return false;
+export function isWorkingDayIST(date, holidayDates = new Set(), weekendDays = [0, 6]) {
+  if (isWeekendIST(date, weekendDays)) return false;
   return !holidayDates.has(getISTDateInputValue(date));
 }
 
@@ -99,20 +130,20 @@ export function* iterateISTDays(startDate, endDate) {
   }
 }
 
-export function countWorkingDaysIST(startDate, endDate, holidayDates = new Set()) {
+export function countWorkingDaysIST(startDate, endDate, holidayDates = new Set(), weekendDays = [0, 6]) {
   let count = 0;
   for (const day of iterateISTDays(startDate, endDate)) {
-    if (isWorkingDayIST(day, holidayDates)) {
+    if (isWorkingDayIST(day, holidayDates, weekendDays)) {
       count += 1;
     }
   }
   return count;
 }
 
-export function listWorkingDaysIST(startDate, endDate, holidayDates = new Set()) {
+export function listWorkingDaysIST(startDate, endDate, holidayDates = new Set(), weekendDays = [0, 6]) {
   const days = [];
   for (const day of iterateISTDays(startDate, endDate)) {
-    if (isWorkingDayIST(day, holidayDates)) {
+    if (isWorkingDayIST(day, holidayDates, weekendDays)) {
       days.push(getISTDateInputValue(day));
     }
   }
@@ -129,9 +160,9 @@ export function computeLeaveDaysIST(
   startDate,
   endDate,
   holidayDates = new Set(),
-  { halfDay = null, sandwichLeaveEnabled = false } = {},
+  { halfDay = null, sandwichLeaveEnabled = false, weekendDays = [0, 6] } = {},
 ) {
-  const workingDays = listWorkingDaysIST(startDate, endDate, holidayDates);
+  const workingDays = listWorkingDaysIST(startDate, endDate, holidayDates, weekendDays);
   if (workingDays.length === 0) {
     return { days: 0, workingDays };
   }

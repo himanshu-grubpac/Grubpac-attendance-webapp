@@ -92,7 +92,7 @@ export async function evaluateCheckInPolicy(userId, timestamp, office, session =
   const graceMinutes = parseTimeStringToMinutes(policy.graceThresholdTime);
   const halfDayMinutes = parseTimeStringToMinutes(policy.halfDayThresholdTime);
 
-  if (isWeekendIST(timestamp)) {
+  if (isWeekendIST(timestamp, office?.weekendDays ?? [0, 6])) {
     return {
       attendanceTag: 'P',
       warningIssued: false,
@@ -139,7 +139,7 @@ export async function evaluateCheckInPolicy(userId, timestamp, office, session =
   }
 
   return {
-    attendanceTag: 'HD',
+    attendanceTag: 'LV',
     warningIssued: false,
     quarterWarningIndex: null,
   };
@@ -192,6 +192,39 @@ export async function getQuarterWarningSummaryForUsers(userIds, referenceDate = 
   };
 }
 
+export function parseStatusCodeToPolicyFields(statusCode) {
+  if (statusCode === 'P' || statusCode === 'HD' || statusCode === 'LV') {
+    return {
+      attendanceTag: statusCode,
+      warningIssued: false,
+      quarterWarningIndex: null,
+    };
+  }
+
+  const warningMatch = /^W(\d+)$/.exec(statusCode);
+  if (warningMatch) {
+    const index = Number(warningMatch[1]);
+    if (index >= 1 && index <= 10) {
+      return {
+        attendanceTag: 'P',
+        warningIssued: true,
+        quarterWarningIndex: index,
+      };
+    }
+  }
+
+  const error = new Error('Invalid attendance status code.');
+  error.statusCode = 400;
+  throw error;
+}
+
+export function statusCodeFromRecord(record) {
+  if (record?.warningIssued && record?.quarterWarningIndex) {
+    return `W${record.quarterWarningIndex}`;
+  }
+  return record?.attendanceTag ?? 'P';
+}
+
 /** Client-side fallback when legacy records lack stored policy tags. */
 export function derivePolicyFromSettings(checkInTimestamp, policy, warningsUsedBefore = 0) {
   const graceMinutes = parseTimeStringToMinutes(policy.graceThresholdTime);
@@ -209,5 +242,5 @@ export function derivePolicyFromSettings(checkInTimestamp, policy, warningsUsedB
   if (remaining > 0) {
     return { statusTag: 'P', warningTag: `W${warningsUsedBefore + 1}` };
   }
-  return { statusTag: 'HD', warningTag: null };
+  return { statusTag: 'LV', warningTag: null };
 }

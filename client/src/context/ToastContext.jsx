@@ -1,26 +1,48 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const ToastContext = createContext(null);
+
+export const SUCCESS_TOAST_DURATION_MS = 4500;
+export const ERROR_TOAST_DURATION_MS = 7000;
 
 let toastCounter = 0;
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
+  const timeoutsRef = useRef(new Map());
+
+  useEffect(() => {
+    const timeouts = timeoutsRef.current;
+    return () => {
+      for (const timeoutId of timeouts.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      timeouts.clear();
+    };
+  }, []);
 
   const dismissToast = useCallback((id) => {
+    const timeoutId = timeoutsRef.current.get(id);
+    if (timeoutId != null) {
+      window.clearTimeout(timeoutId);
+      timeoutsRef.current.delete(id);
+    }
     setToasts((items) => items.filter((item) => item.id !== id));
   }, []);
 
   const showToast = useCallback((message, options = {}) => {
     const id = ++toastCounter;
-    const variant = options.variant ?? 'info';
-    const durationMs = options.durationMs ?? 4000;
+    const variant = options.variant ?? 'success';
+    const durationMs =
+      options.durationMs ??
+      (variant === 'error' ? ERROR_TOAST_DURATION_MS : SUCCESS_TOAST_DURATION_MS);
 
     setToasts((items) => [...items, { id, message, variant }]);
 
     if (durationMs > 0) {
-      window.setTimeout(() => dismissToast(id), durationMs);
+      const timeoutId = window.setTimeout(() => dismissToast(id), durationMs);
+      timeoutsRef.current.set(id, timeoutId);
     }
 
     return id;

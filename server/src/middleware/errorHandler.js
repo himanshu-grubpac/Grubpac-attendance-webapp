@@ -1,4 +1,5 @@
 import { ZodError } from 'zod';
+import { duplicateFieldMessage } from '../services/employeeCodeService.js';
 
 export function errorHandler(error, req, res, next) {
   if (res.headersSent) {
@@ -16,9 +17,17 @@ export function errorHandler(error, req, res, next) {
   }
 
   if (error.code === 11000) {
-    const field = Object.keys(error.keyPattern ?? {})[0] ?? 'field';
+    const field = error.field ?? Object.keys(error.keyPattern ?? {})[0] ?? 'field';
     return res.status(409).json({
-      message: `Duplicate value for ${field}.`,
+      message: duplicateFieldMessage(field),
+      field,
+    });
+  }
+
+  if (error.statusCode === 409 && error.field) {
+    return res.status(409).json({
+      message: error.message,
+      field: error.field,
     });
   }
 

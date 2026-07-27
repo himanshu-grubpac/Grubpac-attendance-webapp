@@ -142,6 +142,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.USERS_READ,
       PERMISSIONS.USERS_WRITE,
       PERMISSIONS.DEPARTMENTS_MANAGE,
+      PERMISSIONS.ATTENDANCE_READ_OWN,
       PERMISSIONS.ATTENDANCE_READ_ALL,
       PERMISSIONS.LEAVE_READ,
       PERMISSIONS.LEAVE_APPLY,
@@ -205,6 +206,8 @@ export const SEED_LEAVE_TYPES = [
   { code: 'CL', name: 'Casual Leave' },
   { code: 'EL', name: 'Earned Leave' },
   { code: 'CO', name: 'Compensatory Off' },
+  { code: 'WFH', name: 'Work From Home' },
+  { code: 'RH', name: 'Restricted Holiday' },
 ];
 
 export const SEED_LEAVE_POLICIES = [
@@ -246,6 +249,26 @@ export const SEED_LEAVE_POLICIES = [
     accrualPerMonth: 0,
     carryForwardMax: 0,
     maxAccumulation: 0,
+    requireDocAfterConsecutiveDays: null,
+    paid: true,
+    encashmentMaxPerYear: 0,
+  },
+  {
+    typeCode: 'WFH',
+    annualQuota: 30,
+    accrualPerMonth: 0,
+    carryForwardMax: 0,
+    maxAccumulation: 30,
+    requireDocAfterConsecutiveDays: null,
+    paid: true,
+    encashmentMaxPerYear: 0,
+  },
+  {
+    typeCode: 'RH',
+    annualQuota: 2,
+    accrualPerMonth: 0,
+    carryForwardMax: 0,
+    maxAccumulation: 2,
     requireDocAfterConsecutiveDays: null,
     paid: true,
     encashmentMaxPerYear: 0,

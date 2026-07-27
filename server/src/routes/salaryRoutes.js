@@ -4,9 +4,15 @@ import { authenticate, requireAllPermissions, requirePermission } from '../middl
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   exportSalaryHandler,
+  generateSalaryTransfersHandler,
+  getSalarySettingsHandler,
   getSalarySummaryHandler,
   getUserSalaryHandler,
+  listSalaryStructureHandler,
   listSalarySummariesHandler,
+  listSalaryTransfersHandler,
+  updateSalarySettingsHandler,
+  updateSalaryTransferHandler,
   updateUserSalaryHandler,
 } from '../controllers/salaryController.js';
 
@@ -42,6 +48,24 @@ router.get(
   asyncHandler(listSalarySummariesHandler),
 );
 
+router.get(
+  '/settings',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(getSalarySettingsHandler),
+);
+
+router.patch(
+  '/settings',
+  requirePermission(PERMISSIONS.SALARY_WRITE),
+  asyncHandler(updateSalarySettingsHandler),
+);
+
+router.get(
+  '/structure',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(listSalaryStructureHandler),
+);
+
 // Company-wide payroll export — must match the "view others" admin bar used by
 // canViewSalarySummary (SALARY_READ + USERS_READ). SALARY_READ alone is also held
 // by the Employee role for self-service pay estimates and must not unlock this.
@@ -49,6 +73,24 @@ router.get(
   '/export',
   requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
   asyncHandler(exportSalaryHandler),
+);
+
+router.get(
+  '/transfers',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(listSalaryTransfersHandler),
+);
+
+router.post(
+  '/transfers/generate',
+  requirePermission(PERMISSIONS.SALARY_WRITE),
+  asyncHandler(generateSalaryTransfersHandler),
+);
+
+router.patch(
+  '/transfers/:id',
+  requirePermission(PERMISSIONS.SALARY_WRITE),
+  asyncHandler(updateSalaryTransferHandler),
 );
 
 export default router;

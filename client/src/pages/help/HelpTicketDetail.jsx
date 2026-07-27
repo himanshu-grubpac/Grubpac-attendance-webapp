@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
 import BackLink from '../../components/BackLink.jsx';
@@ -18,6 +19,7 @@ const STATUS_OPTIONS = [
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 
 export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
+  const { showSuccess } = useToast();
   const { id } = useParams();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { setMeta } = usePageMetaContext();
@@ -25,7 +27,6 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
   const [commentBody, setCommentBody] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -68,7 +69,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     try {
       await helpApi.addComment(id, { body: commentBody.trim() });
       setCommentBody('');
-      setMessage('Comment added.');
+      showSuccess('Comment added.');
       await loadTicket();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -94,7 +95,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           setError('');
           try {
             await helpApi.updateTicketStatus(id, { status: statusValue });
-            setMessage('Ticket status updated.');
+            showSuccess('Ticket status updated.');
             await loadTicket();
           } finally {
             setUpdatingStatus(false);
@@ -108,7 +109,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     setError('');
     try {
       await helpApi.updateTicketStatus(id, { status: statusValue });
-      setMessage('Ticket status updated.');
+      showSuccess('Ticket status updated.');
       await loadTicket();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -136,12 +137,11 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
 
   return (
     <div className="page">
-      {(message || error) && (
+      {error ? (
         <div className="page-alerts">
-          {message && <div className="alert alert--success">{message}</div>}
-          {error && <div className="alert alert--error">{error}</div>}
+          <div className="alert alert--error">{error}</div>
         </div>
-      )}
+      ) : null}
 
       <div className="card help-ticket-hero">
         <div className="help-ticket-hero__status">

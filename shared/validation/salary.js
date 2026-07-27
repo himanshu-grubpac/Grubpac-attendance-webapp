@@ -34,3 +34,52 @@ export const salarySummaryQuerySchema = z.object({
 export const salaryExportQuerySchema = z.object({
   month: monthInputSchema,
 });
+
+export const salaryStructureQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().trim().max(120).optional(),
+});
+
+export const updateSalarySettingsSchema = z
+  .object({
+    payrollDayOfMonth: z
+      .number()
+      .int()
+      .min(1, 'Payroll day must be between 1 and 28.')
+      .max(28, 'Payroll day must be between 1 and 28.')
+      .nullable()
+      .optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one field is required.',
+  });
+
+export const salaryTransferStatusSchema = z.enum(['pending', 'paid', 'failed']);
+
+export const salaryTransferListQuerySchema = z.object({
+  month: monthInputSchema,
+  status: salaryTransferStatusSchema.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const generateSalaryTransfersSchema = z.object({
+  month: monthInputSchema,
+});
+
+export const updateSalaryTransferStatusSchema = z
+  .object({
+    status: salaryTransferStatusSchema,
+    note: z.string().trim().max(500).optional(),
+    failureReason: z.string().trim().max(500).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.status === 'failed' && value.failureReason === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Failure reason cannot be empty when provided.',
+        path: ['failureReason'],
+      });
+    }
+  });

@@ -5,28 +5,46 @@ import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
 import { OfficeSettings } from '../models/OfficeSettings.js';
+import { WeekAttendanceConfirmation } from '../models/WeekAttendanceConfirmation.js';
 import {
   buildEmployeeTemplateWorkbook,
   createEmployee,
   importEmployeesFromRows,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
-import { getAdminAttendance } from '../services/attendanceService.js';
+import { getAdminAttendance, adminEditAttendanceRecord } from '../services/attendanceService.js';
 import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
 import { officeSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
+import { adminAttendanceEditSchema } from '../../../shared/validation/attendance.js';
 import { auditLogQuerySchema } from '../../../shared/validation/audit.js';
-import { updateEmployeeOrgSchema } from '../../../shared/validation/employee.js';
+import {
+  buildEmployeeProfileUpdateSchema,
+  isProfileOrgUpdate,
+  updateEmployeeOrgSchema,
+} from '../../../shared/validation/employee.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
-import { getISTDateInputValue, parseMonthInputAsISTRange } from '../utils/istDate.js';
+import {
+  endOfDayIST,
+  getISTDateInputValue,
+  parseDateInputAsISTDay,
+  parseMonthInputAsISTRange,
+  startOfDayIST,
+} from '../utils/istDate.js';
 import {
   legacyRoleFromSlug,
   resolveDepartment,
   resolveDelegateApprover,
+  resolveManagedDepartments,
   resolveReportingManager,
   resolveRole,
 } from '../services/userOrgService.js';
+import {
+  applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
+  isUserInTeamScope,
+  resolveTeamScopedUserIds,
+} from '../services/teamScopeService.js';
 
 function refId(value) {
   if (!value) return null;
@@ -34,16 +52,41 @@ function refId(value) {
   if (value._id) return value._id.toString();
   return value.toString();
 }
-import { auditLog } from '../utils/auditLog.js';
-import { AuditLog } from '../models/AuditLog.js';
 
-const attendanceQuerySchema = paginationSchema.extend({
-  userId: objectIdSchema.optional(),
-  date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD.')
-    .optional(),
-});
+function toEmployeeDateInputValue(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return getISTDateInputValue(date);
+}
+
+function assertEmployeeDateRange(joiningDate, endingDate) {
+  if (!joiningDate || !endingDate || endingDate >= joiningDate) return null;
+  return {
+    message: 'Ending date must be on or after joining date.',
+    field: 'endingDate',
+  };
+}
+import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
+import { AuditLog } from '../models/AuditLog.js';
+import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
+
+const attendanceQuerySchema = paginationSchema
+  .extend({
+    userId: objectIdSchema.optional(),
+    date: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD.')
+      .optional(),
+    weekStart: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.')
+      .optional(),
+  })
+  .refine((value) => !(value.date && value.weekStart), {
+    message: 'Use either date or weekStart, not both.',
+  });
 
 const employeeListQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
@@ -52,6 +95,11 @@ const employeeListQuerySchema = paginationSchema.extend({
     .optional()
     .transform((value) => (value === 'true' ? true : value === 'false' ? false : undefined)),
   departmentId: objectIdSchema.optional(),
+  roleId: objectIdSchema.optional(),
+  createdAfter: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'createdAfter must be YYYY-MM-DD.')
+    .optional(),
 });
 
 async function buildEmployeeDirectoryQuery() {
@@ -59,13 +107,24 @@ async function buildEmployeeDirectoryQuery() {
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-function applyEmployeeListFilters(query, { search, isActive, departmentId }) {
+function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter }) {
   if (typeof isActive === 'boolean') {
     query.isActive = isActive;
   }
 
   if (departmentId) {
     query.departmentId = departmentId;
+  }
+
+  if (roleId) {
+    query.roleId = roleId;
+  }
+
+  if (createdAfter) {
+    const dayStart = startOfDayIST(parseDateInputAsISTDay(createdAfter));
+    if (dayStart) {
+      query.createdAt = { $gte: dayStart };
+    }
   }
 
   if (search) {
@@ -82,6 +141,26 @@ function applyEmployeeListFilters(query, { search, isActive, departmentId }) {
   return query;
 }
 
+function applyTeamScopeToEmployeeQuery(query, req) {
+  return applyEmployeeTeamScope(
+    query,
+    req.user,
+    req.userPermissions,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+}
+
+async function assertEmployeeInTeamScope(req, employeeId) {
+  return isUserInTeamScope(
+    req.user,
+    req.userPermissions,
+    employeeId,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+}
+
 export async function registerEmployee(req, res) {
   const employee = await createEmployee(req.body, req.user._id);
   auditLog('employee_registered', {
@@ -96,19 +175,18 @@ export async function registerEmployee(req, res) {
 }
 
 export async function listEmployees(req, res) {
-  const { page, limit, search, isActive, departmentId } = employeeListQuerySchema.parse(req.query);
-  const query = applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
-    search,
-    isActive,
-    departmentId,
-  });
-
-  const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
-  const canReadTeam = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
-
-  if (!canReadAll && canReadTeam && req.user?._id) {
-    query.reportingManagerId = req.user._id;
-  }
+  const { page, limit, search, isActive, departmentId, roleId, createdAfter } =
+    employeeListQuerySchema.parse(req.query);
+  const query = await applyTeamScopeToEmployeeQuery(
+    applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
+      search,
+      isActive,
+      departmentId,
+      roleId,
+      createdAfter,
+    }),
+    req,
+  );
 
   const skip = (page - 1) * limit;
   const [employees, total] = await Promise.all([
@@ -135,7 +213,7 @@ export async function listEmployees(req, res) {
 }
 
 export async function getEmployeeStats(req, res) {
-  const baseQuery = await buildEmployeeDirectoryQuery();
+  const baseQuery = await applyTeamScopeToEmployeeQuery(await buildEmployeeDirectoryQuery(), req);
   const monthKey = getISTDateInputValue().slice(0, 7);
   const { start: monthStart } = parseMonthInputAsISTRange(monthKey);
 
@@ -158,7 +236,12 @@ export async function getEmployeeStats(req, res) {
 }
 
 export async function getEmployee(req, res) {
-  const employee = await User.findById(req.params.id).populate(USER_POPULATE_FIELDS);
+  const idResult = objectIdSchema.safeParse(req.params.id);
+  if (!idResult.success) {
+    return res.status(400).json({ message: 'Invalid employee identifier.' });
+  }
+
+  const employee = await User.findById(idResult.data).populate(USER_POPULATE_FIELDS);
 
   if (!employee) {
     return res.status(404).json({ message: 'Employee not found.' });
@@ -166,6 +249,11 @@ export async function getEmployee(req, res) {
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  const inScope = await assertEmployeeInTeamScope(req, employee._id);
+  if (!inScope) {
     return res.status(404).json({ message: 'Employee not found.' });
   }
 
@@ -218,6 +306,13 @@ export async function listManagers(req, res) {
 
 export async function updateEmployee(req, res) {
   const parsed = updateEmployeeOrgSchema.parse(req.body);
+
+  if (isProfileOrgUpdate(req.body)) {
+    const role = await resolveRole(req.body.roleId);
+    const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
+    buildEmployeeProfileUpdateSchema({ roleSlug: role.slug, hasDepartments }).parse(req.body);
+  }
+
   const employee = await User.findById(req.params.id).populate(USER_POPULATE_FIELDS);
 
   if (!employee) {
@@ -229,14 +324,39 @@ export async function updateEmployee(req, res) {
     return res.status(400).json({ message: 'Cannot modify the system admin account here.' });
   }
 
+  const inScope = await assertEmployeeInTeamScope(req, employee._id);
+  if (!inScope) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  if (parsed.joiningDate !== undefined || parsed.endingDate !== undefined) {
+    const joining = toEmployeeDateInputValue(
+      parsed.joiningDate !== undefined ? parsed.joiningDate : employee.joiningDate,
+    );
+    const ending =
+      parsed.endingDate !== undefined
+        ? parsed.endingDate === null
+          ? null
+          : toEmployeeDateInputValue(parsed.endingDate)
+        : toEmployeeDateInputValue(employee.endingDate);
+
+    const dateRangeError = assertEmployeeDateRange(joining, ending);
+    if (dateRangeError) {
+      return res.status(400).json(dateRangeError);
+    }
+  }
+
   const previous = {
     roleId: refId(employee.roleId),
     departmentId: refId(employee.departmentId),
     reportingManagerId: refId(employee.reportingManagerId),
     delegateApproverId: refId(employee.delegateApproverId),
+    managedDepartmentIds: (employee.managedDepartmentIds ?? []).map((id) => refId(id)),
     isActive: employee.isActive,
     firstName: employee.firstName,
     lastName: employee.lastName,
+    email: employee.email,
+    mobile: employee.mobile,
     designation: employee.designation,
     joiningDate: employee.joiningDate,
     endingDate: employee.endingDate,
@@ -290,14 +410,24 @@ export async function updateEmployee(req, res) {
   if (parsed.lastName !== undefined) {
     employee.lastName = parsed.lastName;
   }
+  if (parsed.email !== undefined) {
+    employee.email = parsed.email.toLowerCase();
+  }
+  if (parsed.mobile !== undefined) {
+    employee.mobile = parsed.mobile;
+  }
   if (parsed.designation !== undefined) {
-    employee.designation = parsed.designation || null;
+    employee.designation = parsed.designation;
   }
   if (parsed.joiningDate !== undefined) {
     employee.joiningDate = parsed.joiningDate;
   }
   if (parsed.endingDate !== undefined) {
     employee.endingDate = parsed.endingDate;
+  }
+
+  if (parsed.managedDepartmentIds !== undefined) {
+    employee.managedDepartmentIds = await resolveManagedDepartments(parsed.managedDepartmentIds);
   }
 
   await employee.save();
@@ -312,9 +442,12 @@ export async function updateEmployee(req, res) {
       departmentId: refId(employee.departmentId),
       reportingManagerId: refId(employee.reportingManagerId),
       delegateApproverId: refId(employee.delegateApproverId),
+      managedDepartmentIds: (employee.managedDepartmentIds ?? []).map((id) => refId(id)),
       isActive: employee.isActive,
       firstName: employee.firstName,
       lastName: employee.lastName,
+      email: employee.email,
+      mobile: employee.mobile,
       designation: employee.designation,
       joiningDate: employee.joiningDate,
       endingDate: employee.endingDate,
@@ -393,7 +526,8 @@ export async function bulkUploadEmployees(req, res) {
 }
 
 export async function getOfficeSettingsHandler(req, res) {
-  const settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  const settings = await OfficeSettings.findOne().sort({ updatedAt: -1 }).lean();
+  res.set('Cache-Control', 'no-store');
   res.json({ settings });
 }
 
@@ -416,7 +550,8 @@ export async function updateOfficeSettings(req, res) {
     officeName: settings.name,
   });
 
-  res.json({ settings });
+  res.set('Cache-Control', 'no-store');
+  res.json({ settings: settings.toObject() });
 }
 
 export async function listAttendance(req, res) {
@@ -429,7 +564,43 @@ export async function listAttendance(req, res) {
   res.json(result);
 }
 
+export async function editAttendanceRecord(req, res) {
+  const recordId = objectIdSchema.parse(req.params.id);
+  const payload = adminAttendanceEditSchema.parse(req.body);
+  const auditContext = {
+    ...getRequestAuditContext(req),
+    email: req.user?.email,
+  };
+  const result = await adminEditAttendanceRecord({
+    recordId,
+    payload,
+    actor: req.user,
+    permissions: req.userPermissions,
+    auditContext,
+  });
+
+  res.json({
+    record: {
+      id: result.checkIn._id.toString(),
+      userId: result.checkIn.userId.toString(),
+      type: result.checkIn.type,
+      timestamp: result.checkIn.timestamp,
+      attendanceMode: result.checkIn.attendanceMode,
+      attendanceTag: result.checkIn.attendanceTag,
+      warningIssued: result.checkIn.warningIssued,
+      quarterWarningIndex: result.checkIn.quarterWarningIndex,
+      lateNote: result.checkIn.lateNote,
+      status: result.checkIn.status,
+      dayKey: result.dayKey,
+      checkInTime: result.checkInTime,
+      checkOutTime: result.checkOutTime,
+      checkOutRecordId: result.checkOut?._id?.toString() ?? null,
+    },
+  });
+}
+
 export async function getQuarterWarningSummary(req, res) {
+  res.set('Cache-Control', 'no-store');
   const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
   const canReadTeam = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
@@ -440,47 +611,225 @@ export async function getQuarterWarningSummary(req, res) {
       .lean();
     userIds = employees.map((item) => item._id);
   } else if (canReadTeam && req.user?._id) {
-    const reports = await User.find({
-      reportingManagerId: req.user._id,
-      isActive: true,
-    })
-      .select('_id')
-      .lean();
-    userIds = reports.map((item) => item._id);
+    const scopedIds = await resolveTeamScopedUserIds(
+      req.user,
+      req.userPermissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
+    userIds = scopedIds ?? [];
   }
 
   const summary = await getQuarterWarningSummaryForUsers(userIds);
   res.json(summary);
 }
 
-export async function listAuditLogs(req, res) {
-  const { page, limit, action } = auditLogQuerySchema.parse(req.query);
-  const query = {};
+const weekConfirmationSchema = z.object({
+  userId: objectIdSchema,
+  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.'),
+  notes: z.string().trim().max(500).optional(),
+});
 
-  if (action) {
-    query.action = action;
+export async function listWeekConfirmations(req, res) {
+  const weekStart = z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .parse(req.query.weekStart);
+
+  const scopedIds = await resolveTeamScopedUserIds(
+    req.user,
+    req.userPermissions,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+
+  const query = { weekStart };
+  if (scopedIds !== null) {
+    query.userId = { $in: scopedIds };
+  }
+
+  const rows = await WeekAttendanceConfirmation.find(query)
+    .populate('confirmedBy', 'name email')
+    .sort({ userId: 1 });
+
+  res.json({
+    weekStart,
+    confirmations: rows.map((row) => row.toSafeJSON()),
+  });
+}
+
+export async function confirmWeekAttendance(req, res) {
+  const parsed = weekConfirmationSchema.parse(req.body);
+
+  const allowed = await resolveTeamScopedUserIds(
+    req.user,
+    req.userPermissions,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+  if (
+    allowed !== null &&
+    !allowed.some((id) => id.toString() === parsed.userId)
+  ) {
+    return res.status(403).json({ message: 'You do not have permission to confirm this employee.' });
+  }
+
+  const employee = await User.findById(parsed.userId).select('_id isActive');
+  if (!employee?.isActive) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  const confirmation = await WeekAttendanceConfirmation.findOneAndUpdate(
+    { userId: parsed.userId, weekStart: parsed.weekStart },
+    {
+      userId: parsed.userId,
+      weekStart: parsed.weekStart,
+      confirmedBy: req.user._id,
+      confirmedAt: new Date(),
+      notes: parsed.notes ?? null,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  ).populate('confirmedBy', 'name email');
+
+  auditLog('week_attendance_confirmed', {
+    adminId: req.user._id.toString(),
+    userId: parsed.userId,
+    weekStart: parsed.weekStart,
+  });
+
+  res.json({ confirmation: confirmation.toSafeJSON() });
+}
+
+const weekConfirmationQuerySchema = z.object({
+  userId: objectIdSchema,
+  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.'),
+});
+
+export async function unconfirmWeekAttendance(req, res) {
+  const parsed = weekConfirmationQuerySchema.parse(req.query);
+
+  const allowed = await resolveTeamScopedUserIds(
+    req.user,
+    req.userPermissions,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+  if (
+    allowed !== null &&
+    !allowed.some((id) => id.toString() === parsed.userId)
+  ) {
+    return res.status(403).json({ message: 'You do not have permission to unconfirm this employee.' });
+  }
+
+  const deleted = await WeekAttendanceConfirmation.findOneAndDelete({
+    userId: parsed.userId,
+    weekStart: parsed.weekStart,
+  });
+
+  if (!deleted) {
+    return res.status(404).json({ message: 'Week confirmation not found.' });
+  }
+
+  auditLog('week_attendance_unconfirmed', {
+    adminId: req.user._id.toString(),
+    userId: parsed.userId,
+    weekStart: parsed.weekStart,
+  });
+
+  res.json({ success: true, userId: parsed.userId, weekStart: parsed.weekStart });
+}
+
+const LOGIN_AUDIT_ACTIONS = ['login_success', 'login_failed'];
+const CONFLICT_FILTER_SCAN_LIMIT = 500;
+
+function mapAuditLogResponse(log, conflict) {
+  return {
+    id: log._id.toString(),
+    action: log.action,
+    userId: log.userId?.toString() ?? null,
+    email: log.email ?? null,
+    role: log.role ?? null,
+    ip: log.ip ?? null,
+    deviceId: log.deviceId ?? null,
+    userAgent: log.userAgent ?? null,
+    metadata: log.metadata ?? null,
+    status: log.status ?? null,
+    reason: log.reason ?? null,
+    timestamp: log.timestamp,
+    ipConflict: conflict.ipConflict,
+    conflictWithUsers: conflict.conflictWithUsers,
+  };
+}
+
+export async function listAuditLogs(req, res) {
+  const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
+  const query = {
+    action: action ?? { $in: LOGIN_AUDIT_ACTIONS },
+  };
+
+  if (search) {
+    query.email = { $regex: escapeRegex(search), $options: 'i' };
+  }
+
+  if (date) {
+    const istDay = parseDateInputAsISTDay(date);
+    if (istDay) {
+      query.timestamp = {
+        $gte: startOfDayIST(istDay),
+        $lte: endOfDayIST(istDay),
+      };
+    }
   }
 
   const skip = (page - 1) * limit;
-  const [logs, total] = await Promise.all([
+  let logs;
+  let total;
+
+  if (conflictsOnly) {
+    const candidates = await AuditLog.find(query)
+      .sort({ timestamp: -1 })
+      .limit(CONFLICT_FILTER_SCAN_LIMIT);
+    const conflictMap = await enrichAuditLogsWithConflicts(candidates);
+    const conflictLogs = candidates.filter(
+      (log) => conflictMap.get(log._id.toString())?.ipConflict,
+    );
+    total = conflictLogs.length;
+    logs = conflictLogs.slice(skip, skip + limit);
+    const conflictMapForPage = await enrichAuditLogsWithConflicts(logs);
+
+    res.json({
+      logs: logs.map((log) => {
+        const conflict = conflictMapForPage.get(log._id.toString()) ?? {
+          ipConflict: false,
+          conflictWithUsers: [],
+        };
+        return mapAuditLogResponse(log, conflict);
+      }),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+    return;
+  }
+
+  [logs, total] = await Promise.all([
     AuditLog.find(query).sort({ timestamp: -1 }).skip(skip).limit(limit),
     AuditLog.countDocuments(query),
   ]);
 
+  const conflictMap = await enrichAuditLogsWithConflicts(logs);
+
   res.json({
-    logs: logs.map((log) => ({
-      id: log._id.toString(),
-      action: log.action,
-      userId: log.userId?.toString() ?? null,
-      email: log.email ?? null,
-      role: log.role ?? null,
-      ip: log.ip ?? null,
-      userAgent: log.userAgent ?? null,
-      metadata: log.metadata ?? null,
-      status: log.status ?? null,
-      reason: log.reason ?? null,
-      timestamp: log.timestamp,
-    })),
+    logs: logs.map((log) => {
+      const conflict = conflictMap.get(log._id.toString()) ?? {
+        ipConflict: false,
+        conflictWithUsers: [],
+      };
+      return mapAuditLogResponse(log, conflict);
+    }),
     pagination: {
       page,
       limit,

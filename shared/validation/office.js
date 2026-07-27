@@ -4,7 +4,12 @@ import { latitudeSchema, longitudeSchema } from './common.js';
 const timeStringSchema = z
   .string()
   .trim()
-  .regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:mm (24-hour).');
+  .regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Enter a valid time.');
+
+function timeToMinutes(value) {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+}
 
 export const officeSchema = z.object({
   name: z
@@ -28,4 +33,27 @@ export const officeSchema = z.object({
   graceThresholdTime: timeStringSchema.optional(),
   halfDayThresholdTime: timeStringSchema.optional(),
   warningsPerQuarter: z.number().int().min(0).max(10).optional(),
+  weekendDays: z
+    .array(z.number().int().min(0).max(6))
+    .min(1, 'Select at least one weekend day.')
+    .max(7)
+    .optional(),
+}).superRefine((value, ctx) => {
+  const start = value.officeStartTime ? timeToMinutes(value.officeStartTime) : null;
+  const end = value.officeEndTime ? timeToMinutes(value.officeEndTime) : null;
+  const warning = value.graceThresholdTime ? timeToMinutes(value.graceThresholdTime) : null;
+  const halfDay = value.halfDayThresholdTime ? timeToMinutes(value.halfDayThresholdTime) : null;
+
+  if (start != null && end != null && end <= start) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['officeEndTime'], message: 'Office end must be after office start.' });
+  }
+  if (start != null && warning != null && warning < start) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['graceThresholdTime'], message: 'Warning threshold cannot be before office start.' });
+  }
+  if (warning != null && halfDay != null && halfDay <= warning) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['halfDayThresholdTime'], message: 'Half-day threshold must be after the warning threshold.' });
+  }
+  if (end != null && halfDay != null && halfDay > end) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['halfDayThresholdTime'], message: 'Half-day threshold cannot be after office end.' });
+  }
 });

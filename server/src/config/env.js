@@ -21,16 +21,21 @@ export const env = {
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
   adminName: process.env.ADMIN_NAME ?? 'System Admin',
+  /** Window for login/check-in device or IP conflict detection (default 24h). */
+  deviceConflictWindowMs: Number(
+    process.env.DEVICE_CONFLICT_WINDOW_MS ?? 24 * 60 * 60 * 1000,
+  ),
   defaultOffice: {
     name: process.env.DEFAULT_OFFICE_NAME ?? 'Grubpac Technologies - Jhandewalan Office',
-    latitude: Number(process.env.DEFAULT_OFFICE_LAT ?? 12.9716),
-    longitude: Number(process.env.DEFAULT_OFFICE_LNG ?? 77.5946),
+    /** Jhandewalan, New Delhi — not Bangalore (legacy placeholder caused ~1740 km geofence misses). */
+    latitude: Number(process.env.DEFAULT_OFFICE_LAT ?? 28.647284),
+    longitude: Number(process.env.DEFAULT_OFFICE_LNG ?? 77.202835),
     radiusMeters: Number(process.env.DEFAULT_OFFICE_RADIUS_METERS ?? 100),
-    maxAccuracyMeters: Number(process.env.DEFAULT_MAX_ACCURACY_METERS ?? 50),
-    officeStartTime: '09:00',
-    officeEndTime: '17:00',
-    graceThresholdTime: '09:00',
-    halfDayThresholdTime: '10:00',
-    warningsPerQuarter: 3,
+    maxAccuracyMeters: Number(process.env.DEFAULT_MAX_ACCURACY_METERS ?? 100),
+    officeStartTime: process.env.DEFAULT_OFFICE_START_TIME ?? '09:00',
+    officeEndTime: process.env.DEFAULT_OFFICE_END_TIME ?? '17:00',
+    graceThresholdTime: process.env.DEFAULT_WARNING_THRESHOLD_TIME ?? '09:00',
+    halfDayThresholdTime: process.env.DEFAULT_HALF_DAY_THRESHOLD_TIME ?? '10:00',
+    warningsPerQuarter: Number(process.env.DEFAULT_WARNINGS_PER_QUARTER ?? 3),
   },
 };

@@ -77,3 +77,23 @@ export async function resolveRole(roleId) {
   }
   return role;
 }
+
+export async function resolveManagedDepartments(departmentIds = []) {
+  if (!departmentIds?.length) {
+    return [];
+  }
+
+  const uniqueIds = [...new Set(departmentIds.map(String))];
+  const departments = await Department.find({
+    _id: { $in: uniqueIds },
+    isActive: true,
+  }).select('_id');
+
+  if (departments.length !== uniqueIds.length) {
+    const error = new Error('One or more managed departments were not found.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return departments.map((department) => department._id);
+}

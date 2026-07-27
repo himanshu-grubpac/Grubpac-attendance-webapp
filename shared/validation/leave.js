@@ -86,8 +86,15 @@ export const encashLeaveSchema = z.object({
   reason: z.string().trim().min(3).max(500),
 });
 
+export const carryForwardPreviewQuerySchema = z.object({
+  fromYear: z.coerce.number().int().min(2000).max(2100),
+  userId: objectIdSchema.optional(),
+});
+
 export const carryForwardSchema = z.object({
   fromYear: z.coerce.number().int().min(2000).max(2100),
+  userId: objectIdSchema.optional(),
+  userIds: z.array(objectIdSchema).min(1).max(500).optional(),
 });
 
 export const leaveDecisionSchema = z.object({
@@ -115,6 +122,10 @@ export const leaveRequestQuerySchema = paginationSchema.extend({
   status: z.enum(['pending', 'approved', 'rejected', 'cancelled', 'all']).default('all'),
   userId: objectIdSchema.optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, 'Month must be YYYY-MM.')
+    .optional(),
   scope: z.enum(['mine', 'team', 'all', 'approvals']).default('mine'),
 });
 

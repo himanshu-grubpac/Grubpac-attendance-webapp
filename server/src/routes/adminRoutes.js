@@ -8,7 +8,11 @@ import {
   downloadEmployeeTemplate,
   getOfficeSettingsHandler,
   listAttendance,
+  editAttendanceRecord,
   getQuarterWarningSummary,
+  listWeekConfirmations,
+  confirmWeekAttendance,
+  unconfirmWeekAttendance,
   listAuditLogs,
   getEmployee,
   getEmployeeStats,
@@ -55,7 +59,11 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/permissions', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(listPermissions));
-router.get('/roles', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(listRoles));
+router.get(
+  '/roles',
+  requirePermission(PERMISSIONS.ROLES_MANAGE, PERMISSIONS.USERS_WRITE),
+  asyncHandler(listRoles),
+);
 router.post('/roles', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(createRole));
 router.patch('/roles/:id', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(updateRole));
 router.delete('/roles/:id', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(deleteRole));
@@ -82,7 +90,15 @@ router.delete(
 );
 
 router.post('/users', requirePermission(PERMISSIONS.USERS_WRITE), asyncHandler(registerEmployee));
-router.get('/users', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(listEmployees));
+router.get(
+  '/users',
+  requirePermission(
+    PERMISSIONS.USERS_READ,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  ),
+  asyncHandler(listEmployees),
+);
 router.get('/users/stats', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(getEmployeeStats));
 router.get('/users/managers', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(listManagers));
 router.get(
@@ -123,10 +139,30 @@ router.get(
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
   asyncHandler(listAttendance),
 );
+router.patch(
+  '/attendance/records/:id',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(editAttendanceRecord),
+);
 router.get(
   '/attendance/quarter-warnings',
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
   asyncHandler(getQuarterWarningSummary),
+);
+router.get(
+  '/attendance/week-confirmations',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(listWeekConfirmations),
+);
+router.post(
+  '/attendance/week-confirmations',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(confirmWeekAttendance),
+);
+router.delete(
+  '/attendance/week-confirmations',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(unconfirmWeekAttendance),
 );
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(listAuditLogs));
 router.get(

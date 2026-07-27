@@ -183,8 +183,9 @@ async function main() {
     method: 'POST',
     body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
   });
-  assert(adminOnEmployeePortal.response.status === 403, 'Admin is rejected on Employee tab');
-  assert(!cookieHeader.includes('attendance_token='), 'Admin gets no session cookie from Employee tab');
+  assert(adminOnEmployeePortal.response.ok, 'Admin with attendance.read_own can sign in on Employee tab');
+  assert(adminOnEmployeePortal.data.user?.loginPortal === 'employee', 'Employee tab login sets loginPortal');
+  assert(cookieHeader.includes('attendance_token='), 'Admin gets session cookie from Employee tab');
 
   cookieHeader = '';
   const employeeOnAdminPortal = await request('/auth/admin/login', {
@@ -269,6 +270,48 @@ async function main() {
     'Audit log action filter works',
   );
 
+  const sharedDeviceId = 'verify-shared-device-id';
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: {
+      identifier: 'admin@grubpac.com',
+      password: 'Grubpac@Admin2026',
+      deviceId: sharedDeviceId,
+    },
+  });
+  cookieHeader = '';
+  await request('/auth/user/login', {
+    method: 'POST',
+    body: {
+      identifier: 'employee.sample@grubpac.com',
+      password: 'Employee@12345',
+      deviceId: sharedDeviceId,
+    },
+  });
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+  });
+  const conflictLogs = await request('/admin/audit-logs?action=login_success&page=1&limit=50', {
+    method: 'GET',
+  });
+  assert(conflictLogs.response.ok, 'Audit logs conflict enrichment works');
+  assert(
+    conflictLogs.data.logs.some((log) => log.deviceId === sharedDeviceId && log.ipConflict === true),
+    'Shared device id flags IP/device conflict across accounts',
+  );
+  assert(
+    conflictLogs.data.logs.some(
+      (log) =>
+        log.ipConflict === true &&
+        Array.isArray(log.conflictWithUsers) &&
+        log.conflictWithUsers.length > 0,
+    ),
+    'Conflict response includes conflicting account details',
+  );
+
   const listAfterLogin = await request('/admin/users?page=1&limit=10', { method: 'GET' });
   const loggedInEmployee = listAfterLogin.data.employees?.find((e) => e.email === employeeEmail);
   assert(loggedInEmployee?.lastLoginAt, 'Employee lastLoginAt is set after login');
@@ -323,6 +366,7 @@ async function main() {
   });
   assert(inside.response.status === 201, 'Inside radius check-in is allowed');
   assert(inside.data.status === 'allowed', 'Check-in status is allowed');
+  assert(inside.data.quarterWarnings?.allowance != null, 'Check-in response includes quarter warning summary');
 
   const duplicate = await request('/attendance/check-in', {
     method: 'POST',
@@ -391,6 +435,51 @@ async function main() {
   );
   assert(adminAttendance.response.ok, 'Admin attendance list works');
   assert(adminAttendance.data.pagination, 'Admin attendance includes pagination');
+
+  const checkInRecord = adminAttendance.data.records?.find(
+    (record) => record.type === 'check_in' && record.status === 'allowed',
+  );
+  assert(checkInRecord?._id || checkInRecord?.id, 'Check-in record available for admin edit test');
+  const checkInRecordId = checkInRecord.id ?? checkInRecord._id;
+  const editAttendance = await request(`/admin/attendance/records/${checkInRecordId}`, {
+    method: 'PATCH',
+    body: {
+      checkInTime: '09:15',
+      statusCode: 'W1',
+      attendanceMode: 'office',
+      lateNote: 'Admin edit verify',
+    },
+  });
+  assert(editAttendance.response.ok, 'Admin can edit attendance record');
+  assert(editAttendance.data.record?.attendanceTag === 'P', 'Edited record keeps Present tag with warning');
+  assert(editAttendance.data.record?.quarterWarningIndex === 1, 'Edited record stores warning index');
+  assert(editAttendance.data.record?.lateNote === 'Admin edit verify', 'Edited late note is persisted');
+
+  cookieHeader = '';
+  const editedEmployeeEmail =
+    (typeof checkInRecord.userId === 'object' && checkInRecord.userId?.email)
+    || checkInRecord.user?.email
+    || employeeEmail;
+  await request('/auth/user/login', {
+    method: 'POST',
+    body: { identifier: editedEmployeeEmail, password: employeePassword },
+  });
+  const employeeQuarterWarnings = await request('/attendance/quarter-warnings', { method: 'GET' });
+  assert(employeeQuarterWarnings.response.ok, 'Employee quarter-warnings endpoint works');
+  assert(
+    employeeQuarterWarnings.data.used >= 1,
+    'Employee quarter-warnings reflects issued W1 after late check-in',
+  );
+  assert(
+    employeeQuarterWarnings.data.remaining === employeeQuarterWarnings.data.allowance - employeeQuarterWarnings.data.used,
+    'Employee quarter-warnings remaining matches allowance minus used',
+  );
+
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+  });
 
   const listUsers = await request('/admin/users?page=1&limit=10', { method: 'GET' });
   assert(listUsers.response.ok, 'Admin employee list works');
@@ -797,8 +886,16 @@ async function main() {
   const myRequests = await request('/leave/requests?scope=mine', { method: 'GET' });
   assert(myRequests.response.ok && myRequests.data.requests?.length >= 1, 'Employee can list own requests');
 
-  // Reporting Manager holds LEAVE_APPROVE/ATTENDANCE_READ_TEAM/etc., which are
-  // ADMIN_PORTAL_PERMISSIONS — they must sign in via the admin portal, not employee.
+  // Reporting managers hold admin-portal permissions but also attendance.read_own —
+  // they may sign in via either portal.
+  cookieHeader = '';
+  const managerOnEmployeePortal = await request('/auth/user/login', {
+    method: 'POST',
+    body: { identifier: managerEmail, password: employeePassword },
+  });
+  assert(managerOnEmployeePortal.response.ok, 'Reporting manager can sign in on Employee tab');
+  assert(managerOnEmployeePortal.data.user?.loginPortal === 'employee', 'Manager employee login sets loginPortal');
+
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
@@ -1394,12 +1491,28 @@ async function main() {
   assert(encashResult.response.ok, 'Admin can record leave encashment');
   assert(encashResult.data.balance?.encashed >= 1, 'Encashment increments encashed counter');
 
+  const cfPreview = await request(`/leave/carry-forward/preview?fromYear=${year}`, {
+    method: 'GET',
+  });
+  assert(cfPreview.response.ok, 'Admin can preview year-end carry-forward');
+  assert(typeof cfPreview.data.summary?.totalCarried === 'number', 'Preview returns carry summary');
+
   const cfResult = await request('/leave/carry-forward', {
     method: 'POST',
     body: { fromYear: year },
   });
   assert(cfResult.response.ok, 'Admin can apply year-end carry-forward');
   assert(typeof cfResult.data.adjustments === 'number', 'Carry-forward returns adjustment count');
+  assert(typeof cfResult.data.totalCarried === 'number', 'Carry-forward returns total carried days');
+
+  const cfDuplicate = await request('/leave/carry-forward', {
+    method: 'POST',
+    body: { fromYear: year },
+  });
+  assert(
+    cfDuplicate.response.ok && cfDuplicate.data.adjustments === 0,
+    'Repeat carry-forward for same year is idempotent (no double-count)',
+  );
 
   const delegateEmail = `delegate.verify.${Date.now()}@grubpac.test`;
   const delegateRegister = await request('/admin/users', {

@@ -9,6 +9,7 @@ import {
 import {
   ADMIN_PORTAL_PERMISSIONS,
   PERMISSIONS,
+  hasAdminPortalAccess,
   hasAnyPermission as userHasAnyPermission,
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
@@ -17,8 +18,40 @@ import { fetchSessionWithRetry } from '../utils/serverReady.js';
 
 const AuthContext = createContext(null);
 
+const LOGIN_PORTAL_KEY = 'attendance.loginPortal';
+
+function readStoredLoginPortal() {
+  try {
+    const value = localStorage.getItem(LOGIN_PORTAL_KEY);
+    if (value === 'admin' || value === 'employee') return value;
+  } catch {
+    // Ignore storage failures.
+  }
+  return null;
+}
+
+function storeLoginPortal(portal) {
+  try {
+    if (portal) {
+      localStorage.setItem(LOGIN_PORTAL_KEY, portal);
+    } else {
+      localStorage.removeItem(LOGIN_PORTAL_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function inferLoginPortal(user) {
+  if (hasAdminPortalAccess(user?.permissions)) {
+    return 'admin';
+  }
+  return 'employee';
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  const [loginPortal, setLoginPortal] = useState(() => readStoredLoginPortal());
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -30,6 +63,8 @@ export function AuthProvider({ children }) {
       // Session may already be expired.
     }
     setUser(null);
+    setLoginPortal(null);
+    storeLoginPortal(null);
     setLoggingOut(false);
   }, []);
 
@@ -38,9 +73,22 @@ export function AuthProvider({ children }) {
       role === 'admin'
         ? await authApi.adminLogin(identifier, password)
         : await authApi.employeeLogin(identifier, password);
+    const portal = result.user?.loginPortal ?? role;
     setUser(result.user);
-    return result.user;
+    setLoginPortal(portal);
+    storeLoginPortal(portal);
+    return { user: result.user, loginPortal: portal };
   }, []);
+
+  const switchPortal = useCallback(
+    (nextPortal) => {
+      if (nextPortal !== 'admin' && nextPortal !== 'employee') return null;
+      setLoginPortal(nextPortal);
+      storeLoginPortal(nextPortal);
+      return nextPortal;
+    },
+    [],
+  );
 
   const refreshUser = useCallback(async (nextUser) => {
     if (nextUser) {
@@ -57,10 +105,23 @@ export function AuthProvider({ children }) {
 
     fetchSessionWithRetry()
       .then(({ user: currentUser }) => {
-        if (!cancelled) setUser(currentUser);
+        if (cancelled) return;
+        setUser(currentUser);
+        if (!currentUser) {
+          setLoginPortal(null);
+          storeLoginPortal(null);
+          return;
+        }
+        const stored = readStoredLoginPortal();
+        const portal = stored ?? inferLoginPortal(currentUser);
+        setLoginPortal(portal);
+        if (!stored) storeLoginPortal(portal);
       })
       .catch(() => {
-        if (!cancelled) setUser(null);
+        if (!cancelled) {
+          setUser(null);
+          setLoginPortal(null);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -74,17 +135,24 @@ export function AuthProvider({ children }) {
   const value = useMemo(
     () => ({
       user,
+      loginPortal,
       loading,
       loggingOut,
       login,
       logout,
       refreshUser,
+      switchPortal,
       permissions: user?.permissions ?? [],
-      isAdmin: userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS),
+      isAdmin: loginPortal === 'admin',
+      hasAdminPortalAccess: userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS),
+      hasEmployeePortalAccess: userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
+      canSwitchPortal:
+        userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS) &&
+        userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
       hasPermission: (permission) => userHasPermission(user?.permissions, permission),
       hasAnyPermission: (permissions) => userHasAnyPermission(user?.permissions, permissions),
     }),
-    [user, loading, loggingOut, login, logout, refreshUser],
+    [user, loginPortal, loading, loggingOut, login, logout, refreshUser, switchPortal],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

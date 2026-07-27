@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adjustLeaveBalanceSchema, encashLeaveSchema } from '@shared/validation/leave.js';
 import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import SearchInput from '../../components/SearchInput.jsx';
 import { validateForm } from '../../utils/validation.js';
@@ -26,6 +27,7 @@ const emptyEncashForm = {
 };
 
 export default function AdminLeaveBalanceAdjust() {
+  const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const [employees, setEmployees] = useState([]);
   const [employeeSearch, setEmployeeSearch] = useState('');
@@ -37,7 +39,6 @@ export default function AdminLeaveBalanceAdjust() {
   const [cfYear, setCfYear] = useState(new Date().getFullYear() - 1);
   const [fieldErrors, setFieldErrors] = useState({});
   const [encashErrors, setEncashErrors] = useState({});
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [cfSubmitting, setCfSubmitting] = useState(false);
 
@@ -72,7 +73,6 @@ export default function AdminLeaveBalanceAdjust() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    setMessage('');
     setError('');
 
     const payload = {
@@ -105,7 +105,7 @@ export default function AdminLeaveBalanceAdjust() {
       onConfirm: async () => {
         setFieldErrors({});
         await leaveApi.adjustBalance(form.userId, validation.data);
-        setMessage('Balance adjusted.');
+        showSuccess('Balance adjusted.');
         const data = await leaveApi.getBalances({ userId: form.userId, year: form.year });
         setBalances(data.balances ?? []);
       },
@@ -114,7 +114,6 @@ export default function AdminLeaveBalanceAdjust() {
 
   async function handleEncash(event) {
     event.preventDefault();
-    setMessage('');
     setError('');
 
     if (!form.userId || !form.leaveTypeId) {
@@ -144,7 +143,7 @@ export default function AdminLeaveBalanceAdjust() {
       variant: 'danger',
       onConfirm: async () => {
         await leaveApi.encashBalance(form.userId, validation.data);
-        setMessage('Encashment recorded (balance reduced; not a payroll payout).');
+        showSuccess('Encashment recorded (balance reduced; not a payroll payout).');
         setEncashForm(emptyEncashForm);
         const data = await leaveApi.getBalances({ userId: form.userId, year: form.year });
         setBalances(data.balances ?? []);
@@ -160,11 +159,10 @@ export default function AdminLeaveBalanceAdjust() {
       variant: 'danger',
       onConfirm: async () => {
         setCfSubmitting(true);
-        setMessage('');
         setError('');
         try {
           const result = await leaveApi.applyCarryForward({ fromYear: cfYear });
-          setMessage(
+          showSuccess(
             `Carry-forward applied: ${result.adjustments} balance adjustment(s) for ${cfYear} → ${result.toYear}.`,
           );
           if (form.userId) {
@@ -180,12 +178,11 @@ export default function AdminLeaveBalanceAdjust() {
 
   return (
     <div className="page page--form">
-      {(message || error) && (
+      {error ? (
         <div className="page-alerts">
-          {message && <div className="alert alert--success">{message}</div>}
-          {error && <div className="alert alert--error">{error}</div>}
+          <div className="alert alert--error">{error}</div>
         </div>
-      )}
+      ) : null}
 
       <div className="card">
         <div className="toolbar-row">

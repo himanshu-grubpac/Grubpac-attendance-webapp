@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { indianMobileSchema, passwordSchema } from './common.js';
+import { deviceIdSchema, indianMobileSchema, passwordSchema } from './common.js';
 
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
@@ -25,10 +25,12 @@ export const loginSchema = z
     // so the same field can carry an email, mobile number, or employee code.
     email: z.string().trim().max(254).optional(),
     password: z.string().min(1, 'Password is required.').max(128),
+    deviceId: deviceIdSchema,
   })
-  .transform(({ identifier, email, password }) => ({
+  .transform(({ identifier, email, password, deviceId }) => ({
     identifier: (identifier || email || '').trim(),
     password,
+    deviceId,
   }))
   .refine((data) => data.identifier.length > 0, {
     message: 'Email, mobile number, or employee ID is required.',

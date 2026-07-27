@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { updateProfileSchema } from '@shared/validation/auth.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useToast } from '../context/ToastContext.jsx';
 import { authApi, getErrorMessage } from '../services/api.js';
 import { formatISTDate } from '../utils/datetime.js';
 import { validateForm } from '../utils/validation.js';
@@ -24,6 +25,7 @@ function getInitials(user) {
 }
 
 export default function ProfilePage() {
+  const { showSuccess } = useToast();
   const { user, isAdmin, refreshUser } = useAuth();
   const changePasswordPath = isAdmin ? '/admin/change-password' : '/employee/change-password';
 
@@ -33,7 +35,6 @@ export default function ProfilePage() {
     mobile: '',
   });
   const [fieldErrors, setFieldErrors] = useState({});
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -69,7 +70,6 @@ export default function ProfilePage() {
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
-    setMessage('');
     setError('');
 
     const validation = validateForm(updateProfileSchema, form);
@@ -83,7 +83,7 @@ export default function ProfilePage() {
     try {
       const result = await authApi.updateProfile(validation.data);
       await refreshUser(result.user);
-      setMessage('Profile updated successfully.');
+      showSuccess('Profile updated successfully.');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -93,12 +93,11 @@ export default function ProfilePage() {
 
   return (
     <div className="page page--form">
-      {(message || error) && (
+      {error ? (
         <div className="page-alerts">
-          {message && <div className="alert alert--success">{message}</div>}
-          {error && <div className="alert alert--error">{error}</div>}
+          <div className="alert alert--error">{error}</div>
         </div>
-      )}
+      ) : null}
 
       <div className="card card--form card--dense">
         <div className="profile-identity">

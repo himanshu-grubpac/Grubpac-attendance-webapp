@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { createHolidaySchema } from '@shared/validation/holidays.js';
 import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -14,13 +16,13 @@ const emptyForm = {
 };
 
 export default function AdminLeaveHolidays() {
+  const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const [year, setYear] = useState(new Date().getFullYear());
   const [holidays, setHolidays] = useState([]);
   const [note, setNote] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -44,7 +46,6 @@ export default function AdminLeaveHolidays() {
 
   async function handleCreate(event) {
     event.preventDefault();
-    setMessage('');
     setError('');
 
     const validation = validateForm(createHolidaySchema, form);
@@ -57,7 +58,7 @@ export default function AdminLeaveHolidays() {
     try {
       await leaveApi.createHoliday(validation.data);
       setForm(emptyForm);
-      setMessage('Holiday added.');
+      showSuccess('Holiday added.');
       await loadHolidays();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -82,10 +83,9 @@ export default function AdminLeaveHolidays() {
 
   return (
     <div className="page">
-      {(note || message || error) && (
+      {(note || error) && (
         <div className="page-alerts">
           {note && <div className="alert alert--info">{note}</div>}
-          {message && <div className="alert alert--success">{message}</div>}
           {error && <div className="alert alert--error">{error}</div>}
         </div>
       )}
@@ -94,11 +94,10 @@ export default function AdminLeaveHolidays() {
         <p className="card__section-title form-grid__full">Add holiday</p>
         <label className="form-field--sm">
           <span className="label">Date (IST)</span>
-          <input
-            className="input--narrow"
-            type="date"
+          <DateField
             value={form.date}
-            onChange={(event) => setForm({ ...form, date: event.target.value })}
+            onChange={(value) => setForm({ ...form, date: value })}
+            aria-label="Holiday date"
           />
           <FieldError message={fieldErrors.date} />
         </label>

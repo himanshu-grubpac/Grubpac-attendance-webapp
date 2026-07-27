@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { changePasswordSchema } from '@shared/validation/auth.js';
 import { authApi, getErrorMessage } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
 import { validateForm } from '../utils/validation.js';
 import FieldError from '../components/FieldError.jsx';
 import PasswordInput from '../components/PasswordInput.jsx';
@@ -12,16 +13,15 @@ const emptyForm = {
 };
 
 export default function ChangePassword() {
+  const { showSuccess } = useToast();
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
-    setMessage('');
     setError('');
 
     const validation = validateForm(changePasswordSchema, form);
@@ -35,7 +35,7 @@ export default function ChangePassword() {
     try {
       const result = await authApi.changePassword(validation.data);
       setForm(emptyForm);
-      setMessage(result.message || 'Password changed successfully.');
+      showSuccess(result.message || 'Password changed successfully.');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -84,10 +84,9 @@ export default function ChangePassword() {
             </button>
           </div>
         </form>
-        {(message || error) && (
+        {error && (
           <div className="page-alerts alert--inset">
-            {message && <div className="alert alert--success">{message}</div>}
-            {error && <div className="alert alert--error">{error}</div>}
+            <div className="alert alert--error">{error}</div>
           </div>
         )}
       </div>
