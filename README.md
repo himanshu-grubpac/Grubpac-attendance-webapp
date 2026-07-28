@@ -2,12 +2,43 @@
 
 Internal employee attendance system for **Grubpac Technologies** — React (Vite) client + Node/Express API + MongoDB.
 
+## Environments
+
+| Environment | Website | Use |
+|-------------|---------|-----|
+| **Production** | https://d1qk2thz664f5x.cloudfront.net | Live users |
+| **Staging** | https://d24p2zn8763d4h.cloudfront.net | Pre-production testing |
+| **Local** | http://localhost:5173 | Development |
+
+Deploy and AWS details (identifiers, redeploy commands, Atlas, SAM setup): **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
+
+**Workflow:** develop locally → deploy to **staging** → verify → deploy to **production**.
+
+---
+
+## Architecture (high level)
+
+```
+Browser → CloudFront (static UI + /api/* proxy)
+              ├─ /*     → S3
+              └─ /api/* → API Gateway → Lambda (Express) → MongoDB Atlas
+```
+
+- **Production** and **staging** each have their own CloudFront, S3 bucket, Lambda, API Gateway, and Atlas cluster.
+- Session auth uses **httpOnly cookies**; the browser should only talk to the CloudFront origin (not API Gateway directly).
+
+---
+
 ## Prerequisites
 
 - Node.js 18+
 - MongoDB running locally (`mongodb://127.0.0.1:27017`) **or** set `USE_MEMORY_DB=true` in `server/.env` for local dev without MongoDB
 
-## First-time setup
+For AWS deploys: AWS CLI, SAM CLI, and credentials for IAM user `grubpac-attendance` — see [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+---
+
+## First-time setup (local)
 
 ```powershell
 cd "c:\Users\salun\Downloads\Company Data\attendance-web"
@@ -16,7 +47,9 @@ copy server\.env.example server\.env
 npm run seed
 ```
 
-## Run the web app
+---
+
+## Run the web app (local)
 
 From the project root (`attendance-web/`):
 
@@ -32,14 +65,17 @@ This will:
 
 Open **http://localhost:5173** in your browser.
 
-### Other commands
+### Other local commands
 
 | Command | Description |
 |---------|-------------|
 | `npm run kill` | Free ports 5000 and 5173 only |
-| `npm run seed` | Seed admin user + default office (kills ports first) |
+| `npm run seed` | Seed admin user + default office (uses `server/.env`) |
+| `npm run seed:wipe` | Wipe and re-seed (local DB) |
 | `npm run start` | Production server + dev client (kills ports first) |
 | `npm run verify` | Run automated API + geo + IST verification tests |
+| `npm run jobs:accrual` | Run leave accrual job (uses `server/.env`) |
+| `npm run jobs:carry-forward` | Run carry-forward job (uses `server/.env`) |
 
 ### Default admin login
 
@@ -47,6 +83,46 @@ Open **http://localhost:5173** in your browser.
 - Password: `Grubpac@Admin2026`
 
 (Configurable in `server/.env`)
+
+---
+
+## Deploy quick reference
+
+Full steps, AWS IDs, MongoDB, and security: **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
+
+### Staging
+
+```powershell
+cd "c:\Users\salun\Downloads\Company Data\attendance-web"
+npm run deploy:staging:api        # backend (Lambda)
+npm run deploy:staging:frontend   # client → S3 → CloudFront
+```
+
+Requires local `samconfig.staging.toml` (copy from `samconfig.staging.example.toml`; **gitignored**).
+
+### Production
+
+```powershell
+npm run prepare:lambda
+sam build
+sam deploy
+
+cd client
+npm run build
+aws s3 sync dist s3://grubpac-attendance-web-662252246711 --delete
+aws cloudfront create-invalidation --distribution-id E2RTSX0V53UZVH --paths "/*"
+```
+
+Uses committed `samconfig.toml`.
+
+### Health checks
+
+| Environment | URL |
+|-------------|-----|
+| Staging | https://d24p2zn8763d4h.cloudfront.net/api/health |
+| Production | https://d1qk2thz664f5x.cloudfront.net/api/health |
+
+---
 
 ## Enterprise features
 
@@ -63,6 +139,8 @@ Open **http://localhost:5173** in your browser.
 
 Run `npm run verify` for **35 automated tests** covering geo, auth, validation, and pagination.
 
+---
+
 ## Project structure
 
 ```text
@@ -71,7 +149,11 @@ attendance-web/
   client/
     public/assets/branding/grubpac-logo.png   # Company logo
     src/config/branding.js                    # Branding constants for UI
-  server/                                     # Express API
+  server/                                     # Express API (+ Lambda handler)
   scripts/kill-ports.mjs                      # Auto port cleanup on run
-  package.json                                # Root dev orchestration
+  template.yaml                               # SAM template (prod + staging params)
+  samconfig.toml                              # Production SAM deploy config
+  samconfig.staging.example.toml              # Staging SAM template (copy locally)
+  DEPLOYMENT.md                               # Full deploy reference
+  package.json                                # Root dev + deploy orchestration
 ```

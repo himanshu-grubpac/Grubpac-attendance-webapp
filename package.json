@@ -16,7 +16,9 @@
     "jobs:carry-forward": "node --env-file=server/.env scripts/run-jobs.mjs carry-forward",
     "test:server": "npm run test --prefix server",
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
-    "prepare:lambda": "node scripts/prepare-lambda.mjs"
+    "prepare:lambda": "node scripts/prepare-lambda.mjs",
+    "deploy:staging:api": "npm run prepare:lambda && sam build && sam deploy --config-file samconfig.staging.toml --no-confirm-changeset",
+    "deploy:staging:frontend": "npm run build --prefix client && aws s3 sync client/dist s3://grubpac-attendance-web-staging-662252246711 --delete && aws cloudfront create-invalidation --distribution-id E2RJX8BNEIE0D --paths \"/*\""
   },
   "dependencies": {
     "mongodb": "^7.5.0",

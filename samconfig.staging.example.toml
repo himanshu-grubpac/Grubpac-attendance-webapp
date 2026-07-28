@@ -1,0 +1,16 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "grubpac-attendance-api-staging"
+resolve_s3 = true
+s3_prefix = "grubpac-attendance-api-staging"
+region = "ap-south-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+# Copy to samconfig.staging.toml and fill MongoDbUri + JwtSecret locally (gitignored).
+parameter_overrides = "ApiFunctionName=\"grubpac-attendance-api-staging\" ClientOrigin=\"https://d24p2zn8763d4h.cloudfront.net\" MongoDbUri=\"REPLACE_ME\" JwtSecret=\"REPLACE_ME_STAGING_JWT_MIN_32_CHARS\""
+
+[default.global.parameters]
+region = "ap-south-1"

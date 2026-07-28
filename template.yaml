@@ -23,6 +23,10 @@ Parameters:
     Type: String
     Default: https://localhost
     Description: Frontend origin for CORS (CloudFront URL later)
+  ApiFunctionName:
+    Type: String
+    Default: grubpac-attendance-api
+    Description: Lambda function name (use grubpac-attendance-api-staging for staging)
 
 Resources:
   AttendanceApi:
@@ -50,7 +54,7 @@ Resources:
   AttendanceFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: grubpac-attendance-api
+      FunctionName: !Ref ApiFunctionName
       Handler: server/src/lambda.handler
       CodeUri: lambda-package/
       Environment:
