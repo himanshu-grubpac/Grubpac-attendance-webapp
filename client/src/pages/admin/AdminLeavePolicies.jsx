@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { adjustLeaveBalanceSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
+import { adjustLeaveBalanceSchema, createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -25,6 +25,26 @@ const emptyCreditForm = {
   toYear: currentCalendarYear,
   carried: '',
   reason: '',
+};
+
+const emptyTypeForm = {
+  code: '',
+  name: '',
+  isActive: true,
+};
+
+const emptyPolicyForm = {
+  leaveTypeId: '',
+  year: String(currentCalendarYear),
+  annualQuota: '',
+  accrualPerMonth: '0',
+  carryForwardMax: '0',
+  maxAccumulation: '0',
+  requireDocAfterConsecutiveDays: '',
+  encashmentMaxPerYear: '0',
+  combinedCarryGroup: '',
+  paid: true,
+  isActive: true,
 };
 
 function buildYearOptions() {
@@ -108,13 +128,24 @@ function formToPayload(form) {
   };
 }
 
+function createPolicyFormToPayload(form) {
+  return {
+    leaveTypeId: form.leaveTypeId,
+    year: Number(form.year),
+    ...formToPayload(form),
+  };
+}
+
 export default function AdminLeavePolicies() {
   const { showSuccess } = useToast();
   const { hasPermission } = useAuth();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const editModalTitleId = useId();
   const balanceModalTitleId = useId();
+  const addTypeModalTitleId = useId();
+  const addPolicyModalTitleId = useId();
   const canAdjustBalances = hasPermission(PERMISSIONS.LEAVE_ADJUST_BALANCES);
+  const canManagePolicies = hasPermission(PERMISSIONS.LEAVE_MANAGE_POLICIES);
 
   const [policies, setPolicies] = useState([]);
   const [policyYear, setPolicyYear] = useState(String(currentCalendarYear));
@@ -138,6 +169,18 @@ export default function AdminLeavePolicies() {
   const [creditErrors, setCreditErrors] = useState({});
   const [balanceError, setBalanceError] = useState('');
   const [creditSubmitting, setCreditSubmitting] = useState(false);
+
+  const [typeModalOpen, setTypeModalOpen] = useState(false);
+  const [typeForm, setTypeForm] = useState(emptyTypeForm);
+  const [typeFieldErrors, setTypeFieldErrors] = useState({});
+  const [typeModalError, setTypeModalError] = useState('');
+  const [typeSubmitting, setTypeSubmitting] = useState(false);
+
+  const [policyModalOpen, setPolicyModalOpen] = useState(false);
+  const [policyForm, setPolicyForm] = useState(emptyPolicyForm);
+  const [policyFieldErrors, setPolicyFieldErrors] = useState({});
+  const [policyModalError, setPolicyModalError] = useState('');
+  const [policySubmitting, setPolicySubmitting] = useState(false);
 
   const requestKeyRef = useRef('');
 
@@ -165,6 +208,20 @@ export default function AdminLeavePolicies() {
     loadPolicies();
   }, [loadPolicies]);
 
+  const loadLeaveTypes = useCallback(async () => {
+    try {
+      const typeData = await leaveApi.listTypes();
+      setLeaveTypes(typeData.types ?? []);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!canManagePolicies) return;
+    loadLeaveTypes();
+  }, [canManagePolicies, loadLeaveTypes]);
+
   useEffect(() => {
     if (!canAdjustBalances || !balanceModalOpen) return;
 
@@ -177,17 +234,6 @@ export default function AdminLeavePolicies() {
       .then((employeeData) => setEmployees(employeeData.employees ?? []))
       .catch((err) => setBalanceError(getErrorMessage(err)));
   }, [canAdjustBalances, balanceModalOpen, debouncedEmployeeSearch]);
-
-  useEffect(() => {
-    if (!canAdjustBalances || !balanceModalOpen) return;
-
-    leaveApi
-      .listTypes()
-      .then((typeData) => {
-        setLeaveTypes((typeData.types ?? []).filter((item) => item.isActive));
-      })
-      .catch((err) => setBalanceError(getErrorMessage(err)));
-  }, [canAdjustBalances, balanceModalOpen]);
 
   useEffect(() => {
     if (!canAdjustBalances || !balanceModalOpen || !creditForm.userId) {
@@ -350,8 +396,113 @@ export default function AdminLeavePolicies() {
     setModalError('');
   }
 
+  function openTypeModal() {
+    setTypeForm(emptyTypeForm);
+    setTypeFieldErrors({});
+    setTypeModalError('');
+    setTypeModalOpen(true);
+  }
+
+  function closeTypeModal() {
+    if (typeSubmitting) return;
+    setTypeModalOpen(false);
+    setTypeForm(emptyTypeForm);
+    setTypeFieldErrors({});
+    setTypeModalError('');
+  }
+
+  function openPolicyModal() {
+    setPolicyForm({
+      ...emptyPolicyForm,
+      year: policyYear,
+    });
+    setPolicyFieldErrors({});
+    setPolicyModalError('');
+    setPolicyModalOpen(true);
+  }
+
+  function closePolicyModal() {
+    if (policySubmitting) return;
+    setPolicyModalOpen(false);
+    setPolicyForm(emptyPolicyForm);
+    setPolicyFieldErrors({});
+    setPolicyModalError('');
+  }
+
   useEscapeKey(Boolean(modalPolicy), closeModal);
   useEscapeKey(balanceModalOpen && !creditSubmitting, closeBalanceModal);
+  useEscapeKey(typeModalOpen && !typeSubmitting, closeTypeModal);
+  useEscapeKey(policyModalOpen && !policySubmitting, closePolicyModal);
+
+  async function handleTypeSubmit(event) {
+    event.preventDefault();
+    setTypeModalError('');
+
+    const payload = {
+      code: typeForm.code.trim().toUpperCase(),
+      name: typeForm.name.trim(),
+      isActive: Boolean(typeForm.isActive),
+    };
+    const validation = validateForm(createLeaveTypeSchema, payload);
+
+    if (!validation.data) {
+      setTypeFieldErrors(validation.errors);
+      return;
+    }
+
+    setTypeFieldErrors({});
+    setTypeSubmitting(true);
+
+    try {
+      await leaveApi.createType(validation.data);
+      showSuccess(`Leave type ${validation.data.code} created.`);
+      closeTypeModal();
+      await loadLeaveTypes();
+    } catch (err) {
+      setTypeModalError(getErrorMessage(err));
+    } finally {
+      setTypeSubmitting(false);
+    }
+  }
+
+  async function handlePolicyCreateSubmit(event) {
+    event.preventDefault();
+    setPolicyModalError('');
+
+    if (!policyForm.leaveTypeId) {
+      setPolicyFieldErrors({ leaveTypeId: 'Select a leave type.' });
+      return;
+    }
+
+    const payload = createPolicyFormToPayload(policyForm);
+    const validation = validateForm(createLeavePolicySchema, payload);
+
+    if (!validation.data) {
+      setPolicyFieldErrors(validation.errors);
+      return;
+    }
+
+    setPolicyFieldErrors({});
+    setPolicySubmitting(true);
+
+    try {
+      await leaveApi.createPolicy(validation.data);
+      const typeLabel = leaveTypes.find((item) => item.id === validation.data.leaveTypeId);
+      showSuccess(
+        `Policy for ${typeLabel?.code ?? 'leave type'} (${validation.data.year}) created.`,
+      );
+      closePolicyModal();
+      if (String(validation.data.year) !== policyYear) {
+        setPolicyYear(String(validation.data.year));
+      } else {
+        await loadPolicies();
+      }
+    } catch (err) {
+      setPolicyModalError(getErrorMessage(err));
+    } finally {
+      setPolicySubmitting(false);
+    }
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -412,6 +563,16 @@ export default function AdminLeavePolicies() {
               Showing {policyYear}
             </span>
           </div>
+          {canManagePolicies ? (
+            <div className="leave-policies-toolbar__actions">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={openTypeModal}>
+                Add leave type
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={openPolicyModal}>
+                Add policy
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
@@ -422,7 +583,14 @@ export default function AdminLeavePolicies() {
           <EmptyState
             icon={EMPTY_ICONS.leave}
             title={`No leave policies for ${policyYear}`}
-            description="Policies are configured per leave type and calendar year. Run migration/seed or create policies for this year."
+            description="Policies are configured per leave type and calendar year. Add a leave type and policy for this year."
+            action={
+              canManagePolicies ? (
+                <button type="button" className="btn btn-primary btn-sm" onClick={openPolicyModal}>
+                  Add policy
+                </button>
+              ) : null
+            }
           />
         ) : (
           <div className="table-wrap table-wrap--responsive leave-policies-table-wrap">
@@ -575,7 +743,9 @@ export default function AdminLeavePolicies() {
                           onChange={(value) => setCreditForm({ ...creditForm, leaveTypeId: value })}
                           options={[
                             { value: '', label: 'Select type' },
-                            ...leaveTypes.map((item) => ({
+                            ...leaveTypes
+                              .filter((item) => item.isActive)
+                              .map((item) => ({
                               value: item.id,
                               label: `${item.code} — ${item.name}`,
                             })),
@@ -747,6 +917,314 @@ export default function AdminLeavePolicies() {
         : null}
 
       {confirmDialog}
+
+      {typeModalOpen
+        ? createPortal(
+            <div className="modal__backdrop" role="presentation" onClick={closeTypeModal}>
+              <div
+                className="modal leave-policies-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={addTypeModalTitleId}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="modal__header">
+                  <h2 id={addTypeModalTitleId} className="modal__title">
+                    Add leave type
+                  </h2>
+                  <p className="modal__lead muted">
+                    Create a new leave type code and name. Policies are added separately per year.
+                  </p>
+                </header>
+
+                <form className="modal__form" onSubmit={handleTypeSubmit}>
+                  <div className="modal__body leave-policies-modal__body">
+                    {typeModalError ? (
+                      <div className="alert alert--error modal__alert">{typeModalError}</div>
+                    ) : null}
+
+                    <div className="leave-policies-modal__grid">
+                      <label className="modal__field">
+                        <span className="label">Code</span>
+                        <input
+                          autoFocus
+                          className="input input--narrow"
+                          type="text"
+                          maxLength={5}
+                          placeholder="e.g. SL"
+                          value={typeForm.code}
+                          onChange={(event) =>
+                            setTypeForm({ ...typeForm, code: event.target.value.toUpperCase() })
+                          }
+                        />
+                        <FieldError message={typeFieldErrors.code} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Name</span>
+                        <input
+                          className="input"
+                          type="text"
+                          maxLength={100}
+                          placeholder="e.g. Sick Leave"
+                          value={typeForm.name}
+                          onChange={(event) =>
+                            setTypeForm({ ...typeForm, name: event.target.value })
+                          }
+                        />
+                        <FieldError message={typeFieldErrors.name} />
+                      </label>
+                    </div>
+
+                    <div className="leave-policies-modal__flags">
+                      <label className="field-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={typeForm.isActive}
+                          onChange={(event) =>
+                            setTypeForm({ ...typeForm, isActive: event.target.checked })
+                          }
+                        />
+                        <span>Active leave type</span>
+                      </label>
+                      <FieldError message={typeFieldErrors.isActive} />
+                    </div>
+                  </div>
+
+                  <footer className="modal__footer">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={closeTypeModal}
+                      disabled={typeSubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={typeSubmitting}>
+                      {typeSubmitting ? 'Creating…' : 'Create leave type'}
+                    </button>
+                  </footer>
+                </form>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {policyModalOpen
+        ? createPortal(
+            <div className="modal__backdrop" role="presentation" onClick={closePolicyModal}>
+              <div
+                className="modal modal--wide leave-policies-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={addPolicyModalTitleId}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="modal__header">
+                  <h2 id={addPolicyModalTitleId} className="modal__title">
+                    Add leave policy
+                  </h2>
+                  <p className="modal__lead muted">
+                    Configure quota and rules for a leave type in a calendar year.
+                  </p>
+                </header>
+
+                <form className="modal__form" onSubmit={handlePolicyCreateSubmit}>
+                  <div className="modal__body leave-policies-modal__body">
+                    {policyModalError ? (
+                      <div className="alert alert--error modal__alert">{policyModalError}</div>
+                    ) : null}
+
+                    <div className="leave-policies-modal__grid">
+                      <label className="modal__field">
+                        <span className="label">Leave type</span>
+                        <SelectField
+                          value={policyForm.leaveTypeId}
+                          onChange={(value) =>
+                            setPolicyForm({ ...policyForm, leaveTypeId: value })
+                          }
+                          options={[
+                            { value: '', label: 'Select type' },
+                            ...leaveTypes.map((item) => ({
+                              value: item.id,
+                              label: `${item.code} — ${item.name}`,
+                            })),
+                          ]}
+                          placeholder="Select type"
+                          aria-label="Leave type"
+                        />
+                        <FieldError message={policyFieldErrors.leaveTypeId} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Policy year</span>
+                        <SelectField
+                          value={policyForm.year}
+                          onChange={(value) => setPolicyForm({ ...policyForm, year: value })}
+                          options={balanceYearOptions}
+                          aria-label="Policy year"
+                        />
+                        <FieldError message={policyFieldErrors.year} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Annual quota (days)</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={0}
+                          max={365}
+                          value={policyForm.annualQuota}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, annualQuota: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.annualQuota} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Accrual per month</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={0}
+                          max={31}
+                          step="0.5"
+                          value={policyForm.accrualPerMonth}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, accrualPerMonth: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.accrualPerMonth} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Max accumulation (days)</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={0}
+                          max={365}
+                          value={policyForm.maxAccumulation}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, maxAccumulation: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.maxAccumulation} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Carry-forward max (days)</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={0}
+                          max={365}
+                          value={policyForm.carryForwardMax}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, carryForwardMax: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.carryForwardMax} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Encashment max per year</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={0}
+                          max={365}
+                          value={policyForm.encashmentMaxPerYear}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, encashmentMaxPerYear: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.encashmentMaxPerYear} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Doc required after (consecutive days)</span>
+                        <input
+                          className="input input--narrow"
+                          type="number"
+                          min={1}
+                          max={30}
+                          placeholder="Not required"
+                          value={policyForm.requireDocAfterConsecutiveDays}
+                          onChange={(event) =>
+                            setPolicyForm({
+                              ...policyForm,
+                              requireDocAfterConsecutiveDays: event.target.value,
+                            })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.requireDocAfterConsecutiveDays} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Combined carry group</span>
+                        <input
+                          className="input input--narrow"
+                          type="text"
+                          maxLength={20}
+                          placeholder="Optional"
+                          value={policyForm.combinedCarryGroup}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, combinedCarryGroup: event.target.value })
+                          }
+                        />
+                        <FieldError message={policyFieldErrors.combinedCarryGroup} />
+                      </label>
+                    </div>
+
+                    <div className="leave-policies-modal__flags">
+                      <label className="field-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={policyForm.paid}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, paid: event.target.checked })
+                          }
+                        />
+                        <span>Paid leave</span>
+                      </label>
+                      <FieldError message={policyFieldErrors.paid} />
+
+                      <label className="field-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={policyForm.isActive}
+                          onChange={(event) =>
+                            setPolicyForm({ ...policyForm, isActive: event.target.checked })
+                          }
+                        />
+                        <span>Active policy</span>
+                      </label>
+                      <FieldError message={policyFieldErrors.isActive} />
+                    </div>
+                  </div>
+
+                  <footer className="modal__footer">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={closePolicyModal}
+                      disabled={policySubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={policySubmitting}>
+                      {policySubmitting ? 'Creating…' : 'Create policy'}
+                    </button>
+                  </footer>
+                </form>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {modalPolicy && form ? (
         <div className="modal__backdrop" role="presentation" onClick={closeModal}>

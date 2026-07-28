@@ -209,7 +209,9 @@ export const notificationsApi = {
 
 export const leaveApi = {
   listTypes: () => api.get('/leave/types').then((r) => r.data),
+  createType: (payload) => api.post('/leave/types', payload).then((r) => r.data),
   listPolicies: (params = {}) => api.get('/leave/policies', { params }).then((r) => r.data),
+  createPolicy: (payload) => api.post('/leave/policies', payload).then((r) => r.data),
   updatePolicy: (id, payload) => api.patch(`/leave/policies/${id}`, payload).then((r) => r.data),
   getMyBalances: (params = {}) => api.get('/leave/balances/me', { params }).then((r) => r.data),
   getBalances: (params = {}) => api.get('/leave/balances', { params }).then((r) => r.data),

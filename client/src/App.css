@@ -10907,6 +10907,11 @@ a.user-chip:hover {
 }
 
 .leave-policies-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -10916,6 +10921,20 @@ a.user-chip:hover {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: min(100%, 16rem);
+}
+
+.leave-policies-toolbar__actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.leave-policies-toolbar__actions .btn {
+  white-space: nowrap;
 }
 
 .leave-policies-toolbar__year-badge {

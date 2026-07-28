@@ -9,6 +9,7 @@
     "seed": "node src/seed.js",
     "seed:wipe": "node src/seed.js --wipe",
     "seed:holidays": "node src/seedIndiaHolidays.js",
+    "wipe:keep-holidays-geo": "node src/wipeKeepHolidaysGeo.js",
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
     "test": "node --test src/**/*.test.js"
