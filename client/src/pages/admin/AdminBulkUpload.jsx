@@ -24,6 +24,17 @@ const BULK_REGULATIONS = [
   'New employees are assigned the default Employee role.',
 ];
 
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function statusPillClass(status) {
   if (status === 'success') return 'stat-pill stat-pill--success';
   if (status === 'duplicate') return 'stat-pill stat-pill--warning';
@@ -160,12 +171,7 @@ export default function AdminBulkUpload() {
     setError('');
     try {
       const blob = await adminApi.downloadTemplate();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = 'employee-registration-template.xlsx';
-      anchor.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, 'employee-registration-template.xlsx');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

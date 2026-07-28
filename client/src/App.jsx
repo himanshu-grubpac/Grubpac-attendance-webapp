@@ -179,7 +179,7 @@ export default function App() {
               />
               <Route
                 path="admin/leave/balances"
-                element={<Navigate to="/admin/leave/team-calendar" replace />}
+                element={<Navigate to="/admin/leave/policies" replace />}
               />
               <Route
                 path="admin/salary"

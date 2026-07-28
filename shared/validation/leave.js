@@ -25,8 +25,13 @@ export const updateLeaveTypeSchema = z
     message: 'At least one field is required.',
   });
 
+export const leavePolicyQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
 export const createLeavePolicySchema = z.object({
   leaveTypeId: objectIdSchema,
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
   annualQuota: z.number().min(0).max(365),
   accrualPerMonth: z.number().min(0).max(31).default(0),
   carryForwardMax: z.number().min(0).max(365).default(0),

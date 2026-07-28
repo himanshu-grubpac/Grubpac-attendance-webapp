@@ -10906,6 +10906,22 @@ a.user-chip:hover {
   overflow: hidden;
 }
 
+.leave-policies-toolbar {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.leave-policies-toolbar__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.leave-policies-toolbar__year-badge {
+  align-self: center;
+}
+
 .leave-policies-panel .alert {
   margin: 0 var(--space-4);
 }

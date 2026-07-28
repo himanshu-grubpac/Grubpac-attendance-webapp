@@ -86,8 +86,39 @@ export const adminApi = {
     api.patch(`/admin/users/${id}`, { isActive }).then((r) => r.data),
   resetEmployeePassword: (id, payload) =>
     api.patch(`/admin/users/${id}/password`, payload).then((r) => r.data),
-  downloadTemplate: () =>
-    api.get('/admin/users/template', { responseType: 'blob' }).then((r) => r.data),
+  downloadTemplate: async () => {
+    const response = await fetch('/api/admin/users/template', {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to download template.';
+      try {
+        const body = await response.json();
+        message = body.message ?? message;
+      } catch {
+        // Non-JSON error body — keep default message.
+      }
+      throw new Error(message);
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength < 4) {
+      throw new Error('Downloaded template file is empty.');
+    }
+
+    const magic = new Uint8Array(buffer.slice(0, 2));
+    if (magic[0] !== 0x50 || magic[1] !== 0x4b) {
+      throw new Error('Downloaded file is not a valid Excel workbook.');
+    }
+
+    return new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+  },
   bulkUpload: (file) => {
     const form = new FormData();
     form.append('file', file);
@@ -173,7 +204,7 @@ export const notificationsApi = {
 
 export const leaveApi = {
   listTypes: () => api.get('/leave/types').then((r) => r.data),
-  listPolicies: () => api.get('/leave/policies').then((r) => r.data),
+  listPolicies: (params = {}) => api.get('/leave/policies', { params }).then((r) => r.data),
   updatePolicy: (id, payload) => api.patch(`/leave/policies/${id}`, payload).then((r) => r.data),
   getMyBalances: (params = {}) => api.get('/leave/balances/me', { params }).then((r) => r.data),
   getBalances: (params = {}) => api.get('/leave/balances', { params }).then((r) => r.data),
@@ -203,9 +234,6 @@ export const leaveApi = {
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
   encashBalance: (userId, payload) =>
     api.post(`/leave/balances/${userId}/encash`, payload).then((r) => r.data),
-  applyCarryForward: (payload) => api.post('/leave/carry-forward', payload).then((r) => r.data),
-  previewCarryForward: (params = {}) =>
-    api.get('/leave/carry-forward/preview', { params }).then((r) => r.data),
   runAccrualJob: () => api.post('/leave/jobs/accrual').then((r) => r.data),
 };
 

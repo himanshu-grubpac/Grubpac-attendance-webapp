@@ -39,10 +39,10 @@ const PAGE_META = [
   {
     match: '/admin/leave/policies',
     title: 'Leave policies',
-    subtitle: 'Configure annual quotas, accrual, carry-forward, and encashment rules per leave type.',
+    subtitle:
+      'Configure leave rules per type and manually enter opening carried days for employees.',
   },
   { match: '/admin/leave/holidays', title: 'Holidays', subtitle: '' },
-  { match: '/admin/leave/balances', title: 'Adjust balances', subtitle: '' },
   {
     match: '/admin/salary',
     title: 'Salary Management',

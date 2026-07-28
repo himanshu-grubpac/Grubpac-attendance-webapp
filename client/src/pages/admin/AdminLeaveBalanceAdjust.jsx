@@ -9,14 +9,18 @@ import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 
-const emptyForm = {
+const emptyCreditForm = {
   userId: '',
   leaveTypeId: '',
   year: new Date().getFullYear(),
+  carried: '',
+  reason: '',
+};
+
+const emptyAdjustForm = {
   entitled: '',
   used: '',
   pending: '',
-  carried: '',
   encashed: '',
   reason: '',
 };
@@ -34,13 +38,14 @@ export default function AdminLeaveBalanceAdjust() {
   const debouncedEmployeeSearch = useDebouncedValue(employeeSearch, 350);
   const [types, setTypes] = useState([]);
   const [balances, setBalances] = useState([]);
-  const [form, setForm] = useState(emptyForm);
+  const [creditForm, setCreditForm] = useState(emptyCreditForm);
+  const [adjustForm, setAdjustForm] = useState(emptyAdjustForm);
   const [encashForm, setEncashForm] = useState(emptyEncashForm);
-  const [cfYear, setCfYear] = useState(new Date().getFullYear() - 1);
-  const [fieldErrors, setFieldErrors] = useState({});
+  const [creditErrors, setCreditErrors] = useState({});
+  const [adjustErrors, setAdjustErrors] = useState({});
   const [encashErrors, setEncashErrors] = useState({});
   const [error, setError] = useState('');
-  const [cfSubmitting, setCfSubmitting] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     adminApi
@@ -60,42 +65,103 @@ export default function AdminLeaveBalanceAdjust() {
   }, []);
 
   useEffect(() => {
-    if (!form.userId) {
+    if (!creditForm.userId) {
       setBalances([]);
       return;
     }
 
     leaveApi
-      .getBalances({ userId: form.userId, year: form.year })
+      .getBalances({ userId: creditForm.userId, year: creditForm.year })
       .then((data) => setBalances(data.balances ?? []))
       .catch((err) => setError(getErrorMessage(err)));
-  }, [form.userId, form.year]);
+  }, [creditForm.userId, creditForm.year]);
 
-  async function handleSubmit(event) {
+  async function refreshBalances() {
+    if (!creditForm.userId) return;
+    const data = await leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.year });
+    setBalances(data.balances ?? []);
+  }
+
+  async function handleCreditSubmit(event) {
     event.preventDefault();
     setError('');
 
+    if (!creditForm.userId) {
+      setError('Select an employee.');
+      return;
+    }
+
+    if (creditForm.carried === '' || Number.isNaN(Number(creditForm.carried))) {
+      setCreditErrors({ carried: 'Enter the number of carried days.' });
+      return;
+    }
+
     const payload = {
-      leaveTypeId: form.leaveTypeId,
-      year: Number(form.year),
-      reason: form.reason,
-      ...(form.entitled !== '' ? { entitled: Number(form.entitled) } : {}),
-      ...(form.used !== '' ? { used: Number(form.used) } : {}),
-      ...(form.pending !== '' ? { pending: Number(form.pending) } : {}),
-      ...(form.carried !== '' ? { carried: Number(form.carried) } : {}),
-      ...(form.encashed !== '' ? { encashed: Number(form.encashed) } : {}),
+      leaveTypeId: creditForm.leaveTypeId,
+      year: Number(creditForm.year),
+      carried: Number(creditForm.carried),
+      reason: creditForm.reason.trim(),
     };
 
     const validation = validateForm(adjustLeaveBalanceSchema, payload);
     if (!validation.data) {
-      setFieldErrors(validation.errors);
+      setCreditErrors(validation.errors);
       return;
     }
 
-    if (!form.userId) {
-      setError('Select an employee.');
+    setCreditErrors({});
+
+    await requestConfirm({
+      title: 'Apply manual leave credit?',
+      message: `Set ${validation.data.carried} carried day(s) for the selected employee and leave type in ${validation.data.year}?`,
+      confirmLabel: 'Apply credit',
+      variant: 'danger',
+      onConfirm: async () => {
+        await leaveApi.adjustBalance(creditForm.userId, validation.data);
+        showSuccess('Leave credit applied.');
+        setCreditForm((prev) => ({ ...prev, carried: '', reason: '' }));
+        await refreshBalances();
+      },
+    });
+  }
+
+  async function handleAdjustSubmit(event) {
+    event.preventDefault();
+    setError('');
+
+    if (!creditForm.userId || !creditForm.leaveTypeId) {
+      setError('Select employee and leave type before adjusting other fields.');
       return;
     }
+
+    const payload = {
+      leaveTypeId: creditForm.leaveTypeId,
+      year: Number(creditForm.year),
+      reason: adjustForm.reason,
+      ...(adjustForm.entitled !== '' ? { entitled: Number(adjustForm.entitled) } : {}),
+      ...(adjustForm.used !== '' ? { used: Number(adjustForm.used) } : {}),
+      ...(adjustForm.pending !== '' ? { pending: Number(adjustForm.pending) } : {}),
+      ...(adjustForm.encashed !== '' ? { encashed: Number(adjustForm.encashed) } : {}),
+    };
+
+    const validation = validateForm(adjustLeaveBalanceSchema, payload);
+    if (!validation.data) {
+      setAdjustErrors(validation.errors);
+      return;
+    }
+
+    const hasFieldChange =
+      validation.data.entitled !== undefined ||
+      validation.data.used !== undefined ||
+      validation.data.pending !== undefined ||
+      validation.data.encashed !== undefined;
+
+    if (!hasFieldChange) {
+      setAdjustErrors({ entitled: 'Enter at least one balance field to adjust.' });
+      return;
+    }
+
+    setAdjustErrors({});
 
     await requestConfirm({
       title: 'Apply balance adjustment?',
@@ -103,11 +169,10 @@ export default function AdminLeaveBalanceAdjust() {
       confirmLabel: 'Save adjustment',
       variant: 'danger',
       onConfirm: async () => {
-        setFieldErrors({});
-        await leaveApi.adjustBalance(form.userId, validation.data);
+        await leaveApi.adjustBalance(creditForm.userId, validation.data);
         showSuccess('Balance adjusted.');
-        const data = await leaveApi.getBalances({ userId: form.userId, year: form.year });
-        setBalances(data.balances ?? []);
+        setAdjustForm(emptyAdjustForm);
+        await refreshBalances();
       },
     });
   }
@@ -116,14 +181,14 @@ export default function AdminLeaveBalanceAdjust() {
     event.preventDefault();
     setError('');
 
-    if (!form.userId || !form.leaveTypeId) {
+    if (!creditForm.userId || !creditForm.leaveTypeId) {
       setError('Select employee and leave type for encashment.');
       return;
     }
 
     const payload = {
-      leaveTypeId: form.leaveTypeId,
-      year: Number(form.year),
+      leaveTypeId: creditForm.leaveTypeId,
+      year: Number(creditForm.year),
       days: Number(encashForm.days),
       reason: encashForm.reason,
     };
@@ -142,36 +207,10 @@ export default function AdminLeaveBalanceAdjust() {
       confirmLabel: 'Record encashment',
       variant: 'danger',
       onConfirm: async () => {
-        await leaveApi.encashBalance(form.userId, validation.data);
+        await leaveApi.encashBalance(creditForm.userId, validation.data);
         showSuccess('Encashment recorded (balance reduced; not a payroll payout).');
         setEncashForm(emptyEncashForm);
-        const data = await leaveApi.getBalances({ userId: form.userId, year: form.year });
-        setBalances(data.balances ?? []);
-      },
-    });
-  }
-
-  async function handleCarryForward() {
-    await requestConfirm({
-      title: 'Apply year-end carry-forward?',
-      message: `Apply carry-forward from ${cfYear} to ${cfYear + 1} for all active employees? This affects leave balances company-wide.`,
-      confirmLabel: 'Apply carry-forward',
-      variant: 'danger',
-      onConfirm: async () => {
-        setCfSubmitting(true);
-        setError('');
-        try {
-          const result = await leaveApi.applyCarryForward({ fromYear: cfYear });
-          showSuccess(
-            `Carry-forward applied: ${result.adjustments} balance adjustment(s) for ${cfYear} → ${result.toYear}.`,
-          );
-          if (form.userId) {
-            const data = await leaveApi.getBalances({ userId: form.userId, year: form.year });
-            setBalances(data.balances ?? []);
-          }
-        } finally {
-          setCfSubmitting(false);
-        }
+        await refreshBalances();
       },
     });
   }
@@ -185,34 +224,16 @@ export default function AdminLeaveBalanceAdjust() {
       ) : null}
 
       <div className="card">
-        <div className="toolbar-row">
-          <label className="field-inline form-field--sm">
-            <span className="label">Carry-forward from year</span>
-            <input
-              className="input--narrow"
-              type="number"
-              min="2000"
-              max="2100"
-              value={cfYear}
-              onChange={(event) => setCfYear(Number(event.target.value))}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={cfSubmitting}
-            onClick={handleCarryForward}
-          >
-            {cfSubmitting ? 'Applying…' : 'Apply year-end carry-forward'}
-          </button>
-          <span className="muted small form-actions__hint">
-            SL max CF 23; CL+EL combined CF 20 (handbook caps).
-          </span>
-        </div>
+        <p className="card__section-title">Manual leave balance entry</p>
+        <p className="muted small">
+          Enter opening carried days for each employee and leave type at year start (enhanced leave,
+          cash-in, or last-year balance). Amounts are typed manually — the system does not auto-calculate
+          carry-forward.
+        </p>
       </div>
 
-      <form className="card card--form form-grid" onSubmit={handleSubmit}>
-        <p className="card__section-title form-grid__full">Adjust balance</p>
+      <form className="card card--form form-grid" onSubmit={handleCreditSubmit}>
+        <p className="card__section-title form-grid__full">Add carried days</p>
         <label className="form-grid__full">
           <span className="label">Employee</span>
           <div className="field-stack">
@@ -223,8 +244,8 @@ export default function AdminLeaveBalanceAdjust() {
               ariaLabel="Search employees"
             />
             <SelectField
-              value={form.userId}
-              onChange={(value) => setForm({ ...form, userId: value })}
+              value={creditForm.userId}
+              onChange={(value) => setCreditForm({ ...creditForm, userId: value })}
               options={[
                 { value: '', label: 'Select employee' },
                 ...employees.map((employee) => ({
@@ -241,8 +262,8 @@ export default function AdminLeaveBalanceAdjust() {
         <label>
           <span className="label">Leave type</span>
           <SelectField
-            value={form.leaveTypeId}
-            onChange={(value) => setForm({ ...form, leaveTypeId: value })}
+            value={creditForm.leaveTypeId}
+            onChange={(value) => setCreditForm({ ...creditForm, leaveTypeId: value })}
             options={[
               { value: '', label: 'Select type' },
               ...types.map((item) => ({ value: item.id, label: `${item.code} — ${item.name}` })),
@@ -250,49 +271,106 @@ export default function AdminLeaveBalanceAdjust() {
             placeholder="Select type"
             aria-label="Leave type"
           />
-          <FieldError message={fieldErrors.leaveTypeId} />
+          <FieldError message={creditErrors.leaveTypeId} />
         </label>
 
         <label className="form-field--sm">
-          <span className="label">Year</span>
+          <span className="label">Target year</span>
           <input
             className="input--narrow"
             type="number"
-            value={form.year}
-            onChange={(event) => setForm({ ...form, year: Number(event.target.value) })}
+            min="2000"
+            max="2100"
+            value={creditForm.year}
+            onChange={(event) => setCreditForm({ ...creditForm, year: Number(event.target.value) })}
           />
+          <FieldError message={creditErrors.year} />
         </label>
 
-        {['entitled', 'used', 'pending', 'carried', 'encashed'].map((field) => (
-          <label key={field} className="form-field--sm">
-            <span className="label">{field.charAt(0).toUpperCase() + field.slice(1)}</span>
-            <input
-              className="input--narrow"
-              type="number"
-              step="0.5"
-              placeholder="Leave blank to keep unchanged"
-              value={form[field]}
-              onChange={(event) => setForm({ ...form, [field]: event.target.value })}
-            />
-          </label>
-        ))}
+        <label className="form-field--sm">
+          <span className="label">Carried days</span>
+          <input
+            className="input--narrow"
+            type="number"
+            step="0.5"
+            min="0"
+            max="365"
+            placeholder="e.g. 5"
+            value={creditForm.carried}
+            onChange={(event) => setCreditForm({ ...creditForm, carried: event.target.value })}
+          />
+          <FieldError message={creditErrors.carried} />
+        </label>
 
         <label className="form-grid__full">
           <span className="label">Reason</span>
           <input
             type="text"
-            value={form.reason}
-            onChange={(event) => setForm({ ...form, reason: event.target.value })}
+            value={creditForm.reason}
+            onChange={(event) => setCreditForm({ ...creditForm, reason: event.target.value })}
+            placeholder="e.g. Year-end carry-in approved by HR"
           />
-          <FieldError message={fieldErrors.reason} />
+          <FieldError message={creditErrors.reason} />
         </label>
 
         <div className="form-actions form-actions--sticky">
           <button type="submit" className="btn btn-primary">
-            Save adjustment
+            Apply carried days
           </button>
         </div>
       </form>
+
+      <div className="card">
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => setShowAdvanced((value) => !value)}
+          aria-expanded={showAdvanced}
+        >
+          {showAdvanced ? 'Hide advanced adjustment' : 'Show advanced adjustment'}
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <form className="card card--form form-grid" onSubmit={handleAdjustSubmit}>
+          <p className="card__section-title form-grid__full">Adjust other balance fields</p>
+          <p className="muted small form-grid__full">
+            Uses the employee, leave type, and target year selected above. Leave fields blank to keep
+            unchanged.
+          </p>
+
+          {['entitled', 'used', 'pending', 'encashed'].map((field) => (
+            <label key={field} className="form-field--sm">
+              <span className="label">{field.charAt(0).toUpperCase() + field.slice(1)}</span>
+              <input
+                className="input--narrow"
+                type="number"
+                step="0.5"
+                placeholder="Leave blank to keep unchanged"
+                value={adjustForm[field]}
+                onChange={(event) => setAdjustForm({ ...adjustForm, [field]: event.target.value })}
+              />
+              <FieldError message={adjustErrors[field]} />
+            </label>
+          ))}
+
+          <label className="form-grid__full">
+            <span className="label">Reason</span>
+            <input
+              type="text"
+              value={adjustForm.reason}
+              onChange={(event) => setAdjustForm({ ...adjustForm, reason: event.target.value })}
+            />
+            <FieldError message={adjustErrors.reason} />
+          </label>
+
+          <div className="form-actions form-actions--sticky">
+            <button type="submit" className="btn btn-primary">
+              Save adjustment
+            </button>
+          </div>
+        </form>
+      ) : null}
 
       <form className="card card--form form-grid" onSubmit={handleEncash}>
         <p className="card__section-title form-grid__full">Record encashment</p>
@@ -331,34 +409,34 @@ export default function AdminLeaveBalanceAdjust() {
         <div className="card card--table">
           <div className="card__section">
             <p className="card__section-title">Current balances</p>
-          <div className="table-wrap table-wrap--responsive">
-            <table className="table data-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Entitled</th>
-                  <th>Carried</th>
-                  <th>Used</th>
-                  <th>Pending</th>
-                  <th>Encashed</th>
-                  <th>Available</th>
-                </tr>
-              </thead>
-              <tbody>
-                {balances.map((item) => (
-                  <tr key={item.id}>
-                    <td data-label="Type">{item.leaveTypeCode}</td>
-                    <td data-label="Entitled">{item.entitled}</td>
-                    <td data-label="Carried">{item.carried}</td>
-                    <td data-label="Used">{item.used}</td>
-                    <td data-label="Pending">{item.pending}</td>
-                    <td data-label="Encashed">{item.encashed}</td>
-                    <td data-label="Available">{item.available}</td>
+            <div className="table-wrap table-wrap--responsive">
+              <table className="table data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Entitled</th>
+                    <th>Carried</th>
+                    <th>Used</th>
+                    <th>Pending</th>
+                    <th>Encashed</th>
+                    <th>Available</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {balances.map((item) => (
+                    <tr key={item.id}>
+                      <td data-label="Type">{item.leaveTypeCode}</td>
+                      <td data-label="Entitled">{item.entitled}</td>
+                      <td data-label="Carried">{item.carried}</td>
+                      <td data-label="Used">{item.used}</td>
+                      <td data-label="Pending">{item.pending}</td>
+                      <td data-label="Encashed">{item.encashed}</td>
+                      <td data-label="Available">{item.available}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

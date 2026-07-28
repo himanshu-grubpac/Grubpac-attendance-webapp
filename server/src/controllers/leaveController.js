@@ -13,6 +13,7 @@ import {
   encashLeaveSchema,
   leaveBalanceQuerySchema,
   leaveDecisionSchema,
+  leavePolicyQuerySchema,
   leaveRequestQuerySchema,
   previewLeaveDaysQuerySchema,
   teamCalendarQuerySchema,
@@ -96,27 +97,38 @@ export async function updateLeaveType(req, res) {
 }
 
 export async function listLeavePolicies(req, res) {
-  const policies = await LeavePolicy.find().populate(LEAVE_POLICY_POPULATE).sort({ createdAt: 1 });
-  res.json({ policies: policies.map((item) => item.toSafeJSON()) });
+  const parsed = leavePolicyQuerySchema.parse(req.query);
+  const year = parsed.year ?? getISTYear();
+  const currentYear = getISTYear();
+  const yearFilter =
+    year === currentYear
+      ? { $or: [{ year }, { year: { $exists: false } }, { year: null }] }
+      : { year };
+  const policies = await LeavePolicy.find(yearFilter)
+    .populate(LEAVE_POLICY_POPULATE)
+    .sort({ createdAt: 1 });
+  res.json({ year, policies: policies.map((item) => item.toSafeJSON()) });
 }
 
 export async function createLeavePolicy(req, res) {
   const parsed = createLeavePolicySchema.parse(req.body);
+  const year = parsed.year ?? getISTYear();
   const leaveType = await LeaveType.findById(parsed.leaveTypeId);
   if (!leaveType) {
     return res.status(400).json({ message: 'Leave type not found.' });
   }
 
-  const existing = await LeavePolicy.findOne({ leaveTypeId: parsed.leaveTypeId });
+  const existing = await LeavePolicy.findOne({ leaveTypeId: parsed.leaveTypeId, year });
   if (existing) {
-    return res.status(409).json({ message: 'Policy already exists for this leave type.' });
+    return res.status(409).json({ message: 'Policy already exists for this leave type and year.' });
   }
 
-  const policy = await LeavePolicy.create(parsed);
+  const policy = await LeavePolicy.create({ ...parsed, year });
   await policy.populate(LEAVE_POLICY_POPULATE);
   auditLog('leave_policy_created', {
     adminId: req.user._id.toString(),
     policyId: policy._id.toString(),
+    year,
   });
   res.status(201).json({ policy: policy.toSafeJSON() });
 }

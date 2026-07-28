@@ -1,15 +1,48 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { updateLeavePolicySchema } from '@shared/validation/leave.js';
-import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { adjustLeaveBalanceSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
+import { PERMISSIONS } from '@shared/permissions.js';
+import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { validateForm } from '../../utils/validation.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
+import SearchInput from '../../components/SearchInput.jsx';
+import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
+
+const currentCalendarYear = new Date().getFullYear();
+
+const emptyCreditForm = {
+  userId: '',
+  leaveTypeId: '',
+  fromYear: currentCalendarYear - 1,
+  toYear: currentCalendarYear,
+  carried: '',
+  reason: '',
+};
+
+function buildYearOptions() {
+  const years = [];
+  for (let year = currentCalendarYear - 2; year <= currentCalendarYear + 1; year += 1) {
+    years.push({ value: String(year), label: String(year) });
+  }
+  return years;
+}
+
+const balanceYearOptions = buildYearOptions();
+
+function buildCarryAuditReason(fromYear, toYear, userReason) {
+  const prefix = `Carry from ${fromYear} to ${toYear}`;
+  const trimmed = userReason.trim();
+  if (!trimmed) return prefix;
+  return `${prefix}: ${trimmed}`;
+}
 
 function TableSkeleton() {
   return (
@@ -25,137 +58,6 @@ function TableSkeleton() {
 function formatDays(value) {
   if (value == null || Number.isNaN(value)) return '—';
   return Number.isInteger(value) ? String(value) : String(value);
-}
-
-function summarizeCarryForwardEmployees(employees) {
-  let eligibleEmployees = 0;
-  let totalCarried = 0;
-  let totalForfeited = 0;
-
-  for (const employee of employees) {
-    const pendingLines = employee.lines.filter((line) => !line.alreadyApplied && line.carried > 0);
-    if (pendingLines.length === 0) continue;
-    eligibleEmployees += 1;
-    totalCarried += pendingLines.reduce((sum, line) => sum + (line.carried ?? 0), 0);
-    totalForfeited += employee.lines
-      .filter((line) => !line.alreadyApplied)
-      .reduce((sum, line) => sum + (line.forfeited ?? 0), 0);
-  }
-
-  return {
-    employeeCount: employees.length,
-    eligibleEmployees,
-    totalCarried,
-    totalForfeited,
-  };
-}
-
-function patchEmployeeAfterCarryForward(preview, userId, result) {
-  if (!preview) return preview;
-
-  const appliedByType = new Map(
-    (result.details ?? []).map((detail) => [detail.leaveTypeId, detail]),
-  );
-
-  const employees = preview.employees.map((employee) => {
-    if (employee.userId !== userId) return employee;
-
-    const lines = employee.lines.map((line) => {
-      const applied = appliedByType.get(line.leaveTypeId);
-      if (!applied) return line;
-      return {
-        ...line,
-        remaining: applied.remaining,
-        carried: applied.carried,
-        forfeited: applied.forfeited,
-        alreadyApplied: true,
-      };
-    });
-
-    const pendingLines = lines.filter((line) => !line.alreadyApplied && line.carried > 0);
-    const appliedLines = lines.filter((line) => line.alreadyApplied);
-
-    return {
-      ...employee,
-      lines,
-      totalRemaining: lines.reduce((sum, line) => sum + (line.remaining ?? 0), 0),
-      totalCarried: pendingLines.reduce((sum, line) => sum + (line.carried ?? 0), 0),
-      totalForfeited: lines
-        .filter((line) => !line.alreadyApplied)
-        .reduce((sum, line) => sum + (line.forfeited ?? 0), 0),
-      pendingAdjustments: pendingLines.length,
-      alreadyAppliedCount: appliedLines.length,
-      hasAlreadyApplied: appliedLines.length > 0,
-    };
-  });
-
-  return {
-    ...preview,
-    employees,
-    summary: summarizeCarryForwardEmployees(employees),
-  };
-}
-
-function defaultCarryForwardYear() {
-  return new Date().getFullYear() - 1;
-}
-
-function getCarryForwardLineStatus(line) {
-  const badge = 'badge leave-carry-forward-table__badge';
-  if (line.alreadyApplied) {
-    return {
-      label: 'Applied',
-      title: 'Already applied',
-      className: `${badge} badge-success`,
-    };
-  }
-  if (line.carried > 0) {
-    return {
-      label: 'Pending',
-      title: 'Pending carry forward',
-      className: `${badge} badge-warning`,
-    };
-  }
-  return {
-    label: 'None',
-    title: 'No carry forward',
-    className: `${badge} badge-muted`,
-  };
-}
-
-function filterCarryForwardEmployees(employees, { searchQuery, pendingOnly }) {
-  const query = searchQuery.trim().toLowerCase();
-
-  return employees.filter((employee) => {
-    if (query) {
-      const haystack = `${employee.name ?? ''} ${employee.email ?? ''}`.toLowerCase();
-      if (!haystack.includes(query)) return false;
-    }
-    if (pendingOnly) {
-      return employee.lines.some((line) => !line.alreadyApplied && line.carried > 0);
-    }
-    return true;
-  });
-}
-
-function getVisibleCarryForwardLines(employee, pendingOnly) {
-  if (!pendingOnly) return employee.lines;
-  return employee.lines.filter((line) => !line.alreadyApplied && line.carried > 0);
-}
-
-function CarryForwardTableSkeleton() {
-  return (
-    <div
-      className="leave-carry-forward-modal__table-wrap leave-carry-forward-modal__table-wrap--loading"
-      aria-busy="true"
-      aria-label="Loading carry-forward preview"
-    >
-      <div className="leave-carry-forward-modal__loading">
-        <div className="spinner" aria-hidden="true" />
-        <p className="muted small">Loading preview balances…</p>
-      </div>
-    </div>
-  );
 }
 
 function policyToForm(policy) {
@@ -175,325 +77,8 @@ function policyToForm(policy) {
   };
 }
 
-function CarryForwardPreviewModal({
-  open,
-  fromYear,
-  preview,
-  loading,
-  error,
-  submitting,
-  applyingUserId,
-  titleId,
-  onClose,
-  onApplyAll,
-  onApplyEmployee,
-}) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [pendingOnly, setPendingOnly] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setSearchQuery('');
-      setPendingOnly(false);
-    }
-  }, [open]);
-
-  const toYear = fromYear + 1;
-  const hasRows = preview?.employees?.length > 0;
-  const canApplyAll = preview?.summary?.eligibleEmployees > 0;
-  const isBusy = submitting || Boolean(applyingUserId);
-
-  const filteredEmployees = useMemo(() => {
-    if (!preview?.employees) return [];
-    return filterCarryForwardEmployees(preview.employees, { searchQuery, pendingOnly });
-  }, [pendingOnly, preview?.employees, searchQuery]);
-
-  const hasFilteredRows = filteredEmployees.length > 0;
-  const showToolbar = Boolean(preview && hasRows && !loading);
-
-  if (!open) return null;
-
-  return createPortal(
-    <div className="modal__backdrop" role="presentation" onClick={onClose}>
-      <div
-        className="modal modal--wide leave-carry-forward-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-busy={loading || undefined}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="modal__header leave-carry-forward-modal__header">
-          <div className="leave-carry-forward-modal__header-top">
-            <div className="leave-carry-forward-modal__header-titles">
-              <h2 id={titleId} className="modal__title">
-                Carry forward preview
-              </h2>
-              <p className="leave-carry-forward-modal__subtitle muted">
-                {fromYear} → {toYear}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm leave-carry-forward-modal__close"
-              onClick={onClose}
-              disabled={isBusy}
-              aria-label="Close"
-            >
-              ×
-            </button>
-          </div>
-          <p className="modal__lead muted">
-            Review remaining balances before rolling unused paid leave into the next year. Caps
-            follow each policy&apos;s CF max (SL 23; CL+EL combined 20).
-          </p>
-          {preview && !loading ? (
-            <div
-              className="card-grid card-grid--stats leave-carry-forward-modal__stats"
-              aria-label="Preview summary"
-            >
-              <div className="stat-card leave-carry-forward-modal__stat">
-                <span className="stat-card__label">Eligible employees</span>
-                <span className="stat-card__value">{preview.summary.eligibleEmployees}</span>
-              </div>
-              <div className="stat-card leave-carry-forward-modal__stat leave-carry-forward-modal__stat--carry">
-                <span className="stat-card__label">Days to carry</span>
-                <span className="stat-card__value">{formatDays(preview.summary.totalCarried)}</span>
-              </div>
-              <div className="stat-card leave-carry-forward-modal__stat leave-carry-forward-modal__stat--forfeit">
-                <span className="stat-card__label">Days forfeited</span>
-                <span className="stat-card__value">{formatDays(preview.summary.totalForfeited)}</span>
-              </div>
-            </div>
-          ) : null}
-        </header>
-
-        <div className="modal__body leave-carry-forward-modal__body">
-          {error ? <div className="alert alert--error modal__alert">{error}</div> : null}
-
-          {showToolbar ? (
-            <div className="leave-carry-forward-modal__toolbar toolbar-row">
-              <label className="field-inline form-field--sm leave-carry-forward-modal__search">
-                <span className="label">Search employee</span>
-                <input
-                  className="input"
-                  type="search"
-                  placeholder="Name or email…"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  autoComplete="off"
-                />
-              </label>
-              <label className="field-checkbox leave-carry-forward-modal__pending-filter">
-                <input
-                  type="checkbox"
-                  checked={pendingOnly}
-                  onChange={(event) => setPendingOnly(event.target.checked)}
-                />
-                <span>Pending only</span>
-              </label>
-            </div>
-          ) : null}
-
-          {loading ? (
-            <CarryForwardTableSkeleton />
-          ) : preview && !hasRows ? (
-            <EmptyState
-              compact
-              icon={EMPTY_ICONS.leave}
-              className="leave-carry-forward-modal__empty"
-              title="No eligible employees"
-              description={`No employees with remaining balances in ${fromYear} for eligible leave types.`}
-            />
-          ) : hasRows && !hasFilteredRows ? (
-            <EmptyState
-              compact
-              icon={EMPTY_ICONS.users}
-              className="leave-carry-forward-modal__empty"
-              title="No matching employees"
-              description={
-                pendingOnly
-                  ? 'No employees have pending carry-forward adjustments. Try clearing filters.'
-                  : 'No employees match your search. Try a different name or email.'
-              }
-            />
-          ) : hasFilteredRows ? (
-            <div className="table-wrap table-wrap--fit table-wrap--responsive leave-carry-forward-modal__table-wrap">
-              <table className="table data-table leave-carry-forward-table">
-                <colgroup>
-                  <col className="leave-carry-forward-table__col-row" />
-                  <col className="leave-carry-forward-table__col-employee" />
-                  <col className="leave-carry-forward-table__col-type" />
-                  <col className="leave-carry-forward-table__col-num" />
-                  <col className="leave-carry-forward-table__col-num" />
-                  <col className="leave-carry-forward-table__col-num" />
-                  <col className="leave-carry-forward-table__col-status" />
-                  <col className="leave-carry-forward-table__col-action" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th scope="col" className="employees-table__col-row-num">
-                      #
-                    </th>
-                    <th scope="col">Employee</th>
-                    <th scope="col">Type</th>
-                    <th
-                      scope="col"
-                      className="leave-carry-forward-table__col-num"
-                      title="Remaining balance"
-                    >
-                      Bal.
-                    </th>
-                    <th scope="col" className="leave-carry-forward-table__col-num">
-                      Carry
-                    </th>
-                    <th scope="col" className="leave-carry-forward-table__col-num">
-                      Forfeit
-                    </th>
-                    <th scope="col">Status</th>
-                    <th className="cell-actions-col cell-actions-col--text leave-carry-forward-table__col-action" scope="col">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredEmployees.flatMap((employee, employeeIndex) => {
-                    const visibleLines = getVisibleCarryForwardLines(employee, pendingOnly);
-                    if (visibleLines.length === 0) return [];
-
-                    const rowNumber = employeeIndex + 1;
-                    const lineStatus = (line) => getCarryForwardLineStatus(line);
-
-                    return visibleLines.map((line, lineIndex) => (
-                      <tr key={`${employee.userId}-${line.leaveTypeId}`}>
-                        {lineIndex === 0 ? (
-                          <td
-                            className="employees-table__row-num"
-                            data-label="#"
-                            rowSpan={visibleLines.length}
-                            aria-label={`Row ${rowNumber}`}
-                          >
-                            {rowNumber}
-                          </td>
-                        ) : null}
-                        {lineIndex === 0 ? (
-                          <td data-label="Employee" rowSpan={visibleLines.length}>
-                            <span className="leave-carry-forward-table__name" title={employee.name}>
-                              {employee.name}
-                            </span>
-                            <span
-                              className="leave-carry-forward-table__email muted small"
-                              title={employee.email}
-                            >
-                              {employee.email}
-                            </span>
-                          </td>
-                        ) : null}
-                        <td data-label="Leave type" className="leave-carry-forward-table__type-cell">
-                          <span className="leave-carry-forward-table__type-inner">
-                            <code className="leave-policies-table__code">{line.leaveTypeCode}</code>
-                            {line.combinedGroup ? (
-                              <span
-                                className="badge badge-info leave-carry-forward-table__group-badge"
-                                title={`Combined carry group: ${line.combinedGroup}`}
-                              >
-                                {line.combinedGroup}
-                              </span>
-                            ) : null}
-                          </span>
-                        </td>
-                        <td
-                          data-label="Remaining"
-                          className="leave-policies-table__num leave-carry-forward-table__col-num"
-                        >
-                          {formatDays(line.remaining)}
-                        </td>
-                        <td
-                          data-label="Carry"
-                          className="leave-policies-table__num leave-carry-forward-table__col-num"
-                        >
-                          {formatDays(line.carried)}
-                        </td>
-                        <td
-                          data-label="Forfeit"
-                          className="leave-policies-table__num leave-carry-forward-table__col-num"
-                        >
-                          {formatDays(line.forfeited)}
-                        </td>
-                        <td data-label="Status" className="leave-carry-forward-table__status-cell">
-                          {(() => {
-                            const status = lineStatus(line);
-                            return (
-                              <span className={status.className} title={status.title}>
-                                {status.label}
-                              </span>
-                            );
-                          })()}
-                        </td>
-                        {lineIndex === 0 ? (
-                          <td
-                            data-label="Action"
-                            rowSpan={visibleLines.length}
-                            className="cell-actions-col cell-actions-col--text leave-carry-forward-table__action-cell"
-                          >
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              disabled={
-                                submitting ||
-                                applyingUserId === employee.userId ||
-                                employee.pendingAdjustments === 0
-                              }
-                              onClick={() =>
-                                onApplyEmployee({
-                                  userId: employee.userId,
-                                  userLabel: employee.name,
-                                })
-                              }
-                            >
-                              {applyingUserId === employee.userId ? 'Applying…' : 'Carry forward'}
-                            </button>
-                          </td>
-                        ) : null}
-                      </tr>
-                    ));
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </div>
-
-        <footer className="modal__footer leave-carry-forward-modal__footer">
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={onClose}
-            disabled={isBusy}
-          >
-            Close
-          </button>
-          {canApplyAll ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={loading || isBusy}
-              onClick={onApplyAll}
-            >
-              {submitting
-                ? 'Applying…'
-                : `Carry forward all (${preview.summary.eligibleEmployees} employee${preview.summary.eligibleEmployees === 1 ? '' : 's'})`}
-            </button>
-          ) : null}
-        </footer>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
 function formToPayload(form) {
-  const payload = {
+  return {
     annualQuota: Number(form.annualQuota),
     accrualPerMonth: Number(form.accrualPerMonth),
     carryForwardMax: Number(form.carryForwardMax),
@@ -507,34 +92,38 @@ function formToPayload(form) {
         : Number(form.requireDocAfterConsecutiveDays),
     combinedCarryGroup: form.combinedCarryGroup.trim() === '' ? null : form.combinedCarryGroup.trim(),
   };
-
-  return payload;
 }
 
 export default function AdminLeavePolicies() {
-  const { showSuccess, showError } = useToast();
+  const { showSuccess } = useToast();
+  const { hasPermission } = useAuth();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const editModalTitleId = useId();
-  const cfPreviewModalTitleId = useId();
+  const balanceModalTitleId = useId();
+  const canAdjustBalances = hasPermission(PERMISSIONS.LEAVE_ADJUST_BALANCES);
 
   const [policies, setPolicies] = useState([]);
-
+  const [policyYear, setPolicyYear] = useState(String(currentCalendarYear));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
-  const [cfFromYear, setCfFromYear] = useState(defaultCarryForwardYear);
-  const [cfPreviewModalOpen, setCfPreviewModalOpen] = useState(false);
-  const [cfPreview, setCfPreview] = useState(null);
-  const [cfPreviewLoading, setCfPreviewLoading] = useState(false);
-  const [cfPreviewError, setCfPreviewError] = useState('');
-  const [cfSubmitting, setCfSubmitting] = useState(false);
-  const [cfApplyingUserId, setCfApplyingUserId] = useState('');
 
   const [modalPolicy, setModalPolicy] = useState(null);
   const [form, setForm] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [modalError, setModalError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [employees, setEmployees] = useState([]);
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const debouncedEmployeeSearch = useDebouncedValue(employeeSearch, 350);
+  const [leaveTypes, setLeaveTypes] = useState([]);
+  const [balances, setBalances] = useState([]);
+  const [fromBalances, setFromBalances] = useState([]);
+  const [creditForm, setCreditForm] = useState(emptyCreditForm);
+  const [creditErrors, setCreditErrors] = useState({});
+  const [balanceError, setBalanceError] = useState('');
+  const [creditSubmitting, setCreditSubmitting] = useState(false);
 
   const requestKeyRef = useRef('');
 
@@ -545,7 +134,7 @@ export default function AdminLeavePolicies() {
     setError('');
 
     try {
-      const data = await leaveApi.listPolicies();
+      const data = await leaveApi.listPolicies({ year: Number(policyYear) });
       if (requestKeyRef.current !== requestKey) return;
       setPolicies(data.policies ?? []);
     } catch (err) {
@@ -556,11 +145,169 @@ export default function AdminLeavePolicies() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [policyYear]);
 
   useEffect(() => {
     loadPolicies();
   }, [loadPolicies]);
+
+  useEffect(() => {
+    if (!canAdjustBalances || !balanceModalOpen) return;
+
+    adminApi
+      .listEmployees({
+        page: 1,
+        limit: 100,
+        search: debouncedEmployeeSearch || undefined,
+      })
+      .then((employeeData) => setEmployees(employeeData.employees ?? []))
+      .catch((err) => setBalanceError(getErrorMessage(err)));
+  }, [canAdjustBalances, balanceModalOpen, debouncedEmployeeSearch]);
+
+  useEffect(() => {
+    if (!canAdjustBalances || !balanceModalOpen) return;
+
+    leaveApi
+      .listTypes()
+      .then((typeData) => {
+        setLeaveTypes((typeData.types ?? []).filter((item) => item.isActive));
+      })
+      .catch((err) => setBalanceError(getErrorMessage(err)));
+  }, [canAdjustBalances, balanceModalOpen]);
+
+  useEffect(() => {
+    if (!canAdjustBalances || !balanceModalOpen || !creditForm.userId) {
+      setBalances([]);
+      setFromBalances([]);
+      return;
+    }
+
+    Promise.all([
+      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
+      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
+    ])
+      .then(([toYearData, fromYearData]) => {
+        setBalances(toYearData.balances ?? []);
+        setFromBalances(fromYearData.balances ?? []);
+      })
+      .catch((err) => setBalanceError(getErrorMessage(err)));
+  }, [
+    canAdjustBalances,
+    balanceModalOpen,
+    creditForm.userId,
+    creditForm.fromYear,
+    creditForm.toYear,
+  ]);
+
+  async function refreshBalances() {
+    if (!creditForm.userId) return;
+    const [toYearData, fromYearData] = await Promise.all([
+      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
+      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
+    ]);
+    setBalances(toYearData.balances ?? []);
+    setFromBalances(fromYearData.balances ?? []);
+  }
+
+  async function handleCreditSubmit(event) {
+    event.preventDefault();
+    setBalanceError('');
+
+    if (!creditForm.userId) {
+      setBalanceError('Select an employee.');
+      return;
+    }
+
+    const fromYear = Number(creditForm.fromYear);
+    const toYear = Number(creditForm.toYear);
+    const yearErrors = {};
+
+    if (!creditForm.fromYear || Number.isNaN(fromYear)) {
+      yearErrors.fromYear = 'Select the source (from) year.';
+    }
+    if (!creditForm.toYear || Number.isNaN(toYear)) {
+      yearErrors.toYear = 'Select the target (to) year.';
+    }
+    if (
+      !Number.isNaN(fromYear) &&
+      !Number.isNaN(toYear) &&
+      creditForm.fromYear &&
+      creditForm.toYear &&
+      toYear < fromYear
+    ) {
+      yearErrors.toYear = 'To year must be the same as or after from year.';
+    }
+    if (Object.keys(yearErrors).length > 0) {
+      setCreditErrors(yearErrors);
+      return;
+    }
+
+    if (creditForm.carried === '' || Number.isNaN(Number(creditForm.carried))) {
+      setCreditErrors({ carried: 'Enter the number of carried days.' });
+      return;
+    }
+
+    const payload = {
+      leaveTypeId: creditForm.leaveTypeId,
+      year: toYear,
+      carried: Number(creditForm.carried),
+      reason: buildCarryAuditReason(fromYear, toYear, creditForm.reason),
+    };
+
+    const validation = validateForm(adjustLeaveBalanceSchema, payload);
+    if (!validation.data) {
+      setCreditErrors(validation.errors);
+      return;
+    }
+
+    setCreditErrors({});
+
+    await requestConfirm({
+      title: 'Apply manual leave credit?',
+      message: `Credit ${validation.data.carried} carried day(s) from ${fromYear} to ${validation.data.year} for the selected employee and leave type?`,
+      confirmLabel: 'Apply credit',
+      variant: 'danger',
+      onConfirm: async () => {
+        setCreditSubmitting(true);
+        try {
+          await leaveApi.adjustBalance(creditForm.userId, validation.data);
+          showSuccess('Leave credit applied.');
+          setCreditForm((prev) => ({ ...prev, carried: '', reason: '' }));
+          await refreshBalances();
+        } catch (err) {
+          setBalanceError(getErrorMessage(err));
+        } finally {
+          setCreditSubmitting(false);
+        }
+      },
+    });
+  }
+
+  function openBalanceModal() {
+    const year = Number(policyYear);
+    setCreditForm({
+      ...emptyCreditForm,
+      fromYear: year - 1,
+      toYear: year,
+    });
+    setCreditErrors({});
+    setBalanceError('');
+    setEmployeeSearch('');
+    setBalances([]);
+    setFromBalances([]);
+    setBalanceModalOpen(true);
+  }
+
+  function closeBalanceModal() {
+    if (creditSubmitting) return;
+    setBalanceModalOpen(false);
+    setCreditForm(emptyCreditForm);
+    setCreditErrors({});
+    setBalanceError('');
+    setEmployeeSearch('');
+    setBalances([]);
+    setFromBalances([]);
+  }
 
   function openEditModal(policy) {
     setForm(policyToForm(policy));
@@ -578,109 +325,7 @@ export default function AdminLeavePolicies() {
   }
 
   useEscapeKey(Boolean(modalPolicy), closeModal);
-
-  const closeCfPreviewModal = useCallback(() => {
-    if (cfSubmitting || cfApplyingUserId) return;
-    setCfPreviewModalOpen(false);
-  }, [cfApplyingUserId, cfSubmitting]);
-
-  useEscapeKey(cfPreviewModalOpen, closeCfPreviewModal);
-
-  const loadCarryForwardPreview = useCallback(async (options = {}) => {
-    const { userId } = options;
-    setCfPreviewLoading(true);
-    setCfPreviewError('');
-    try {
-      const data = await leaveApi.previewCarryForward({
-        fromYear: cfFromYear,
-        ...(userId ? { userId } : {}),
-      });
-      if (userId) {
-        setCfPreview((prev) => {
-          if (!prev) return data;
-          const updatedEmployee = data.employees?.[0];
-          if (!updatedEmployee) {
-            return {
-              ...prev,
-              employees: prev.employees.filter((employee) => employee.userId !== userId),
-              summary: summarizeCarryForwardEmployees(
-                prev.employees.filter((employee) => employee.userId !== userId),
-              ),
-            };
-          }
-          const employees = prev.employees.some((employee) => employee.userId === userId)
-            ? prev.employees.map((employee) =>
-                employee.userId === userId ? updatedEmployee : employee,
-              )
-            : [...prev.employees, updatedEmployee];
-          return {
-            ...prev,
-            employees,
-            summary: summarizeCarryForwardEmployees(employees),
-          };
-        });
-        return data;
-      }
-      setCfPreview(data);
-      return data;
-    } catch (err) {
-      setCfPreview(null);
-      setCfPreviewError(getErrorMessage(err));
-      throw err;
-    } finally {
-      setCfPreviewLoading(false);
-    }
-  }, [cfFromYear]);
-
-  function openCarryForwardPreview() {
-    setCfPreviewModalOpen(true);
-    setCfPreview(null);
-    setCfPreviewError('');
-    loadCarryForwardPreview();
-  }
-
-  async function applyCarryForward(options = {}) {
-    const { userId, userLabel } = options;
-    const scopeLabel = userLabel
-      ? userLabel
-      : `all active employees (${cfFromYear} → ${cfFromYear + 1})`;
-
-    await requestConfirm({
-      title: userId ? 'Carry forward for employee?' : 'Carry forward remaining leave?',
-      message: userId
-        ? `Carry unused leave from ${cfFromYear} to ${cfFromYear + 1} for ${userLabel}? Already-applied types are skipped automatically.`
-        : `Carry unused leave from ${cfFromYear} to ${cfFromYear + 1} for ${scopeLabel}? Caps follow each policy's CF max (SL 23; CL+EL combined 20).`,
-      confirmLabel: userId ? 'Carry forward' : 'Carry forward all',
-      variant: 'danger',
-      onConfirm: async () => {
-        if (userId) setCfApplyingUserId(userId);
-        else setCfSubmitting(true);
-        setCfPreviewError('');
-        try {
-          const result = await leaveApi.applyCarryForward({
-            fromYear: cfFromYear,
-            ...(userId ? { userId } : {}),
-          });
-          showSuccess(
-            `Carry-forward applied: ${result.adjustments} adjustment(s), ${formatDays(result.totalCarried)} day(s) carried${result.totalForfeited > 0 ? `, ${formatDays(result.totalForfeited)} forfeited` : ''}.`,
-          );
-          if (userId && cfPreview) {
-            setCfPreview((prev) => patchEmployeeAfterCarryForward(prev, userId, result));
-          } else {
-            await loadCarryForwardPreview();
-          }
-        } catch (err) {
-          const message = getErrorMessage(err);
-          setCfPreviewError(message);
-          showError(message);
-          throw err;
-        } finally {
-          setCfSubmitting(false);
-          setCfApplyingUserId('');
-        }
-      },
-    });
-  }
+  useEscapeKey(balanceModalOpen && !creditSubmitting, closeBalanceModal);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -703,7 +348,7 @@ export default function AdminLeavePolicies() {
 
     try {
       await leaveApi.updatePolicy(modalPolicy.id, validation.data);
-      showSuccess(`Policy for ${modalPolicy.leaveTypeCode} updated.`);
+      showSuccess(`Policy for ${modalPolicy.leaveTypeCode} (${policyYear}) updated.`);
       closeModal();
       await loadPolicies();
     } catch (err) {
@@ -725,49 +370,24 @@ export default function AdminLeavePolicies() {
 
   return (
     <div className="page page--leave-policies">
-      <section className="leave-carry-forward-panel card" aria-label="Year-end carry forward">
-        <div className="leave-carry-forward-panel__header">
-          <div>
-            <h2 className="card__section-title">Year-end carry forward</h2>
-            <p className="muted small leave-carry-forward-panel__lead">
-              Cash in unused paid leave from a closing year into the next year&apos;s opening balance.
-              Caps respect each policy&apos;s CF max (SL 23; CL+EL share a combined cap of 20).
-            </p>
+      <section className="leave-policies-panel card card--table" aria-label="Leave policies">
+        <div className="leave-policies-toolbar card__toolbar">
+          <div className="leave-policies-toolbar__filters filter-bar">
+            <label className="field-inline filter-bar__field leave-policies-toolbar__field">
+              <span className="label">Policy year</span>
+              <SelectField
+                value={policyYear}
+                onChange={setPolicyYear}
+                options={balanceYearOptions}
+                aria-label="Policy year"
+              />
+            </label>
+            <span className="badge badge-muted leave-policies-toolbar__year-badge">
+              Showing {policyYear}
+            </span>
           </div>
         </div>
 
-        <div className="leave-carry-forward-panel__toolbar toolbar-row">
-          <label className="field-inline form-field--sm">
-            <span className="label">Source year</span>
-            <input
-              className="input input--narrow"
-              type="number"
-              min="2000"
-              max="2100"
-              value={cfFromYear}
-              onChange={(event) => {
-                setCfFromYear(Number(event.target.value));
-                setCfPreview(null);
-                setCfPreviewModalOpen(false);
-                setCfPreviewError('');
-              }}
-            />
-          </label>
-          <span className="leave-carry-forward-panel__arrow muted" aria-hidden="true">
-            → {cfFromYear + 1}
-          </span>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={cfPreviewLoading || cfSubmitting}
-            onClick={openCarryForwardPreview}
-          >
-            {cfPreviewLoading ? 'Loading preview…' : 'Preview balances'}
-          </button>
-        </div>
-      </section>
-
-      <section className="leave-policies-panel card card--table" aria-label="Leave policies">
         {error ? <div className="alert alert--error">{error}</div> : null}
 
         {loading ? (
@@ -775,8 +395,8 @@ export default function AdminLeavePolicies() {
         ) : policies.length === 0 ? (
           <EmptyState
             icon={EMPTY_ICONS.leave}
-            title="No leave policies yet"
-            description="Leave types and their quota rules appear here once configured in the system."
+            title={`No leave policies for ${policyYear}`}
+            description="Policies are configured per leave type and calendar year. Run migration/seed or create policies for this year."
           />
         ) : (
           <div className="table-wrap table-wrap--responsive leave-policies-table-wrap">
@@ -826,7 +446,7 @@ export default function AdminLeavePolicies() {
                     </td>
                     <td data-label="Actions" className="cell-actions-col">
                       <ActionMenu
-                        label={`Actions for ${policy.leaveTypeCode} policy`}
+                        ariaLabel={`Actions for ${policy.leaveTypeCode} policy`}
                         items={getActionItems(policy)}
                       />
                     </td>
@@ -837,6 +457,270 @@ export default function AdminLeavePolicies() {
           </div>
         )}
       </section>
+
+      {canAdjustBalances ? (
+        <section className="card leave-carry-forward-panel" aria-label="Manual leave balance entry">
+          <div className="leave-carry-forward-panel__header">
+            <div>
+              <p className="card__section-title">Manual leave balance entry</p>
+              <p className="muted small leave-carry-forward-panel__lead">
+                Enter opening carried days for each employee and leave type at year start (enhanced
+                leave, cash-in, or last-year balance). Amounts are typed manually — the system does
+                not auto-calculate carry-forward.
+              </p>
+            </div>
+            <button type="button" className="btn btn-primary" onClick={openBalanceModal}>
+              Add carried days
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {balanceModalOpen
+        ? createPortal(
+            <div className="modal__backdrop" role="presentation" onClick={closeBalanceModal}>
+              <div
+                className="modal modal--wide leave-policies-modal leave-carry-forward-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={balanceModalTitleId}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="modal__header leave-carry-forward-modal__header">
+                  <div className="leave-carry-forward-modal__header-top">
+                    <div className="leave-carry-forward-modal__header-titles">
+                      <h2 id={balanceModalTitleId} className="modal__title">
+                        Manual leave balance entry
+                      </h2>
+                      <p className="modal__lead muted">
+                        Type carried days manually for an employee and leave type. Choose the source
+                        year (leftover context) and target year (where days are credited). The
+                        system does not auto-calculate carry-forward.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost leave-carry-forward-modal__close"
+                      onClick={closeBalanceModal}
+                      disabled={creditSubmitting}
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </header>
+
+                <form className="modal__form" onSubmit={handleCreditSubmit}>
+                  <div className="modal__body leave-policies-modal__body leave-carry-forward-modal__body">
+                    {balanceError ? (
+                      <div className="alert alert--error modal__alert">{balanceError}</div>
+                    ) : null}
+
+                    <label className="modal__field form-grid__full">
+                      <span className="label">Employee</span>
+                      <div className="field-stack">
+                        <SearchInput
+                          value={employeeSearch}
+                          onChange={(event) => setEmployeeSearch(event.target.value)}
+                          placeholder="Search employees…"
+                          ariaLabel="Search employees"
+                        />
+                        <SelectField
+                          value={creditForm.userId}
+                          onChange={(value) => setCreditForm({ ...creditForm, userId: value })}
+                          options={[
+                            { value: '', label: 'Select employee' },
+                            ...employees.map((employee) => ({
+                              value: employee.id,
+                              label: `${employee.name} (${employee.email})`,
+                            })),
+                          ]}
+                          placeholder="Select employee"
+                          aria-label="Employee"
+                        />
+                      </div>
+                    </label>
+
+                    <div className="leave-policies-modal__grid">
+                      <label className="modal__field">
+                        <span className="label">Leave type</span>
+                        <SelectField
+                          value={creditForm.leaveTypeId}
+                          onChange={(value) => setCreditForm({ ...creditForm, leaveTypeId: value })}
+                          options={[
+                            { value: '', label: 'Select type' },
+                            ...leaveTypes.map((item) => ({
+                              value: item.id,
+                              label: `${item.code} — ${item.name}`,
+                            })),
+                          ]}
+                          placeholder="Select type"
+                          aria-label="Leave type"
+                        />
+                        <FieldError message={creditErrors.leaveTypeId} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">From year</span>
+                        <SelectField
+                          value={String(creditForm.fromYear)}
+                          onChange={(value) =>
+                            setCreditForm({ ...creditForm, fromYear: value ? Number(value) : '' })
+                          }
+                          options={[
+                            { value: '', label: 'Select year' },
+                            ...balanceYearOptions,
+                          ]}
+                          placeholder="Select year"
+                          aria-label="From year"
+                        />
+                        <FieldError message={creditErrors.fromYear} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">To year</span>
+                        <SelectField
+                          value={String(creditForm.toYear)}
+                          onChange={(value) =>
+                            setCreditForm({ ...creditForm, toYear: value ? Number(value) : '' })
+                          }
+                          options={[
+                            { value: '', label: 'Select year' },
+                            ...balanceYearOptions,
+                          ]}
+                          placeholder="Select year"
+                          aria-label="To year"
+                        />
+                        <FieldError message={creditErrors.toYear} />
+                      </label>
+
+                      <label className="modal__field">
+                        <span className="label">Carried days</span>
+                        <input
+                          autoFocus
+                          className="input input--narrow"
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          max="365"
+                          placeholder="e.g. 5"
+                          value={creditForm.carried}
+                          onChange={(event) =>
+                            setCreditForm({ ...creditForm, carried: event.target.value })
+                          }
+                        />
+                        <FieldError message={creditErrors.carried} />
+                      </label>
+                    </div>
+
+                    <label className="modal__field">
+                      <span className="label">Reason</span>
+                      <input
+                        className="input"
+                        type="text"
+                        value={creditForm.reason}
+                        onChange={(event) =>
+                          setCreditForm({ ...creditForm, reason: event.target.value })
+                        }
+                        placeholder="e.g. Year-end carry-in approved by HR (from→to years are recorded automatically)"
+                      />
+                      <FieldError message={creditErrors.reason} />
+                    </label>
+
+                    {fromBalances.length > 0 ? (
+                      <div>
+                        <p className="card__section-title">
+                          Source year balances ({creditForm.fromYear})
+                        </p>
+                        <div className="table-wrap table-wrap--responsive leave-carry-forward-modal__table-wrap">
+                          <table className="table data-table leave-carry-forward-table">
+                            <thead>
+                              <tr>
+                                <th>Type</th>
+                                <th>Entitled</th>
+                                <th>Carried</th>
+                                <th>Used</th>
+                                <th>Pending</th>
+                                <th>Encashed</th>
+                                <th>Available</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {fromBalances.map((item) => (
+                                <tr key={item.id}>
+                                  <td data-label="Type">{item.leaveTypeCode}</td>
+                                  <td data-label="Entitled">{item.entitled}</td>
+                                  <td data-label="Carried">{item.carried}</td>
+                                  <td data-label="Used">{item.used}</td>
+                                  <td data-label="Pending">{item.pending}</td>
+                                  <td data-label="Encashed">{item.encashed}</td>
+                                  <td data-label="Available">{item.available}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {balances.length > 0 ? (
+                      <div>
+                        <p className="card__section-title">
+                          Target year balances ({creditForm.toYear})
+                        </p>
+                        <div className="table-wrap table-wrap--responsive leave-carry-forward-modal__table-wrap">
+                          <table className="table data-table leave-carry-forward-table">
+                            <thead>
+                              <tr>
+                                <th>Type</th>
+                                <th>Entitled</th>
+                                <th>Carried</th>
+                                <th>Used</th>
+                                <th>Pending</th>
+                                <th>Encashed</th>
+                                <th>Available</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {balances.map((item) => (
+                                <tr key={item.id}>
+                                  <td data-label="Type">{item.leaveTypeCode}</td>
+                                  <td data-label="Entitled">{item.entitled}</td>
+                                  <td data-label="Carried">{item.carried}</td>
+                                  <td data-label="Used">{item.used}</td>
+                                  <td data-label="Pending">{item.pending}</td>
+                                  <td data-label="Encashed">{item.encashed}</td>
+                                  <td data-label="Available">{item.available}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <footer className="modal__footer">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={closeBalanceModal}
+                      disabled={creditSubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={creditSubmitting}>
+                      {creditSubmitting ? 'Applying…' : 'Apply carried days'}
+                    </button>
+                  </footer>
+                </form>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {confirmDialog}
 
       {modalPolicy && form ? (
         <div className="modal__backdrop" role="presentation" onClick={closeModal}>
@@ -849,11 +733,11 @@ export default function AdminLeavePolicies() {
           >
             <header className="modal__header">
               <h2 id={editModalTitleId} className="modal__title">
-                Edit policy: {modalPolicy.leaveTypeCode}
+                Edit policy: {modalPolicy.leaveTypeCode} ({policyYear})
               </h2>
               <p className="modal__lead muted">
                 Update quota, accrual, carry-forward, and encashment rules for{' '}
-                {modalPolicy.leaveTypeName}.
+                {modalPolicy.leaveTypeName} in calendar year {policyYear}.
               </p>
             </header>
 
@@ -1009,22 +893,6 @@ export default function AdminLeavePolicies() {
           </div>
         </div>
       ) : null}
-
-      {confirmDialog}
-
-      <CarryForwardPreviewModal
-        open={cfPreviewModalOpen}
-        fromYear={cfFromYear}
-        preview={cfPreview}
-        loading={cfPreviewLoading}
-        error={cfPreviewError}
-        submitting={cfSubmitting}
-        applyingUserId={cfApplyingUserId}
-        titleId={cfPreviewModalTitleId}
-        onClose={closeCfPreviewModal}
-        onApplyAll={() => applyCarryForward()}
-        onApplyEmployee={applyCarryForward}
-      />
     </div>
   );
 }

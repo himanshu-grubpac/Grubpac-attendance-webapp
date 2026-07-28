@@ -16,7 +16,7 @@ export default function EmployeeLeaveBalances() {
     try {
       const [balanceData, policyData] = await Promise.all([
         leaveApi.getMyBalances({ year }),
-        leaveApi.listPolicies(),
+        leaveApi.listPolicies({ year }),
       ]);
       setBalances(balanceData.balances ?? []);
       setPolicies(policyData.policies ?? []);

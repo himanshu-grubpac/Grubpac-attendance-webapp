@@ -6,6 +6,7 @@
  * - AuditLog deviceId/ip/userAgent indexes (login device conflict)
  * - AttendanceRecord lateNote + edit history fields (schemaless — index sync only)
  * - LeaveCarryForwardEntry, WeekAttendanceConfirmation, SalaryTransfer collections
+ * - LeavePolicy.year backfill + compound index (leaveTypeId + year)
  * - User.managedDepartmentIds backfill
  * - Dual-portal system role permissions (HR attendance.read_own)
  *
@@ -30,12 +31,13 @@ import { WeekAttendanceConfirmation } from './models/WeekAttendanceConfirmation.
 import { SalaryTransfer } from './models/SalaryTransfer.js';
 import { SalarySettings } from './models/SalarySettings.js';
 import { HolidayCategory } from './models/HolidayCategory.js';
+import { Holiday } from './models/Holiday.js';
 import { Department } from './models/Department.js';
 import { LeaveType } from './models/LeaveType.js';
 import { LeavePolicy } from './models/LeavePolicy.js';
 import { LeaveBalance } from './models/LeaveBalance.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
-import { seedLeaveTypesAndPolicies } from './services/leaveBalanceService.js';
+import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears } from './services/leaveBalanceService.js';
 
 const KEY_EMAILS = ['admin@grubpac.com', 'salunke.himanshu@grubpac.com'];
 
@@ -47,6 +49,7 @@ const INDEX_MODELS = [
   SalaryTransfer,
   SalarySettings,
   HolidayCategory,
+  Holiday,
   User,
   Role,
   Department,
@@ -152,6 +155,12 @@ async function auditKeyUsers() {
 
 async function migrateRecentFeatures() {
   await connectDatabase();
+
+  console.log('\n=== Leave policy year backfill ===');
+  const backfilled = await migrateLeavePolicyYears();
+  if (backfilled === 0) {
+    console.log('All leave policies already have a year.');
+  }
 
   console.log('=== Syncing indexes ===');
   await syncAllIndexes();

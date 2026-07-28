@@ -26,8 +26,15 @@ export function computeEntitledForPolicy(policy, year, asOfDate = new Date()) {
   return policy.annualQuota;
 }
 
-export async function seedLeaveTypesAndPolicies() {
+/** Matches AdminLeavePolicies year selector: current IST year ±2..+1. */
+export function defaultLeavePolicySeedYears(asOfDate = new Date()) {
+  const currentYear = getISTYear(asOfDate);
+  return [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
+}
+
+export async function seedLeaveTypesAndPolicies(options = {}) {
   const typeMap = new Map();
+  const years = options.years ?? defaultLeavePolicySeedYears();
 
   for (const seedType of SEED_LEAVE_TYPES) {
     let leaveType = await LeaveType.findOne({ code: seedType.code });
@@ -42,32 +49,93 @@ export async function seedLeaveTypesAndPolicies() {
     typeMap.set(seedType.code, leaveType);
   }
 
-  for (const seedPolicy of SEED_LEAVE_POLICIES) {
-    const leaveType = typeMap.get(seedPolicy.typeCode);
-    if (!leaveType) continue;
+  for (const year of years) {
+    for (const seedPolicy of SEED_LEAVE_POLICIES) {
+      const leaveType = typeMap.get(seedPolicy.typeCode);
+      if (!leaveType) continue;
 
-    const { typeCode, ...policyFields } = seedPolicy;
-    let policy = await LeavePolicy.findOne({ leaveTypeId: leaveType._id });
-    if (!policy) {
-      policy = await LeavePolicy.create({ ...policyFields, leaveTypeId: leaveType._id });
-      console.log(`Seeded leave policy for ${typeCode}`);
-    } else {
-      Object.assign(policy, policyFields);
-      policy.isActive = true;
-      await policy.save();
-      console.log(`Updated leave policy for ${typeCode}`);
+      const { typeCode, ...policyFields } = seedPolicy;
+      let policy = await LeavePolicy.findOne({ leaveTypeId: leaveType._id, year });
+      if (!policy) {
+        policy = await LeavePolicy.create({
+          ...policyFields,
+          leaveTypeId: leaveType._id,
+          year,
+        });
+        console.log(`Seeded leave policy for ${typeCode} (${year})`);
+      } else {
+        Object.assign(policy, policyFields);
+        policy.isActive = true;
+        await policy.save();
+        console.log(`Updated leave policy for ${typeCode} (${year})`);
+      }
     }
   }
 
   return typeMap;
 }
 
-export async function getActivePolicies() {
-  return LeavePolicy.find({ isActive: true }).populate(LEAVE_POLICY_POPULATE);
+/**
+ * Assigns current IST year to legacy policies missing year (idempotent).
+ */
+export async function migrateLeavePolicyYears() {
+  const currentYear = getISTYear();
+  const legacyPolicies = await LeavePolicy.find({
+    $or: [{ year: { $exists: false } }, { year: null }],
+  });
+
+  for (const policy of legacyPolicies) {
+    policy.year = currentYear;
+    await policy.save();
+    console.log(
+      `Backfilled leave policy year=${currentYear} for leaveTypeId=${policy.leaveTypeId.toString()}`,
+    );
+  }
+
+  return legacyPolicies.length;
 }
 
-export async function getPolicyMap() {
-  const policies = await getActivePolicies();
+export async function getActivePoliciesForYear(year = getISTYear()) {
+  return LeavePolicy.find({ isActive: true, year }).populate(LEAVE_POLICY_POPULATE);
+}
+
+/**
+ * Active policies for a calendar year. Falls back to current IST year when none exist.
+ */
+export async function resolvePoliciesForYear(year = getISTYear()) {
+  let policies = await getActivePoliciesForYear(year);
+  const currentYear = getISTYear();
+  if (policies.length === 0 && year !== currentYear) {
+    policies = await getActivePoliciesForYear(currentYear);
+  }
+  return policies;
+}
+
+/**
+ * Policy for a leave type and year. Falls back to current IST year when missing.
+ */
+export async function resolvePolicyForLeaveType(leaveTypeId, year = getISTYear()) {
+  let policy = await LeavePolicy.findOne({ leaveTypeId, isActive: true, year }).populate(
+    LEAVE_POLICY_POPULATE,
+  );
+  const currentYear = getISTYear();
+  if (!policy && year !== currentYear) {
+    policy = await LeavePolicy.findOne({
+      leaveTypeId,
+      isActive: true,
+      year: currentYear,
+    }).populate(LEAVE_POLICY_POPULATE);
+  }
+  return policy;
+}
+
+/** @deprecated Use resolvePoliciesForYear(year) */
+export async function getActivePolicies(year = getISTYear()) {
+  return resolvePoliciesForYear(year);
+}
+
+export async function getPolicyMapForYear(year = getISTYear()) {
+  const policies = await resolvePoliciesForYear(year);
   const map = new Map();
   for (const policy of policies) {
     const typeId = policy.leaveTypeId?._id?.toString() ?? policy.leaveTypeId?.toString();
@@ -76,12 +144,17 @@ export async function getPolicyMap() {
   return map;
 }
 
+/** @deprecated Use getPolicyMapForYear(year) */
+export async function getPolicyMap(year = getISTYear()) {
+  return getPolicyMapForYear(year);
+}
+
 export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDate = new Date()) {
   if (!mongoose.isValidObjectId(userId)) {
     throwError('Invalid user.');
   }
 
-  const policies = await getActivePolicies();
+  const policies = await resolvePoliciesForYear(year);
   const balances = [];
 
   for (const policy of policies) {
@@ -133,7 +206,7 @@ export function getAvailableBalance(balance) {
 }
 
 export async function refreshAccruedEntitlements(userId, year = getISTYear(), asOfDate = new Date()) {
-  const policies = await getActivePolicies();
+  const policies = await resolvePoliciesForYear(year);
   for (const policy of policies) {
     if (policy.accrualPerMonth <= 0) continue;
     const balance = await LeaveBalance.findOne({
@@ -275,7 +348,7 @@ export async function recordEncashment(userId, payload, actorId) {
   const { leaveTypeId, year, days, reason } = payload;
   await ensureBalancesForUser(userId, year);
 
-  const policy = await LeavePolicy.findOne({ leaveTypeId, isActive: true });
+  const policy = await resolvePolicyForLeaveType(leaveTypeId, year);
   if (!policy) {
     throwError('Leave policy not found.', 404);
   }
@@ -395,13 +468,18 @@ async function loadBalanceMapForUser(userId, years, session = null) {
  * Ensures eligible leave balances exist for carry-forward years and refreshes accrual
  * on fromYear in batched queries (avoids per-policy N+1 round trips).
  */
-async function prepareCarryForwardBalances(userId, fromYear, toYear, policies, session = null) {
-  const years = [fromYear, toYear];
-  const balanceMap = await loadBalanceMapForUser(userId, years, session);
+async function prepareCarryForwardBalances(userId, fromYear, toYear, session = null) {
+  const fromYearPolicies = await resolvePoliciesForYear(fromYear);
+  const toYearPolicies = await resolvePoliciesForYear(toYear);
+  const years = [
+    { year: fromYear, policies: fromYearPolicies },
+    { year: toYear, policies: toYearPolicies },
+  ];
+  const balanceMap = await loadBalanceMapForUser(userId, [fromYear, toYear], session);
   const inserts = [];
   const accrualUpdates = [];
 
-  for (const year of years) {
+  for (const { year, policies } of years) {
     for (const policy of policies) {
       const typeId = policyTypeId(policy);
       if (!typeId) continue;
@@ -464,21 +542,10 @@ async function loadExistingEntryMap(userId, fromYear, session = null) {
   return map;
 }
 
-async function buildUserCarryForwardPlan(
-  userId,
-  fromYear,
-  policies,
-  existingEntryMap,
-  session = null,
-) {
+async function buildUserCarryForwardPlan(userId, fromYear, existingEntryMap, session = null) {
   const toYear = fromYear + 1;
-  const balanceMap = await prepareCarryForwardBalances(
-    userId,
-    fromYear,
-    toYear,
-    policies,
-    session,
-  );
+  const policies = (await resolvePoliciesForYear(fromYear)).filter(isCarryForwardEligiblePolicy);
+  const balanceMap = await prepareCarryForwardBalances(userId, fromYear, toYear, session);
 
   const lines = [];
   const standalonePolicies = policies.filter(
@@ -587,7 +654,6 @@ function summarizeCarryForwardPlan(plan, userDoc = null) {
 export async function previewYearEndCarryForward(fromYear, options = {}) {
   const { userId, userIds } = options;
   const toYear = fromYear + 1;
-  const policies = (await getActivePolicies()).filter(isCarryForwardEligiblePolicy);
 
   let users;
   if (userId) {
@@ -609,7 +675,7 @@ export async function previewYearEndCarryForward(fromYear, options = {}) {
 
   for (const user of users) {
     const existingEntryMap = await loadExistingEntryMap(user._id, fromYear);
-    const plan = await buildUserCarryForwardPlan(user._id, fromYear, policies, existingEntryMap);
+    const plan = await buildUserCarryForwardPlan(user._id, fromYear, existingEntryMap);
     const summary = summarizeCarryForwardPlan(plan, user);
 
     if (summary.totalRemaining > 0 || summary.hasAlreadyApplied) {
@@ -635,17 +701,10 @@ export async function previewYearEndCarryForward(fromYear, options = {}) {
   };
 }
 
-async function applyUserCarryForwardPlan(
-  userId,
-  fromYear,
-  policies,
-  appliedBy,
-  session,
-  existingEntryMap = null,
-) {
+async function applyUserCarryForwardPlan(userId, fromYear, appliedBy, session, existingEntryMap = null) {
   const toYear = fromYear + 1;
   const entryMap = existingEntryMap ?? (await loadExistingEntryMap(userId, fromYear, session));
-  const plan = await buildUserCarryForwardPlan(userId, fromYear, policies, entryMap, session);
+  const plan = await buildUserCarryForwardPlan(userId, fromYear, entryMap, session);
   const pendingLines = plan.lines.filter((line) => !line.alreadyApplied && line.carried > 0);
 
   if (pendingLines.length === 0) {
@@ -712,7 +771,6 @@ async function applyUserCarryForwardPlan(
 export async function applyYearEndCarryForward(fromYear, options = {}) {
   const { userId, userIds, appliedBy } = options;
   const toYear = fromYear + 1;
-  const policies = (await getActivePolicies()).filter(isCarryForwardEligiblePolicy);
 
   let targetUserIds;
   if (userId) {
@@ -747,7 +805,6 @@ export async function applyYearEndCarryForward(fromYear, options = {}) {
         const applied = await applyUserCarryForwardPlan(
           targetUserId,
           fromYear,
-          policies,
           appliedBy,
           session,
           existingEntryMap,

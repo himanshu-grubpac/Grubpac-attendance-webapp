@@ -7,7 +7,6 @@ import {
   parseDateInputAsISTDay,
 } from '../utils/istDate.js';
 import { LeaveType } from '../models/LeaveType.js';
-import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { Holiday } from '../models/Holiday.js';
@@ -20,10 +19,11 @@ import {
   approvePendingDays,
   ensureBalancesForUser,
   getAvailableBalance,
-  getPolicyMap,
+  getPolicyMapForYear,
   refreshAccruedEntitlements,
   releasePendingDays,
   resolveLeaveYear,
+  resolvePolicyForLeaveType,
   validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
@@ -112,11 +112,6 @@ export async function validateLeaveRequestInput({
     throwError('Leave type not found or inactive.');
   }
 
-  const policy = await LeavePolicy.findOne({ leaveTypeId, isActive: true });
-  if (!policy) {
-    throwError('Leave policy not configured for this type.');
-  }
-
   const startDate = parseDateInputAsISTDay(startDateInput);
   const endDate = parseDateInputAsISTDay(endDateInput);
   if (!startDate || !endDate || endDate < startDate) {
@@ -128,6 +123,11 @@ export async function validateLeaveRequestInput({
   }
 
   const year = resolveLeaveYear(startDateInput);
+  const policy = await resolvePolicyForLeaveType(leaveTypeId, year);
+  if (!policy) {
+    throwError('Leave policy not configured for this type.');
+  }
+
   const holidayDates = await getHolidayDateSet(year);
   const sandwichLeaveEnabled = await isSandwichLeaveEnabled();
   const dayResult = computeLeaveDaysIST(startDate, endDate, holidayDates, {
@@ -158,7 +158,7 @@ export async function validateLeaveRequestInput({
 
   await refreshAccruedEntitlements(userId, year);
   await ensureBalancesForUser(userId, year);
-  const policyMap = await getPolicyMap();
+  const policyMap = await getPolicyMapForYear(year);
 
   const balance = await LeaveBalance.findOne({ userId, leaveTypeId, year });
   if (!balance) {

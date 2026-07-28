@@ -806,10 +806,13 @@ async function main() {
   const elType = leaveTypes.data.types?.find((t) => t.code === 'EL');
   assert(slType && clType && elType, 'SL, CL, EL leave types are seeded');
 
-  const leavePolicies = await request('/leave/policies', { method: 'GET' });
+  const policyYear = new Date().getFullYear();
+  const leavePolicies = await request(`/leave/policies?year=${policyYear}`, { method: 'GET' });
   assert(leavePolicies.response.ok, 'Admin can list leave policies');
+  assert(leavePolicies.data.year === policyYear, 'Leave policies list returns requested year');
   const slPolicy = leavePolicies.data.policies?.find((p) => p.leaveTypeCode === 'SL');
   const elPolicy = leavePolicies.data.policies?.find((p) => p.leaveTypeCode === 'EL');
+  assert(slPolicy?.year === policyYear, 'SL policy is scoped to requested year');
   assert(slPolicy?.annualQuota === 7, 'SL annual quota is 7');
   assert(elPolicy?.annualQuota === 18 && elPolicy?.accrualPerMonth === 1.5, 'EL policy accrues 1.5/month');
 
@@ -1500,28 +1503,17 @@ async function main() {
   assert(encashResult.response.ok, 'Admin can record leave encashment');
   assert(encashResult.data.balance?.encashed >= 1, 'Encashment increments encashed counter');
 
-  const cfPreview = await request(`/leave/carry-forward/preview?fromYear=${year}`, {
-    method: 'GET',
+  const manualCarried = await request(`/leave/balances/${employeeId}`, {
+    method: 'PATCH',
+    body: {
+      leaveTypeId: clType.id,
+      year: year + 1,
+      carried: 3,
+      reason: 'Verify manual year-opening credit',
+    },
   });
-  assert(cfPreview.response.ok, 'Admin can preview year-end carry-forward');
-  assert(typeof cfPreview.data.summary?.totalCarried === 'number', 'Preview returns carry summary');
-
-  const cfResult = await request('/leave/carry-forward', {
-    method: 'POST',
-    body: { fromYear: year },
-  });
-  assert(cfResult.response.ok, 'Admin can apply year-end carry-forward');
-  assert(typeof cfResult.data.adjustments === 'number', 'Carry-forward returns adjustment count');
-  assert(typeof cfResult.data.totalCarried === 'number', 'Carry-forward returns total carried days');
-
-  const cfDuplicate = await request('/leave/carry-forward', {
-    method: 'POST',
-    body: { fromYear: year },
-  });
-  assert(
-    cfDuplicate.response.ok && cfDuplicate.data.adjustments === 0,
-    'Repeat carry-forward for same year is idempotent (no double-count)',
-  );
+  assert(manualCarried.response.ok, 'Admin can manually set opening carried days');
+  assert(manualCarried.data.balance?.carried === 3, 'Manual credit sets carried balance');
 
   const delegateEmail = `delegate.verify.${Date.now()}@grubpac.test`;
   const delegateRegister = await request('/admin/users', {

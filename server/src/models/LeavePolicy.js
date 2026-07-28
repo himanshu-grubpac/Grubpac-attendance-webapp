@@ -6,8 +6,8 @@ const leavePolicySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'LeaveType',
       required: true,
-      unique: true,
     },
+    year: { type: Number, required: true, min: 2000, max: 2100 },
     annualQuota: { type: Number, required: true, min: 0 },
     accrualPerMonth: { type: Number, default: 0, min: 0 },
     carryForwardMax: { type: Number, default: 0, min: 0 },
@@ -21,6 +21,9 @@ const leavePolicySchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+leavePolicySchema.index({ leaveTypeId: 1, year: 1 }, { unique: true });
+leavePolicySchema.index({ year: 1, isActive: 1 });
+
 leavePolicySchema.methods.toSafeJSON = function toSafeJSON() {
   const typeDoc =
     this.leaveTypeId && typeof this.leaveTypeId === 'object' ? this.leaveTypeId : null;
@@ -30,6 +33,7 @@ leavePolicySchema.methods.toSafeJSON = function toSafeJSON() {
     leaveTypeId: typeDoc?._id?.toString() ?? this.leaveTypeId?.toString?.() ?? null,
     leaveTypeCode: typeDoc?.code ?? null,
     leaveTypeName: typeDoc?.name ?? null,
+    year: this.year,
     annualQuota: this.annualQuota,
     accrualPerMonth: this.accrualPerMonth,
     carryForwardMax: this.carryForwardMax,

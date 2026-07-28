@@ -13,6 +13,7 @@ import { getHolidayDateSet } from './leaveService.js';
 import {
   countWorkingDaysIST,
   getISTDateInputValue,
+  getISTYear,
   listWorkingDaysIST,
   parseMonthInputAsISTRange,
 } from '../utils/istDate.js';
@@ -56,8 +57,8 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   return creditByDay;
 }
 
-async function loadPaidLeaveTypeIds() {
-  const policies = await LeavePolicy.find({ isActive: true, paid: true }).select('leaveTypeId');
+async function loadPaidLeaveTypeIds(year = getISTYear()) {
+  const policies = await LeavePolicy.find({ isActive: true, paid: true, year }).select('leaveTypeId');
   return new Set(policies.map((policy) => policy.leaveTypeId.toString()));
 }
 
@@ -91,7 +92,7 @@ function countPaidLeaveDaysInMonth(request, monthStart, monthEnd, holidayDates) 
 }
 
 async function sumPaidLeaveDays(userId, monthStart, monthEnd, holidayDates) {
-  const paidTypeIds = await loadPaidLeaveTypeIds();
+  const paidTypeIds = await loadPaidLeaveTypeIds(getISTYear(monthStart));
   if (paidTypeIds.size === 0) {
     return 0;
   }
@@ -193,7 +194,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
 
-  const paidTypeIds = await loadPaidLeaveTypeIds();
+  const paidTypeIds = await loadPaidLeaveTypeIds(year);
   const paidLeaveRequests = await LeaveRequest.find({
     userId: user._id,
     status: 'approved',

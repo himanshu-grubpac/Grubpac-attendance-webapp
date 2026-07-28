@@ -504,7 +504,8 @@ export async function downloadEmployeeTemplate(req, res) {
     'Content-Disposition',
     'attachment; filename="employee-registration-template.xlsx"',
   );
-  res.send(buffer);
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
 }
 
 export async function bulkUploadEmployees(req, res) {
