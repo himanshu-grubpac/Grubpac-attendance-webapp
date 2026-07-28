@@ -37,6 +37,20 @@ function buildYearOptions() {
 
 const balanceYearOptions = buildYearOptions();
 
+const MIN_BALANCE_YEAR = 2000;
+const MAX_BALANCE_YEAR = 2100;
+
+function isValidBalanceYear(year) {
+  const numericYear = Number(year);
+  return (
+    year !== '' &&
+    year != null &&
+    !Number.isNaN(numericYear) &&
+    numericYear >= MIN_BALANCE_YEAR &&
+    numericYear <= MAX_BALANCE_YEAR
+  );
+}
+
 function buildCarryAuditReason(fromYear, toYear, userReason) {
   const prefix = `Carry from ${fromYear} to ${toYear}`;
   const trimmed = userReason.trim();
@@ -182,6 +196,13 @@ export default function AdminLeavePolicies() {
       return;
     }
 
+    if (!isValidBalanceYear(creditForm.fromYear) || !isValidBalanceYear(creditForm.toYear)) {
+      setBalances([]);
+      setFromBalances([]);
+      setBalanceError('');
+      return;
+    }
+
     Promise.all([
       leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
       leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
@@ -201,6 +222,11 @@ export default function AdminLeavePolicies() {
 
   async function refreshBalances() {
     if (!creditForm.userId) return;
+    if (!isValidBalanceYear(creditForm.fromYear) || !isValidBalanceYear(creditForm.toYear)) {
+      setBalances([]);
+      setFromBalances([]);
+      return;
+    }
     const [toYearData, fromYearData] = await Promise.all([
       leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
       leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
