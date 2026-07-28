@@ -2,6 +2,7 @@ import serverlessExpress from '@codegenie/serverless-express';
 import mongoose from 'mongoose';
 import { app } from './index.js';
 import { connectDatabase } from './config/db.js';
+import { lambdaBinarySettings } from './config/lambdaBinarySettings.js';
 
 let serverlessHandler;
 
@@ -17,7 +18,10 @@ export const handler = async (event, context) => {
   await ensureDatabase();
 
   if (!serverlessHandler) {
-    serverlessHandler = serverlessExpress({ app });
+    serverlessHandler = serverlessExpress({
+      app,
+      binarySettings: lambdaBinarySettings,
+    });
   }
 
   return serverlessHandler(event, context);

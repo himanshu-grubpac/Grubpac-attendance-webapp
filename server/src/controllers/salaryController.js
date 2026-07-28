@@ -106,7 +106,8 @@ export async function exportSalaryHandler(req, res) {
     'Content-Disposition',
     `attachment; filename="salary-summary-${month}.xlsx"`,
   );
-  res.send(buffer);
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
 }
 
 export async function getUserSalaryHandler(req, res) {

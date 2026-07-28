@@ -28,6 +28,8 @@ Resources:
   AttendanceApi:
     Type: AWS::Serverless::HttpApi
     Properties:
+      # HTTP API v2 handles binary via Lambda isBase64Encoded (see server/src/lambda.js).
+      # REST APIs need BinaryMediaTypes; this stack uses HttpApi, not AWS::Serverless::Api.
       CorsConfiguration:
         AllowCredentials: true
         AllowOrigins:

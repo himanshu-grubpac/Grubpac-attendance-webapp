@@ -13,6 +13,40 @@ export function setCsrfToken(token) {
   csrfToken = token ?? null;
 }
 
+const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+async function downloadExcelBlob(url, { errorMessage = 'Failed to download Excel file.' } = {}) {
+  const response = await fetch(url, {
+    credentials: 'include',
+    headers: {
+      Accept: EXCEL_MIME,
+    },
+  });
+
+  if (!response.ok) {
+    let message = errorMessage;
+    try {
+      const body = await response.json();
+      message = body.message ?? message;
+    } catch {
+      // Non-JSON error body — keep default message.
+    }
+    throw new Error(message);
+  }
+
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength < 4) {
+    throw new Error('Downloaded Excel file is empty.');
+  }
+
+  const magic = new Uint8Array(buffer.slice(0, 2));
+  if (magic[0] !== 0x50 || magic[1] !== 0x4b) {
+    throw new Error('Downloaded file is not a valid Excel workbook.');
+  }
+
+  return new Blob([buffer], { type: EXCEL_MIME });
+}
+
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
@@ -86,39 +120,10 @@ export const adminApi = {
     api.patch(`/admin/users/${id}`, { isActive }).then((r) => r.data),
   resetEmployeePassword: (id, payload) =>
     api.patch(`/admin/users/${id}/password`, payload).then((r) => r.data),
-  downloadTemplate: async () => {
-    const response = await fetch('/api/admin/users/template', {
-      credentials: 'include',
-      headers: {
-        Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      },
-    });
-
-    if (!response.ok) {
-      let message = 'Failed to download template.';
-      try {
-        const body = await response.json();
-        message = body.message ?? message;
-      } catch {
-        // Non-JSON error body — keep default message.
-      }
-      throw new Error(message);
-    }
-
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength < 4) {
-      throw new Error('Downloaded template file is empty.');
-    }
-
-    const magic = new Uint8Array(buffer.slice(0, 2));
-    if (magic[0] !== 0x50 || magic[1] !== 0x4b) {
-      throw new Error('Downloaded file is not a valid Excel workbook.');
-    }
-
-    return new Blob([buffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-  },
+  downloadTemplate: () =>
+    downloadExcelBlob('/api/admin/users/template', {
+      errorMessage: 'Failed to download template.',
+    }),
   bulkUpload: (file) => {
     const form = new FormData();
     form.append('file', file);
@@ -254,7 +259,9 @@ export const salaryApi = {
   listSummaries: (month) =>
     api.get('/salary/summaries', { params: { month } }).then((r) => r.data),
   exportSummary: (month) =>
-    api.get('/salary/export', { params: { month }, responseType: 'blob' }).then((r) => r.data),
+    downloadExcelBlob(`/api/salary/export?month=${encodeURIComponent(month)}`, {
+      errorMessage: 'Failed to export salary summary.',
+    }),
   getSettings: () => api.get('/salary/settings').then((r) => r.data),
   updateSettings: (payload) => api.patch('/salary/settings', payload).then((r) => r.data),
   listStructure: (params = {}) =>
