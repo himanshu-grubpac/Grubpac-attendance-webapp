@@ -9,16 +9,18 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['.xlsx', '.xls'];
 
 const BULK_REGULATIONS = [
-  'Required columns: firstName, email, mobile, password, joiningDate.',
-  'Optional columns: lastName, employeeCode, department, designation (max 100 characters), endingDate.',
+  'Required columns: firstName, email, mobile, password, designation, joiningDate.',
+  'When your organization has departments, department is required (matched case-insensitively to an active department name).',
+  'reportingManagerEmail is required for new employees (must match an active admin, HR, or reporting manager account).',
+  'Optional columns: lastName, employeeCode, reportingManagerCode (alternative to email), endingDate.',
   `employeeCode format: ${EMPLOYEE_CODE_FORMAT_HINT}`,
   'First name must be 2–50 characters; last name is optional and must be at most 50 characters if provided.',
+  'Designation is required (max 100 characters).',
   'Email must be a valid address (max 254 characters) and unique across the system.',
   'Mobile must be a valid 10-digit Indian number (starting with 6–9) and unique across the system.',
   'Password must be 8–128 characters and include uppercase, lowercase, and a number.',
   'Dates must use YYYY-MM-DD format. endingDate is optional.',
   'employeeCode is optional; if provided it must match the format above and be unique.',
-  'department is optional text matched case-insensitively to an active department name.',
   `File must be Excel (.xlsx or .xls), up to 5 MB, with at most ${MAX_BULK_UPLOAD_ROWS} data rows.`,
   'Each row is validated and registered individually. Duplicate email, mobile, or employee code rows are reported without creating accounts.',
   'New employees are assigned the default Employee role.',

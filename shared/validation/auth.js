@@ -74,7 +74,6 @@ export const updateProfileSchema = z
     lastName: z
       .string()
       .trim()
-      .min(1, 'Last name is required.')
       .max(50, 'Last name must be at most 50 characters.')
       .optional(),
     mobile: indianMobileSchema.optional(),

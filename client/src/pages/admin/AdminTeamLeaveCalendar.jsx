@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { createHolidaySchema } from '@shared/validation/holidays.js';
+import { createHolidaySchema, createHolidayCategorySchema, updateHolidayCategorySchema } from '@shared/validation/holidays.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { getErrorMessage, leaveApi } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -60,6 +60,7 @@ export default function AdminTeamLeaveCalendar() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [categoryError, setCategoryError] = useState('');
+  const [categoryFieldErrors, setCategoryFieldErrors] = useState({});
   const [addingCategory, setAddingCategory] = useState(false);
   const [recurringRules, setRecurringRules] = useState([]);
   const [recurringForm, setRecurringForm] = useState({
@@ -76,6 +77,7 @@ export default function AdminTeamLeaveCalendar() {
     setAddingCategory(false);
     setCategoryEditingId(null);
     setCategoryError('');
+    setCategoryFieldErrors({});
   }
 
   useEscapeKey(addingCategory, closeCategoryDialog);
@@ -218,10 +220,18 @@ export default function AdminTeamLeaveCalendar() {
   async function handleCategorySubmit(event) {
     event.preventDefault();
     setCategoryError('');
+    const schema = categoryEditingId ? updateHolidayCategorySchema : createHolidayCategorySchema;
+    const validation = validateForm(schema, categoryForm);
+    if (!validation.data) {
+      setCategoryFieldErrors(validation.errors);
+      return;
+    }
+
+    setCategoryFieldErrors({});
     try {
       const data = categoryEditingId
-        ? await leaveApi.updateHolidayCategory(categoryEditingId, categoryForm)
-        : await leaveApi.createHolidayCategory(categoryForm);
+        ? await leaveApi.updateHolidayCategory(categoryEditingId, validation.data)
+        : await leaveApi.createHolidayCategory(validation.data);
       await loadCategories();
       setForm((current) => ({ ...current, type: data.category.slug }));
       setCategoryForm({ name: '', color: '#8b5cf6' });
@@ -233,6 +243,7 @@ export default function AdminTeamLeaveCalendar() {
 
   function openCategoryDialog(category = null) {
     setCategoryError('');
+    setCategoryFieldErrors({});
     setCategoryEditingId(category?.id ?? null);
     setCategoryForm(category ? { name: category.label, color: category.color } : { name: '', color: '#8b5cf6' });
     setAddingCategory(true);
@@ -464,8 +475,8 @@ export default function AdminTeamLeaveCalendar() {
                 </header>
                 <form className="modal__form" onSubmit={handleCategorySubmit}>
                   <div className="modal__body">
-                    <label className="modal__field"><span className="label">Category name</span><input autoFocus type="text" placeholder="e.g. Optional holiday" value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
-                    <fieldset className="modal__field calendar-management__color-field"><legend className="label">Color</legend><div className="calendar-management__color-palette">{CATEGORY_COLORS.map((color) => <button key={color} type="button" className={`calendar-management__color-swatch${categoryForm.color === color ? ' calendar-management__color-swatch--selected' : ''}`} style={{ background: color }} aria-label={`Choose ${color}`} aria-pressed={categoryForm.color === color} onClick={() => setCategoryForm({ ...categoryForm, color })} />)}</div></fieldset>
+                    <label className="modal__field"><span className="label">Category name</span><input autoFocus type="text" placeholder="e.g. Optional holiday" value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /><FieldError message={categoryFieldErrors.name} /></label>
+                    <fieldset className="modal__field calendar-management__color-field"><legend className="label">Color</legend><div className="calendar-management__color-palette">{CATEGORY_COLORS.map((color) => <button key={color} type="button" className={`calendar-management__color-swatch${categoryForm.color === color ? ' calendar-management__color-swatch--selected' : ''}`} style={{ background: color }} aria-label={`Choose ${color}`} aria-pressed={categoryForm.color === color} onClick={() => setCategoryForm({ ...categoryForm, color })} />)}</div><FieldError message={categoryFieldErrors.color} /></fieldset>
                     {categoryError ? <p className="field-error">{categoryError}</p> : null}
                   </div>
                   <footer className="modal__footer">{categoryEditingId ? <button type="button" className="btn btn-danger" onClick={handleCategoryDelete}>Delete</button> : null}<span className="calendar-management__modal-spacer" /><button type="button" className="btn btn-ghost" onClick={closeCategoryDialog}>Cancel</button><button type="submit" className="btn btn-primary">{categoryEditingId ? 'Save category' : 'Add category'}</button></footer>

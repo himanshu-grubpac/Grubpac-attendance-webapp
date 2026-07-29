@@ -151,8 +151,13 @@ export const employeeInputSchema = z.object({
   managedDepartmentIds: managedDepartmentIdsSchema,
 });
 
+const bulkEmployeeInputSchema = employeeInputSchema.extend({
+  roleId: optionalObjectIdField(),
+});
+
 export function buildEmployeeInputSchema(context = {}) {
-  return employeeInputSchema.superRefine((data, ctx) => {
+  const schema = context.bulkImport ? bulkEmployeeInputSchema : employeeInputSchema;
+  return schema.superRefine((data, ctx) => {
     applyEmployeeDateRangeRules(data, ctx);
     applyEmployeeOrgContextRules(data, context, ctx);
   });

@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { createHelpTicketSchema } from '@shared/validation/help.js';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { validateForm } from '../../utils/validation.js';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import FieldError from '../../components/FieldError.jsx';
 
 const CATEGORIES = ['Login', 'Attendance', 'Leave', 'Salary', 'Other'];
 const PRIORITIES = ['low', 'medium', 'high'];
@@ -36,6 +39,7 @@ export default function EmployeeHelp() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState(EMPTY_FORM);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [showForm, setShowForm] = useState(false);
   const { setMeta } = usePageMetaContext();
 
@@ -81,8 +85,17 @@ export default function EmployeeHelp() {
     event.preventDefault();
     setSubmitting(true);
     setError('');
+
+    const validation = validateForm(createHelpTicketSchema, form);
+    if (!validation.data) {
+      setFieldErrors(validation.errors);
+      setSubmitting(false);
+      return;
+    }
+
+    setFieldErrors({});
     try {
-      const data = await helpApi.createTicket(form);
+      const data = await helpApi.createTicket(validation.data);
       showSuccess('Help ticket submitted.');
       setForm(EMPTY_FORM);
       setShowForm(false);
@@ -116,6 +129,7 @@ export default function EmployeeHelp() {
                   maxLength={200}
                   placeholder="Brief summary of the issue"
                 />
+                <FieldError message={fieldErrors.title} />
               </label>
               <label className="field">
                 <span className="label">Category</span>
@@ -152,6 +166,7 @@ export default function EmployeeHelp() {
                 maxLength={5000}
                 placeholder="Describe the issue and any steps to reproduce"
               />
+              <FieldError message={fieldErrors.description} />
             </label>
             <div className="form-actions form-actions--sticky">
               <button type="submit" className="btn btn-primary" disabled={submitting}>

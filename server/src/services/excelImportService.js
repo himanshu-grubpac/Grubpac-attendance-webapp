@@ -10,6 +10,7 @@ import {
 } from '../../../shared/validation/common.js';
 import {
   legacyRoleFromSlug,
+  prepareEmployeeReferences,
   resolveDepartment,
   resolveManagedDepartments,
   resolveReportingManager,
@@ -84,10 +85,24 @@ async function persistEmployee(parsed, passwordHash, role, department, manager, 
   throw exhausted;
 }
 
-export async function createEmployee(data, createdBy) {
+function stripBulkReferenceFields(data) {
+  const {
+    reportingManagerEmail: _reportingManagerEmail,
+    reportingManagerCode: _reportingManagerCode,
+    ...schemaInput
+  } = data;
+  return schemaInput;
+}
+
+export async function createEmployee(data, createdBy, options = {}) {
   const role = await resolveRole(data.roleId);
   const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
-  const parsed = buildEmployeeInputSchema({ roleSlug: role.slug, hasDepartments }).parse(data);
+  const prepared = await prepareEmployeeReferences(data, { roleSlug: role.slug, hasDepartments });
+  const parsed = buildEmployeeInputSchema({
+    roleSlug: role.slug,
+    hasDepartments,
+    bulkImport: options.bulkImport === true,
+  }).parse(stripBulkReferenceFields(prepared));
   const passwordHash = await bcrypt.hash(parsed.password, 12);
   const department = await resolveDepartment(parsed);
   const manager = parsed.reportingManagerId
@@ -125,9 +140,81 @@ const headerMap = {
   employeeid: 'employeeCode',
   department: 'department',
   designation: 'designation',
+  reportingmanageremail: 'reportingManagerEmail',
+  reportingmanagercode: 'reportingManagerCode',
   joiningdate: 'joiningDate',
   endingdate: 'endingDate',
 };
+
+const DATE_FIELDS = new Set(['joiningDate', 'endingDate']);
+
+function formatIsoDateParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function excelSerialToIsoDate(serial) {
+  if (!Number.isFinite(serial)) {
+    return '';
+  }
+
+  let adjusted = serial;
+  if (adjusted >= 60) {
+    adjusted -= 1;
+  }
+
+  const date = new Date(Date.UTC(1899, 11, 30) + adjusted * 86400000);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return formatIsoDateParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+/** Normalize Excel date cells (serials, Date objects, or text) to YYYY-MM-DD or ''. */
+export function normalizeExcelDateCell(value) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return '';
+    }
+    return formatIsoDateParts(value.getFullYear(), value.getMonth() + 1, value.getDate());
+  }
+
+  if (typeof value === 'number') {
+    return excelSerialToIsoDate(value);
+  }
+
+  const trimmed = String(value).trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const ddMmYyyy = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (ddMmYyyy) {
+    const day = Number(ddMmYyyy[1]);
+    const month = Number(ddMmYyyy[2]);
+    const year = Number(ddMmYyyy[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return formatIsoDateParts(year, month, day);
+    }
+  }
+
+  return trimmed;
+}
+
+function normalizeCellValue(target, value) {
+  if (DATE_FIELDS.has(target)) {
+    return normalizeExcelDateCell(value);
+  }
+  return String(value ?? '').trim();
+}
 
 export function parseEmployeeWorkbook(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -152,7 +239,7 @@ export function parseEmployeeWorkbook(buffer) {
       const normalized = normalizeHeader(key);
       const target = headerMap[normalized];
       if (target) {
-        mapped[target] = String(value ?? '').trim();
+        mapped[target] = normalizeCellValue(target, value);
       }
     }
     return { rowNumber: index + 2, data: mapped };
@@ -218,7 +305,7 @@ export async function importEmployeesFromRows(rows, createdBy) {
 
   for (const row of uniqueRows) {
     try {
-      const employee = await createEmployee(row.data, createdBy);
+      const employee = await createEmployee(row.data, createdBy, { bulkImport: true });
       results.push({
         rowNumber: row.rowNumber,
         status: 'success',
@@ -243,6 +330,16 @@ export async function importEmployeesFromRows(rows, createdBy) {
           status: 'validation_error',
           email: row.data.email ?? '',
           message: error.issues.map((issue) => issue.message).join(' '),
+        });
+        continue;
+      }
+
+      if (error.statusCode === 400) {
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'validation_error',
+          email: row.data.email ?? '',
+          message: error.message ?? 'Validation failed.',
         });
         continue;
       }
@@ -282,6 +379,8 @@ export function buildEmployeeTemplateWorkbook() {
       'employeeCode',
       'department',
       'designation',
+      'reportingManagerEmail',
+      'reportingManagerCode',
       'joiningDate',
       'endingDate',
     ],
@@ -294,6 +393,8 @@ export function buildEmployeeTemplateWorkbook() {
       'EMP001',
       'Development',
       'Software Engineer',
+      'manager@grubpac.com',
+      'TL001',
       '2026-01-15',
       '',
     ],

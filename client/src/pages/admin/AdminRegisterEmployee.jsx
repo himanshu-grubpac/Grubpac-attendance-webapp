@@ -171,7 +171,7 @@ export default function AdminRegisterEmployee() {
     Promise.all([
       adminApi.listRoles(),
       adminApi.listDepartments(),
-      adminApi.listManagers({ limit: 100 }),
+      adminApi.listManagers({ limit: 500 }),
     ])
       .then(([rolesData, departmentsData, managersData]) => {
         const nextRoles = rolesData.roles ?? [];

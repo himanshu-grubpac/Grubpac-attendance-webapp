@@ -389,7 +389,7 @@ export default function AdminEmployeeDetail() {
       })
       .catch(() => {});
     adminApi
-      .listManagers({ limit: 100 })
+      .listManagers({ limit: 500 })
       .then((managersData) => setManagers(managersData.managers ?? []))
       .catch(() => {});
   }, []);

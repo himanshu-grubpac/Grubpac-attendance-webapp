@@ -269,7 +269,7 @@ export async function listManagers(req, res) {
   const { search } = employeeListQuerySchema.pick({ search: true }).parse(req.query);
   const limit = Math.min(
     Number(req.query.limit) || 100,
-    100,
+    500,
   );
 
   const managerRoles = await Role.find({

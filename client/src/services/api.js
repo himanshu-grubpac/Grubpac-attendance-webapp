@@ -217,7 +217,6 @@ export const leaveApi = {
   getBalances: (params = {}) => api.get('/leave/balances', { params }).then((r) => r.data),
   adjustBalance: (userId, payload) =>
     api.patch(`/leave/balances/${userId}`, payload).then((r) => r.data),
-  initBalances: (payload = {}) => api.post('/leave/balances/init', payload).then((r) => r.data),
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
   createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
@@ -239,9 +238,6 @@ export const leaveApi = {
   updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
   materializeRecurringHolidays: (payload) =>
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
-  encashBalance: (userId, payload) =>
-    api.post(`/leave/balances/${userId}/encash`, payload).then((r) => r.data),
-  runAccrualJob: () => api.post('/leave/jobs/accrual').then((r) => r.data),
 };
 
 export const helpApi = {
