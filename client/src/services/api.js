@@ -248,6 +248,16 @@ export const helpApi = {
     api.patch(`/help/tickets/${id}`, payload).then((r) => r.data),
   addComment: (id, payload) =>
     api.post(`/help/tickets/${id}/comments`, payload).then((r) => r.data),
+  presignAttachment: (ticketId, payload) =>
+    api.post(`/help/tickets/${ticketId}/attachments/presign`, payload).then((r) => r.data),
+  confirmAttachment: (ticketId, attachmentId) =>
+    api
+      .post(`/help/tickets/${ticketId}/attachments/${attachmentId}/confirm`)
+      .then((r) => r.data),
+  getAttachmentDownloadUrl: (ticketId, attachmentId) =>
+    api
+      .get(`/help/tickets/${ticketId}/attachments/${attachmentId}/download`)
+      .then((r) => r.data),
 };
 
 export const salaryApi = {

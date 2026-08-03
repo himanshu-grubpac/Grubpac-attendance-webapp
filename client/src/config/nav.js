@@ -88,6 +88,14 @@ export const NAV_ITEMS = [
     permission: PERMISSIONS.AUDIT_READ,
   },
   {
+    to: '/admin/help/tickets',
+    label: 'Help tickets',
+    icon: '?',
+    section: 'Employees',
+    portal: 'admin',
+    allPermissions: [PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE],
+  },
+  {
     to: '/admin/leave/policies',
     label: 'Leave policies',
     icon: '⚙',

@@ -2,8 +2,14 @@ import {
   createHelpCommentSchema,
   createHelpTicketSchema,
   helpTicketQuerySchema,
+  presignHelpAttachmentSchema,
   updateHelpTicketStatusSchema,
 } from '../../../shared/validation/help.js';
+import {
+  confirmUpload,
+  getDownloadUrl,
+  presignUpload,
+} from '../services/helpAttachmentService.js';
 import {
   addHelpComment,
   createHelpTicket,
@@ -49,4 +55,35 @@ export async function addCommentHandler(req, res) {
     parsed,
   );
   res.status(201).json({ comment });
+}
+
+export async function presignAttachmentHandler(req, res) {
+  const parsed = presignHelpAttachmentSchema.parse(req.body);
+  const result = await presignUpload(
+    req.user,
+    req.params.id,
+    req.userPermissions,
+    parsed,
+  );
+  res.status(201).json(result);
+}
+
+export async function confirmAttachmentHandler(req, res) {
+  const attachment = await confirmUpload(
+    req.user,
+    req.params.id,
+    req.params.attachmentId,
+    req.userPermissions,
+  );
+  res.json({ attachment });
+}
+
+export async function downloadAttachmentHandler(req, res) {
+  const result = await getDownloadUrl(
+    req.user,
+    req.params.id,
+    req.params.attachmentId,
+    req.userPermissions,
+  );
+  res.json(result);
 }

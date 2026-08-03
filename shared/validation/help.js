@@ -33,3 +33,15 @@ export const helpTicketQuerySchema = paginationSchema.extend({
   scope: z.enum(['mine', 'team', 'all']).default('mine'),
   status: z.enum(HELP_STATUSES).optional(),
 });
+
+export const HELP_ATTACHMENT_MAX_BYTES = 5_242_880;
+
+export const presignHelpAttachmentSchema = z.object({
+  fileName: z.string().trim().min(1, 'File name is required.').max(255),
+  mimeType: z.string().trim().min(1, 'File type is required.'),
+  sizeBytes: z
+    .number()
+    .int('File size must be a whole number.')
+    .positive('File size must be greater than zero.')
+    .max(HELP_ATTACHMENT_MAX_BYTES, 'File exceeds the 5 MB limit.'),
+});

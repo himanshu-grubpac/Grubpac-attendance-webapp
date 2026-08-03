@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { HelpTicket, HELP_TICKET_POPULATE } from '../models/HelpTicket.js';
 import { HelpComment, HELP_COMMENT_POPULATE } from '../models/HelpComment.js';
+import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachment.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { createNotification } from './notificationService.js';
@@ -216,13 +217,19 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
     throwError('You do not have permission to view this ticket.', 403);
   }
 
-  const comments = await HelpComment.find({ ticketId: ticket._id })
-    .populate(HELP_COMMENT_POPULATE)
-    .sort({ createdAt: 1 });
+  const [comments, attachmentDocs] = await Promise.all([
+    HelpComment.find({ ticketId: ticket._id })
+      .populate(HELP_COMMENT_POPULATE)
+      .sort({ createdAt: 1 }),
+    HelpAttachment.find({ ticketId: ticket._id, status: 'confirmed' })
+      .populate(HELP_ATTACHMENT_POPULATE)
+      .sort({ createdAt: 1 }),
+  ]);
 
   return {
     ticket: ticket.toSafeJSON(),
     comments: comments.map((item) => item.toSafeJSON()),
+    attachments: attachmentDocs.map((item) => item.toSafeJSON()),
   };
 }
 

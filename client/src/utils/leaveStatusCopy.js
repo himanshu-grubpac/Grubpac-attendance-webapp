@@ -37,7 +37,19 @@ export function formatLeaveTypeLabel({ leaveTypeCode, leaveTypeName } = {}) {
 
 /** Info notice on Apply leave — all types; paid line when policy.paid is true. */
 export function buildApplyLeaveNotice({ leaveTypeCode, leaveTypeName, policyPaid = true } = {}) {
+  const code = String(leaveTypeCode ?? '').toUpperCase();
   const label = formatLeaveTypeLabel({ leaveTypeCode, leaveTypeName });
+
+  if (code === 'SL') {
+    const paidLine = policyPaid
+      ? `${label} is paid leave.`
+      : `${label} is unpaid leave.`;
+    return {
+      title: 'Before you submit',
+      lines: ['Sick leave is approved automatically when you submit.', paidLine],
+    };
+  }
+
   const paidLine = policyPaid
     ? `${label} is paid leave once your manager approves it.`
     : `${label} is unpaid leave once your manager approves it.`;

@@ -25,11 +25,13 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
   const { setMeta } = usePageMetaContext();
   const [ticket, setTicket] = useState(null);
   const [comments, setComments] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [commentBody, setCommentBody] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState('');
   const [statusValue, setStatusValue] = useState('open');
 
   async function loadTicket() {
@@ -39,6 +41,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
       const data = await helpApi.getTicket(id);
       setTicket(data.ticket);
       setComments(data.comments ?? []);
+      setAttachments(data.attachments ?? []);
       setStatusValue(data.ticket?.status ?? 'open');
     } catch (err) {
       setError(getErrorMessage(err));
@@ -118,6 +121,19 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     }
   }
 
+  async function handleAttachmentDownload(attachmentId) {
+    setDownloadingAttachmentId(attachmentId);
+    setError('');
+    try {
+      const data = await helpApi.getAttachmentDownloadUrl(id, attachmentId);
+      window.open(data.downloadUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setDownloadingAttachmentId('');
+    }
+  }
+
   if (loading) {
     return (
       <div className="page">
@@ -168,6 +184,29 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           )}
         </dl>
       </div>
+
+      {attachments.length > 0 && (
+        <div className="card">
+          <p className="card__section-title">Attachments</p>
+          <ul className="comment-list">
+            {attachments.map((item) => (
+              <li key={item.id} className="comment-list__item">
+                <div className="comment-list__meta">
+                  <strong>{item.fileName}</strong>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={downloadingAttachmentId === item.id}
+                    onClick={() => handleAttachmentDownload(item.id)}
+                  >
+                    {downloadingAttachmentId === item.id ? 'Preparing…' : 'Download'}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {canUpdateStatus && (
         <div className="card">

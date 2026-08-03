@@ -112,8 +112,13 @@ export default function EmployeeApplyLeave() {
 
     setFieldErrors({});
     try {
-      await leaveApi.createRequest(validation.data);
-      showSuccess('Leave request submitted. Your manager will be notified.');
+      const response = await leaveApi.createRequest(validation.data);
+      const approvedImmediately = response?.request?.status === 'approved';
+      showSuccess(
+        approvedImmediately
+          ? 'Sick leave approved.'
+          : 'Leave request submitted. Your manager will be notified.',
+      );
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
     } catch (err) {

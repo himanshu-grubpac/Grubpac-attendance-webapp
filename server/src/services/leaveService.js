@@ -38,6 +38,36 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
+/** Leave types approved immediately on submit (no manager queue). */
+export const AUTO_APPROVE_LEAVE_TYPE_CODES = new Set(['SL']);
+
+export function isAutoApproveLeaveType(leaveType) {
+  return AUTO_APPROVE_LEAVE_TYPE_CODES.has(String(leaveType?.code ?? '').toUpperCase());
+}
+
+async function applyLeaveApproval(
+  request,
+  { userId, leaveTypeId, days, year, session, approverId = null, comment = null },
+) {
+  await approvePendingDays(userId, leaveTypeId, days, year, session);
+  request.status = 'approved';
+  request.approverId = approverId;
+  request.decidedAt = new Date();
+  request.decisionComment = comment;
+  await request.save({ session });
+}
+
+async function notifyEmployeeLeaveApproved(request, userId) {
+  await createNotification({
+    userId,
+    type: 'leave.approved',
+    title: 'Leave approved',
+    body: `Your leave request for ${request.days} day(s) was approved.`,
+    link: '/employee/leave/requests',
+    metadata: { requestId: request._id.toString() },
+  });
+}
+
 export async function getHolidayDateSet(year) {
   const start = parseDateInputAsISTDay(`${year}-01-01`);
   const end = parseDateInputAsISTDay(`${year}-12-31`);
@@ -250,6 +280,7 @@ export async function createLeaveRequest(userId, payload) {
   const session = await mongoose.startSession();
   try {
     let createdRequest;
+    let autoApproved = false;
     await session.withTransaction(async () => {
       const validated = await validateLeaveRequestInput({
         userId,
@@ -262,6 +293,9 @@ export async function createLeaveRequest(userId, payload) {
       });
 
       await reserveValidatedLeaveBalance(validated.balance, validated.balancePendingDelta, session);
+
+      const autoApprove = isAutoApproveLeaveType(validated.leaveType);
+      autoApproved = autoApprove;
 
       const [request] = await LeaveRequest.create(
         [
@@ -280,19 +314,41 @@ export async function createLeaveRequest(userId, payload) {
         ],
         { session },
       );
+
+      if (autoApprove) {
+        await applyLeaveApproval(request, {
+          userId,
+          leaveTypeId: payload.leaveTypeId,
+          days: validated.days,
+          year: validated.year,
+          session,
+        });
+      }
+
       createdRequest = request;
     });
 
-    await notifyApproversOnSubmit(user, createdRequest);
-
-    auditLog('leave_request_created', {
-      userId: userId.toString(),
-      requestId: createdRequest._id.toString(),
-      leaveTypeId: payload.leaveTypeId,
-      days: createdRequest.days,
-      startDate: payload.startDate,
-      endDate: payload.endDate,
-    });
+    if (autoApproved) {
+      await notifyEmployeeLeaveApproved(createdRequest, userId);
+      auditLog('leave_request_auto_approved', {
+        userId: userId.toString(),
+        requestId: createdRequest._id.toString(),
+        leaveTypeId: payload.leaveTypeId,
+        days: createdRequest.days,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+      });
+    } else {
+      await notifyApproversOnSubmit(user, createdRequest);
+      auditLog('leave_request_created', {
+        userId: userId.toString(),
+        requestId: createdRequest._id.toString(),
+        leaveTypeId: payload.leaveTypeId,
+        days: createdRequest.days,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+      });
+    }
 
     return (await LeaveRequest.findById(createdRequest._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
   } finally {
@@ -398,33 +454,41 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
         if (payload.adminException) {
           request.adminException = true;
         }
-        await approvePendingDays(userId, leaveTypeId, request.days, year, session);
-        request.status = 'approved';
+        await applyLeaveApproval(request, {
+          userId,
+          leaveTypeId,
+          days: request.days,
+          year,
+          session,
+          approverId: actor._id,
+          comment: payload.comment ?? null,
+        });
       } else {
         await releasePendingDays(userId, leaveTypeId, request.days, year, session);
         request.status = 'rejected';
+        request.approverId = actor._id;
+        request.decidedAt = new Date();
+        request.decisionComment = payload.comment ?? null;
+        await request.save({ session });
       }
 
-      request.approverId = actor._id;
-      request.decidedAt = new Date();
-      request.decisionComment = payload.comment ?? null;
-      await request.save({ session });
     });
   } finally {
     session.endSession();
   }
 
-  await createNotification({
-    userId,
-    type: decision === 'approved' ? 'leave.approved' : 'leave.rejected',
-    title: decision === 'approved' ? 'Leave approved' : 'Leave rejected',
-    body:
-      decision === 'approved'
-        ? `Your leave request for ${request.days} day(s) was approved.`
-        : `Your leave request was rejected.${payload.comment ? ` Comment: ${payload.comment}` : ''}`,
-    link: '/employee/leave/requests',
-    metadata: { requestId: request._id.toString() },
-  });
+  if (decision === 'approved') {
+    await notifyEmployeeLeaveApproved(request, userId);
+  } else {
+    await createNotification({
+      userId,
+      type: 'leave.rejected',
+      title: 'Leave rejected',
+      body: `Your leave request was rejected.${payload.comment ? ` Comment: ${payload.comment}` : ''}`,
+      link: '/employee/leave/requests',
+      metadata: { requestId: request._id.toString() },
+    });
+  }
 
   auditLog(decision === 'approved' ? 'leave_request_approved' : 'leave_request_rejected', {
     adminId: actor._id.toString(),

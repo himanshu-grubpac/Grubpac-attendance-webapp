@@ -27,6 +27,9 @@ Parameters:
     Type: String
     Default: grubpac-attendance-api
     Description: Lambda function name (use grubpac-attendance-api-staging for staging)
+  HelpUploadsBucketName:
+    Type: String
+    Description: Existing S3 bucket for help ticket attachments (created outside SAM)
 
 Resources:
   AttendanceApi:
@@ -64,6 +67,19 @@ Resources:
           JWT_SECRET: !Ref JwtSecret
           JWT_EXPIRES_IN: 12h
           CLIENT_ORIGIN: !Ref ClientOrigin
+          UPLOADS_BUCKET: !Ref HelpUploadsBucketName
+          UPLOADS_PREFIX: help-tickets
+          UPLOAD_MAX_BYTES: '5242880'
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+                - s3:DeleteObject
+                - s3:HeadObject
+              Resource: !Sub 'arn:aws:s3:::${HelpUploadsBucketName}/help-tickets/*'
       Events:
         ProxyApi:
           Type: HttpApi

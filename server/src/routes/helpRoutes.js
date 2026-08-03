@@ -4,9 +4,12 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   addCommentHandler,
+  confirmAttachmentHandler,
   createTicketHandler,
+  downloadAttachmentHandler,
   getTicketHandler,
   listTicketsHandler,
+  presignAttachmentHandler,
   updateTicketStatusHandler,
 } from '../controllers/helpController.js';
 
@@ -54,6 +57,28 @@ router.post(
     PERMISSIONS.HELP_MANAGE,
   ),
   asyncHandler(addCommentHandler),
+);
+
+router.post(
+  '/tickets/:id/attachments/presign',
+  requirePermission(PERMISSIONS.HELP_WRITE),
+  asyncHandler(presignAttachmentHandler),
+);
+
+router.post(
+  '/tickets/:id/attachments/:attachmentId/confirm',
+  requirePermission(PERMISSIONS.HELP_WRITE),
+  asyncHandler(confirmAttachmentHandler),
+);
+
+router.get(
+  '/tickets/:id/attachments/:attachmentId/download',
+  requirePermission(
+    PERMISSIONS.HELP_READ,
+    PERMISSIONS.HELP_WRITE,
+    PERMISSIONS.HELP_MANAGE,
+  ),
+  asyncHandler(downloadAttachmentHandler),
 );
 
 export default router;
