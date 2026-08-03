@@ -5,6 +5,7 @@ import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
+import { LeaveType } from '../models/LeaveType.js';
 import { Role } from '../models/Role.js';
 import { SalarySettings } from '../models/SalarySettings.js';
 import { SALARY_TRANSFER_STATUS, SalaryTransfer } from '../models/SalaryTransfer.js';
@@ -57,9 +58,22 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   return creditByDay;
 }
 
+/** WFH is always payable when approved — independent of LeavePolicy.paid (business rule). */
+export function unionWfhLeaveTypeId(paidTypeIds, wfhLeaveTypeId) {
+  const result = new Set(paidTypeIds);
+  if (wfhLeaveTypeId) {
+    result.add(wfhLeaveTypeId.toString());
+  }
+  return result;
+}
+
 async function loadPaidLeaveTypeIds(year = getISTYear()) {
-  const policies = await LeavePolicy.find({ isActive: true, paid: true, year }).select('leaveTypeId');
-  return new Set(policies.map((policy) => policy.leaveTypeId.toString()));
+  const [policies, wfhType] = await Promise.all([
+    LeavePolicy.find({ isActive: true, paid: true, year }).select('leaveTypeId'),
+    LeaveType.findOne({ code: 'WFH' }).select('_id'),
+  ]);
+  const paidIds = new Set(policies.map((policy) => policy.leaveTypeId.toString()));
+  return unionWfhLeaveTypeId(paidIds, wfhType?._id);
 }
 
 /**

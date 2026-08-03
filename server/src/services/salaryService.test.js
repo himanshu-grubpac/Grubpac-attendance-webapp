@@ -5,6 +5,7 @@ import {
   computeDailyCappedPayableDays,
   computeNextPayrollDateIst,
   computeSalaryTransferStatsFromRows,
+  unionWfhLeaveTypeId,
 } from './salaryService.js';
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
 
@@ -79,6 +80,34 @@ test('computeNextPayrollDateIst clamps payroll day to month length', () => {
   assert.equal(computeNextPayrollDateIst(28, reference), '2026-01-28');
   const febReference = parseDateInputAsISTDay('2026-02-01');
   assert.equal(computeNextPayrollDateIst(28, febReference), '2026-02-28');
+});
+
+test('unionWfhLeaveTypeId always includes WFH leave type in payable set', () => {
+  const wfhId = '507f1f77bcf86cd799439011';
+  assert.deepEqual([...unionWfhLeaveTypeId(new Set(['cl-id']), wfhId)], ['cl-id', wfhId]);
+  assert.deepEqual([...unionWfhLeaveTypeId(new Set(), wfhId)], [wfhId]);
+  assert.deepEqual([...unionWfhLeaveTypeId(new Set(['cl-id']), null)], ['cl-id']);
+});
+
+test('buildPaidLeaveDayMap credits approved WFH when WFH type is in payable set (paid: false override)', () => {
+  const wfhTypeId = 'wfh-type-id';
+  const monthStart = parseDateInputAsISTDay('2026-08-04');
+  const monthEnd = parseDateInputAsISTDay('2026-08-04');
+  const requests = [
+    {
+      leaveTypeId: wfhTypeId,
+      startDate: monthStart,
+      endDate: monthEnd,
+      days: 1,
+    },
+  ];
+  const payableSet = unionWfhLeaveTypeId(new Set(), wfhTypeId);
+  const dayMap = buildPaidLeaveDayMap(requests, monthStart, monthEnd, new Set(), payableSet);
+
+  assert.equal(dayMap.get('2026-08-04'), 1);
+
+  const withoutWfh = buildPaidLeaveDayMap(requests, monthStart, monthEnd, new Set(), new Set());
+  assert.equal(withoutWfh.size, 0);
 });
 
 test('computeSalaryTransferStatsFromRows aggregates pending, paid, failed counts and amount', () => {
