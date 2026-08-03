@@ -499,10 +499,15 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   const skip = (query.page - 1) * query.limit;
+  const resolvedStatus = filter.status ?? query.status;
+  const sort =
+    resolvedStatus === 'approved' || resolvedStatus === 'rejected'
+      ? { decidedAt: -1, createdAt: -1 }
+      : { createdAt: -1 };
   const [requests, total] = await Promise.all([
     LeaveRequest.find(filter)
       .populate(LEAVE_REQUEST_POPULATE)
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(query.limit),
     LeaveRequest.countDocuments(filter),

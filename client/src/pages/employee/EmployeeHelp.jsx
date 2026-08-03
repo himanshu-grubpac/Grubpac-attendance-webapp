@@ -197,7 +197,15 @@ export default function EmployeeHelp() {
             }
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <>
+            {tickets.length > 0 && !showForm && (
+              <div className="card__toolbar">
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
+                  New ticket
+                </button>
+              </div>
+            )}
+            <div className="table-wrap table-wrap--responsive">
             <table className="table data-table">
                 <thead>
                   <tr>
@@ -225,6 +233,7 @@ export default function EmployeeHelp() {
               </tbody>
             </table>
           </div>
+          </>
         )}
         <PaginationBar pagination={pagination} onPageChange={setPage} />
       </div>

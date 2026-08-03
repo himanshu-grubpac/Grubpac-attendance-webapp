@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatISTDate, IST_TIMEZONE } from '../../utils/datetime.js';
+import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
 import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -13,22 +13,30 @@ const APPROVALS_PAGE_SIZE = 20;
 
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
 
-const STAT_CARDS = [
-  {
-    key: 'pending',
-    label: 'PENDING REQUESTS',
-    hint: 'Awaiting your decision',
-    icon: '⏳',
-    tone: 'warning',
-  },
-  {
-    key: 'days',
-    label: 'LEAVE DAYS',
-    hint: 'Total days on this page',
-    icon: '▤',
-    tone: 'info',
-  },
+const QUEUE_STATUS_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'approved', label: 'Approved' },
 ];
+
+function statCardsForQueue(queueStatus) {
+  const isPending = queueStatus === 'pending';
+  return [
+    {
+      key: 'count',
+      label: isPending ? 'PENDING REQUESTS' : 'APPROVED REQUESTS',
+      hint: isPending ? 'Awaiting your decision' : 'Decisions recorded in your scope',
+      icon: isPending ? '⏳' : '✓',
+      tone: isPending ? 'warning' : 'info',
+    },
+    {
+      key: 'days',
+      label: 'LEAVE DAYS',
+      hint: 'Total days on this page',
+      icon: '▤',
+      tone: 'info',
+    },
+  ];
+}
 
 function getInitials(name) {
   if (!name?.trim()) return '?';
@@ -106,6 +114,11 @@ function durationLabel(days) {
 function submittedLabel(value) {
   if (!value) return null;
   return formatISTDate(value);
+}
+
+function decidedLabel(value) {
+  if (!value) return null;
+  return formatISTDateTime(value);
 }
 
 function isDefaultMonthFilter(month) {
@@ -235,13 +248,16 @@ export default function AdminLeaveApprovals() {
   const [comments, setComments] = useState({});
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
+  const [queueStatus, setQueueStatus] = useState('pending');
 
   const employeeFilterRef = useRef(employeeFilter);
   const yearFilterRef = useRef(yearFilter);
   const monthPartFilterRef = useRef(monthPartFilter);
+  const queueStatusRef = useRef(queueStatus);
   employeeFilterRef.current = employeeFilter;
   yearFilterRef.current = yearFilter;
   monthPartFilterRef.current = monthPartFilter;
+  queueStatusRef.current = queueStatus;
 
   const monthFilter = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
@@ -273,6 +289,7 @@ export default function AdminLeaveApprovals() {
     nextEmployee = employeeFilterRef.current,
     nextYear = yearFilterRef.current,
     nextMonthPart = monthPartFilterRef.current,
+    nextQueueStatus = queueStatusRef.current,
   } = {}) => {
     const nextMonth = toMonthFilterValue(nextYear, nextMonthPart);
     setLoading(true);
@@ -280,6 +297,7 @@ export default function AdminLeaveApprovals() {
     try {
       const params = {
         scope: 'approvals',
+        status: nextQueueStatus,
         page: nextPage,
         limit: 20,
       };
@@ -303,7 +321,12 @@ export default function AdminLeaveApprovals() {
 
   useEffect(() => {
     setExpandedIds({});
-  }, [page, employeeFilter, monthFilter]);
+  }, [page, employeeFilter, monthFilter, queueStatus]);
+
+  function handleQueueStatusChange(value) {
+    setQueueStatus(value);
+    loadRequests({ nextPage: 1, nextQueueStatus: value });
+  }
 
   useEffect(() => {
     setEmployeesLoading(true);
@@ -407,8 +430,11 @@ export default function AdminLeaveApprovals() {
     }
   }
 
+  const statCards = useMemo(() => statCardsForQueue(queueStatus), [queueStatus]);
+  const isPendingQueue = queueStatus === 'pending';
+
   const statValues = {
-    pending: pagination?.total ?? (loading ? null : 0),
+    count: pagination?.total ?? (loading ? null : 0),
     days: loading ? null : pageLeaveDays,
   };
 
@@ -419,8 +445,8 @@ export default function AdminLeaveApprovals() {
       <section className="approvals-stats" aria-label="Approval queue summary">
         <div className="approvals-stats__grid">
           {loading && !pagination
-            ? STAT_CARDS.map((card) => <StatCardSkeleton key={card.key} />)
-            : STAT_CARDS.map((card) => (
+            ? statCards.map((card) => <StatCardSkeleton key={card.key} />)
+            : statCards.map((card) => (
                 <article
                   key={card.key}
                   className={`approvals-stat card approvals-stat--${card.tone}`}
@@ -440,9 +466,22 @@ export default function AdminLeaveApprovals() {
         </div>
       </section>
 
-      <section className="approvals-panel card card--table" aria-label="Pending leave requests">
+      <section
+        className="approvals-panel card card--table"
+        aria-label={isPendingQueue ? 'Pending leave requests' : 'Approved leave requests'}
+      >
         <div className="approvals-toolbar card__toolbar">
           <div className="approvals-toolbar__filters filter-bar">
+            <label className="field-inline filter-bar__field approvals-toolbar__field">
+              <span className="label">Queue</span>
+              <SelectField
+                value={queueStatus}
+                onChange={handleQueueStatusChange}
+                options={QUEUE_STATUS_OPTIONS}
+                aria-label="Leave queue filter"
+              />
+            </label>
+
             <label className="field-inline filter-bar__field approvals-toolbar__field">
               <span className="label">Employee</span>
               <SelectField
@@ -491,13 +530,17 @@ export default function AdminLeaveApprovals() {
             icon={EMPTY_ICONS.leave}
             title={
               hasActiveFilters
-                ? 'No pending requests match these filters'
-                : 'No leave requests pending approval'
+                ? `No ${isPendingQueue ? 'pending' : 'approved'} requests match these filters`
+                : isPendingQueue
+                  ? 'No leave requests pending approval'
+                  : 'No approved leave requests in this period'
             }
             description={
               hasActiveFilters
                 ? 'Try a different employee or month, or clear filters to see the full queue.'
-                : 'New leave requests that require your decision will appear in this queue.'
+                : isPendingQueue
+                  ? 'New leave requests that require your decision will appear in this queue.'
+                  : 'Approved requests in your scope will appear here after decisions are recorded.'
             }
             action={
               hasActiveFilters ? (
@@ -529,6 +572,7 @@ export default function AdminLeaveApprovals() {
                     const rowNumber = (page - 1) * pageSize + index + 1;
                     const busy = actingId === item.id;
                     const submitted = submittedLabel(item.createdAt);
+                    const decided = decidedLabel(item.decidedAt);
                     const initials = getInitials(item.userName);
                     const color = avatarColor(item.userName);
                     const isExpanded = Boolean(expandedIds[item.id]);
@@ -630,6 +674,13 @@ export default function AdminLeaveApprovals() {
                                   </p>
                                 ) : null}
 
+                                {decided ? (
+                                  <p className="approval-row__submitted muted small">
+                                    {item.status === 'approved' ? 'Approved' : 'Decided'} {decided}
+                                    {item.approverName ? ` by ${item.approverName}` : ''}
+                                  </p>
+                                ) : null}
+
                                 <dl className="approval-row__meta">
                                   <div className="approval-row__meta-item">
                                     <dt>Leave type</dt>
@@ -669,36 +720,47 @@ export default function AdminLeaveApprovals() {
                                   </a>
                                 ) : null}
 
-                                <label className="approval-row__comment field">
-                                  <span className="label">Approver comment (optional)</span>
-                                  <input
-                                    type="text"
-                                    value={comments[item.id] ?? ''}
-                                    onChange={(event) => setCommentFor(item.id, event.target.value)}
-                                    placeholder="Shared with the employee after your decision"
-                                    disabled={busy}
-                                    maxLength={500}
-                                  />
-                                </label>
+                                {item.decisionComment ? (
+                                  <div className="approval-row__reason">
+                                    <span className="label">Approver comment</span>
+                                    <p>{item.decisionComment}</p>
+                                  </div>
+                                ) : null}
 
-                                <div className="approval-row__actions">
-                                  <button
-                                    type="button"
-                                    className="btn btn-primary"
-                                    disabled={busy}
-                                    onClick={() => handleDecision(item.id, 'approve')}
-                                  >
-                                    {busy ? 'Submitting…' : 'Approve'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-danger"
-                                    disabled={busy}
-                                    onClick={() => handleDecision(item.id, 'reject')}
-                                  >
-                                    Decline
-                                  </button>
-                                </div>
+                                {isPendingQueue ? (
+                                  <>
+                                    <label className="approval-row__comment field">
+                                      <span className="label">Approver comment (optional)</span>
+                                      <input
+                                        type="text"
+                                        value={comments[item.id] ?? ''}
+                                        onChange={(event) => setCommentFor(item.id, event.target.value)}
+                                        placeholder="Shared with the employee after your decision"
+                                        disabled={busy}
+                                        maxLength={500}
+                                      />
+                                    </label>
+
+                                    <div className="approval-row__actions">
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        disabled={busy}
+                                        onClick={() => handleDecision(item.id, 'approve')}
+                                      >
+                                        {busy ? 'Submitting…' : 'Approve'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-danger"
+                                        disabled={busy}
+                                        onClick={() => handleDecision(item.id, 'reject')}
+                                      >
+                                        Decline
+                                      </button>
+                                    </div>
+                                  </>
+                                ) : null}
                               </div>
                             </td>
                           </tr>
