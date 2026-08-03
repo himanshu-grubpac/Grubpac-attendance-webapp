@@ -226,6 +226,42 @@
   color: var(--warning);
 }
 
+.alert--block {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.leave-status-notice__title {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.leave-status-notice__body {
+  margin: 0;
+  line-height: 1.45;
+  color: inherit;
+}
+
+.leave-status-notice__list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.15rem;
+  line-height: 1.45;
+}
+
+.leave-status-notice__list li + li {
+  margin-top: 0.35rem;
+}
+
+.dash-pending-leave-notice {
+  margin-top: var(--space-3);
+}
+
+.result-card__pending-leave {
+  margin: 0.65rem 0 0;
+  font-size: 0.8125rem;
+}
+
 /* ── Cards ────────────────────────────────────────────────────────── */
 
 .card {

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
-import { LeaveRequest } from '../models/LeaveRequest.js';
+import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
 import {
@@ -49,7 +49,34 @@ async function getTodayRecords(userId, session = null) {
   return query;
 }
 
-function buildTodayStatus(records, office) {
+async function loadPendingLeaveForToday(userId) {
+  const todayDay = parseDateInputAsISTDay(getISTDateInputValue());
+  const request = await LeaveRequest.findOne({
+    userId,
+    status: 'pending',
+    startDate: { $lte: todayDay },
+    endDate: { $gte: todayDay },
+  })
+    .populate(LEAVE_REQUEST_POPULATE[0])
+    .sort({ createdAt: -1 });
+
+  if (!request) {
+    return null;
+  }
+
+  const safe = request.toSafeJSON();
+  return {
+    id: safe.id,
+    leaveTypeCode: safe.leaveTypeCode,
+    leaveTypeName: safe.leaveTypeName,
+    startDate: safe.startDate,
+    endDate: safe.endDate,
+    days: safe.days,
+    halfDay: safe.halfDay,
+  };
+}
+
+function buildTodayStatus(records, office, pendingLeaveToday = null) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
 
@@ -58,6 +85,7 @@ function buildTodayStatus(records, office) {
     checkOut,
     canCheckIn: !checkIn,
     canCheckOut: Boolean(checkIn) && !checkOut,
+    pendingLeaveToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
     office: {
@@ -75,11 +103,12 @@ function buildTodayStatus(records, office) {
 }
 
 export async function getTodayStatus(userId) {
-  const [records, office] = await Promise.all([
+  const [records, office, pendingLeaveToday] = await Promise.all([
     getTodayRecords(userId),
     getOfficeSettings(),
+    loadPendingLeaveForToday(userId),
   ]);
-  return buildTodayStatus(records, office);
+  return buildTodayStatus(records, office, pendingLeaveToday);
 }
 
 export async function markAttendance(userId, type, payload, auditContext = {}) {
@@ -175,6 +204,8 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         remaining: row.remaining,
       };
     }
+
+    result.pendingLeaveToday = await loadPendingLeaveForToday(userId);
 
     return result;
   } finally {

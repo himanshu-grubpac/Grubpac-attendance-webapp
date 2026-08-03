@@ -4,6 +4,11 @@ import { getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import {
+  buildApplyLeaveNotice,
+  resolveLeavePolicyPaid,
+  selectLeavePolicyForType,
+} from '../../utils/leaveStatusCopy.js';
 import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -26,6 +31,7 @@ const DURATION_OPTIONS = [
 export default function EmployeeApplyLeave() {
   const { showSuccess } = useToast();
   const [types, setTypes] = useState([]);
+  const [policies, setPolicies] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [preview, setPreview] = useState(null);
@@ -33,6 +39,7 @@ export default function EmployeeApplyLeave() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    const year = new Date().getFullYear();
     leaveApi
       .listTypes()
       .then((data) => {
@@ -43,6 +50,11 @@ export default function EmployeeApplyLeave() {
         }
       })
       .catch((err) => setError(getErrorMessage(err)));
+
+    leaveApi
+      .listPolicies({ year })
+      .then((data) => setPolicies(data.policies ?? []))
+      .catch(() => setPolicies([]));
   }, []);
 
   useEffect(() => {
@@ -112,6 +124,18 @@ export default function EmployeeApplyLeave() {
   }
 
   const selectedType = types.find((item) => item.id === form.leaveTypeId);
+  const policyYear = new Date().getFullYear();
+  const selectedPolicy = selectLeavePolicyForType(policies, form.leaveTypeId, policyYear);
+  const applyNotice = selectedType
+    ? buildApplyLeaveNotice({
+        leaveTypeCode: selectedType.code,
+        leaveTypeName: selectedType.name,
+        policyPaid: resolveLeavePolicyPaid({
+          leaveTypeCode: selectedType.code,
+          policy: selectedPolicy,
+        }),
+      })
+    : null;
 
   return (
     <div className="page page--form">
@@ -192,6 +216,23 @@ export default function EmployeeApplyLeave() {
           />
           <FieldError message={fieldErrors.reason} />
         </label>
+
+        {applyNotice ? (
+          <div
+            className="alert alert--info alert--block leave-status-notice form-grid__full"
+            role="note"
+            aria-label="Leave approval and pay estimate information"
+          >
+            <p className="leave-status-notice__title">
+              <strong>{applyNotice.title}</strong>
+            </p>
+            <ul className="leave-status-notice__list">
+              {applyNotice.lines.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {preview && (
           <div className="preview-box">

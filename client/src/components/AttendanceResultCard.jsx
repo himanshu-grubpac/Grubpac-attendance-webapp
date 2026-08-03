@@ -1,7 +1,7 @@
 import { formatISTDateTime } from '../utils/datetime.js';
 import { formatCheckInOutcome } from '../utils/attendanceOutcome.js';
 
-export default function AttendanceResultCard({ result, quarterAllowance = 3 }) {
+export default function AttendanceResultCard({ result, quarterAllowance = 3, pendingLeaveFollowUp }) {
   if (!result) return null;
 
   const allowed = result.status === 'allowed';
@@ -16,6 +16,11 @@ export default function AttendanceResultCard({ result, quarterAllowance = 3 }) {
       <div className="result-card__status">
         {allowed ? '✓ Allowed' : '✕ Rejected'}
       </div>
+      {pendingLeaveFollowUp ? (
+        <p className="result-card__pending-leave alert alert--warning alert--block">
+          {pendingLeaveFollowUp}
+        </p>
+      ) : null}
       {outcome ? (
         <p className="result-card__outcome">
           <strong>{outcome.headline}</strong>

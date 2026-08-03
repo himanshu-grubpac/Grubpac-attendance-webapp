@@ -17,6 +17,10 @@ import {
   previousISTMonthInput,
 } from '../../utils/datetime.js';
 import { formatQuarterWarningBalance } from '../../utils/attendanceOutcome.js';
+import {
+  buildPendingLeaveCheckInFollowUp,
+  buildPendingLeaveCheckInWarning,
+} from '../../utils/leaveStatusCopy.js';
 import { evaluateOfficeGeoPreview } from '../../utils/geoPreview.js';
 
 function nextISTMonthInput(monthInput) {
@@ -212,6 +216,7 @@ export default function EmployeeDashboard() {
   }
 
   const displayName = user?.name?.split(' ')[0] || 'there';
+  const pendingLeaveWarning = buildPendingLeaveCheckInWarning(today?.pendingLeaveToday);
   const dateLabel = new Intl.DateTimeFormat('en-IN', {
     timeZone: 'Asia/Kolkata',
     weekday: 'short',
@@ -293,6 +298,19 @@ export default function EmployeeDashboard() {
           </p>
         )}
 
+        {pendingLeaveWarning && !today?.checkIn ? (
+          <div
+            className="alert alert--warning alert--block dash-pending-leave-notice"
+            role="status"
+            aria-live="polite"
+          >
+            <p className="leave-status-notice__title">
+              <strong>{pendingLeaveWarning.title}</strong>
+            </p>
+            <p className="leave-status-notice__body">{pendingLeaveWarning.body}</p>
+          </div>
+        ) : null}
+
         <div className="dash-hero__actions">
           <button
             type="button"
@@ -356,6 +374,11 @@ export default function EmployeeDashboard() {
           <AttendanceResultCard
             result={result}
             quarterAllowance={quarterWarnings?.allowance ?? 3}
+            pendingLeaveFollowUp={
+              result?.status === 'allowed' && result?.record?.type === 'check_in'
+                ? buildPendingLeaveCheckInFollowUp(result.pendingLeaveToday)
+                : null
+            }
           />
         </div>
 
