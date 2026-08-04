@@ -40,10 +40,20 @@ const limiter = rateLimit({
 app.use(limiter);
 
 app.get('/api/health', async (req, res) => {
+  const deepCheck = req.query.db === '1' || req.query.db === 'true';
   const checks = {
     api: 'ok',
-    mongo: 'unknown',
   };
+
+  if (!deepCheck) {
+    return res.json({
+      status: 'ok',
+      checks,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  checks.mongo = 'unknown';
 
   try {
     if (mongoose.connection.readyState !== 1) {

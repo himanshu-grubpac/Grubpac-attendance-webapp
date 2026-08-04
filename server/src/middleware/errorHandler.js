@@ -1,5 +1,16 @@
 import { ZodError } from 'zod';
-import { duplicateFieldMessage } from '../services/employeeCodeService.js';
+import { duplicateFieldMessage } from '../utils/duplicateFieldMessage.js';
+
+const MONGO_UNAVAILABLE_ERROR_NAMES = new Set([
+  'MongoNetworkError',
+  'MongooseServerSelectionError',
+  'MongoServerSelectionError',
+  'MongoParseError',
+]);
+
+export function isMongoUnavailableError(error) {
+  return MONGO_UNAVAILABLE_ERROR_NAMES.has(error?.name);
+}
 
 export function errorHandler(error, req, res, next) {
   if (res.headersSent) {
@@ -31,8 +42,22 @@ export function errorHandler(error, req, res, next) {
     });
   }
 
-  console.error(error);
-  return res.status(error.statusCode ?? 500).json({
+  if (isMongoUnavailableError(error)) {
+    console.warn(error);
+    res.set('Retry-After', '2');
+    return res.status(503).json({
+      message: 'Database temporarily unavailable.',
+      code: 'DB_UNAVAILABLE',
+    });
+  }
+
+  const statusCode = error.statusCode ?? 500;
+  if (statusCode >= 500) {
+    console.error(error);
+  } else if (statusCode >= 400) {
+    console.warn(error);
+  }
+  return res.status(statusCode).json({
     message: error.message ?? 'Internal server error.',
   });
 }

@@ -239,7 +239,7 @@ export default function EmployeeApplyLeave() {
           </div>
         ) : null}
 
-        {preview && (
+        {preview && selectedType?.code !== 'WFH' && (
           <div className="preview-box">
             <strong>{preview.days}</strong> leave day(s)
             {preview.sandwichApplied && (

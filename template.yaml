@@ -30,6 +30,23 @@ Parameters:
   HelpUploadsBucketName:
     Type: String
     Description: Existing S3 bucket for help ticket attachments (created outside SAM)
+  ReservedConcurrency:
+    Type: Number
+    Default: 40
+    MinValue: 0
+    MaxValue: 100
+    Description: Max concurrent Lambda containers (0 = disabled). Prod 50-60 employees ~40. Staging use 0. If deploy fails on unreserved minimum, set 0 until AWS raises account concurrency limit.
+  EnableWarmupSchedule:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: EventBridge ping every 5 min to keep containers warm
+
+Conditions:
+  EnableWarmup: !Equals [!Ref EnableWarmupSchedule, 'true']
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, 0]]
 
 Resources:
   AttendanceApi:
@@ -60,6 +77,10 @@ Resources:
       FunctionName: !Ref ApiFunctionName
       Handler: server/src/lambda.handler
       CodeUri: lambda-package/
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrency
+        - !Ref ReservedConcurrency
+        - !Ref AWS::NoValue
       Environment:
         Variables:
           NODE_ENV: production
@@ -95,6 +116,78 @@ Resources:
             PayloadFormatVersion: '2.0'
             Method: ANY
             Path: /
+
+  WarmupScheduleRule:
+    Type: AWS::Events::Rule
+    Condition: EnableWarmup
+    Properties:
+      Description: Keep Lambda warm and prevent M0 auto-pause (lightweight /api/health ping)
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AttendanceFunction.Arn
+          Id: WarmupTarget
+          Input: '{"version":"2.0","routeKey":"GET /api/health","rawPath":"/api/health","headers":{},"requestContext":{"http":{"method":"GET","path":"/api/health"}}}'
+
+  WarmupSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: EnableWarmup
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AttendanceFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WarmupScheduleRule.Arn
+
+  LambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ApiFunctionName}-errors'
+      AlarmDescription: Lambda errors >= 5 in 5 minutes
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunctionName
+
+  LambdaThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ApiFunctionName}-throttles'
+      AlarmDescription: Lambda throttles >= 1 in 5 minutes (concurrency cap hit)
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunctionName
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ApiFunctionName}-duration'
+      AlarmDescription: Lambda average duration > 10s in 5 minutes
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunctionName
 
 Outputs:
   ApiUrl:
