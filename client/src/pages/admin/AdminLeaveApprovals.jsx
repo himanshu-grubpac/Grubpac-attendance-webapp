@@ -113,7 +113,7 @@ function durationLabel(days) {
 
 function submittedLabel(value) {
   if (!value) return null;
-  return formatISTDate(value);
+  return formatISTDateTime(value);
 }
 
 function decidedLabel(value) {

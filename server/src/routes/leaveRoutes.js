@@ -38,6 +38,11 @@ import {
   updateLeavePolicy,
   updateLeaveType,
 } from '../controllers/leaveController.js';
+import leaveCarryBulkRoutes from './leaveCarryBulkRoutes.js';
+import {
+  batchAdjustLeaveCarriedHandler,
+  getLeaveAdjustmentGridHandler,
+} from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
 
@@ -186,5 +191,18 @@ router.post(
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(materializeRecurringHolidays),
 );
+
+router.get(
+  '/adjustments/grid',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  asyncHandler(getLeaveAdjustmentGridHandler),
+);
+router.post(
+  '/adjustments/batch',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  asyncHandler(batchAdjustLeaveCarriedHandler),
+);
+
+router.use(leaveCarryBulkRoutes);
 
 export default router;

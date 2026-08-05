@@ -148,6 +148,12 @@ export default function EmployeeDashboard() {
   }, [refreshToday, loadQuarterWarnings]);
 
   useEffect(() => {
+    if (today && !today.wfhApprovedToday && attendanceMode === 'wfh') {
+      setAttendanceMode('office');
+    }
+  }, [today, attendanceMode]);
+
+  useEffect(() => {
     loadCalendar(calendarMonth);
   }, [calendarMonth, loadCalendar]);
 
@@ -281,15 +287,17 @@ export default function EmployeeDashboard() {
                 className={`attendance-mode-picker__option${attendanceMode === 'wfh' ? ' attendance-mode-picker__option--active' : ''}`}
                 aria-pressed={attendanceMode === 'wfh'}
                 onClick={() => setAttendanceMode('wfh')}
-                disabled={actionLoading || geoLoading}
+                disabled={actionLoading || geoLoading || !today?.wfhApprovedToday}
               >
                 Work from home
               </button>
             </div>
             <p className="attendance-mode-picker__hint muted small">
-              {attendanceMode === 'office'
-                ? 'Office check-in requires you to be within the configured office radius.'
-                : 'Work from Home records your current location without applying the office-radius check.'}
+              {!today?.wfhApprovedToday
+                ? 'Work from Home requires manager-approved WFH leave for today. Office check-in is always available within the office radius.'
+                : attendanceMode === 'office'
+                  ? 'Office check-in requires you to be within the configured office radius. Approved WFH leave also allows Work from Home check-in.'
+                  : 'Work from Home records your current location without applying the office-radius check.'}
             </p>
           </div>
         ) : (

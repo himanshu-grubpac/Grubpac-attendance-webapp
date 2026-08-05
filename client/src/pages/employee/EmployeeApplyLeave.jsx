@@ -9,6 +9,11 @@ import {
   resolveLeavePolicyPaid,
   selectLeavePolicyForType,
 } from '../../utils/leaveStatusCopy.js';
+import {
+  isLeaveTypeExemptFromApplyDeadline,
+  validateLeaveApplyDeadline,
+  LEAVE_APPLY_DEADLINE_ERROR,
+} from '@shared/utils/wfhPolicy.js';
 import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -142,6 +147,13 @@ export default function EmployeeApplyLeave() {
       })
     : null;
 
+  const isSlType = selectedType && isLeaveTypeExemptFromApplyDeadline(selectedType.code);
+
+  const applyDeadlineError =
+    selectedType && !isSlType && form.startDate && form.endDate
+      ? validateLeaveApplyDeadline(form.startDate, form.endDate, selectedType.code)
+      : null;
+
   return (
     <div className="page page--form">
       {error ? (
@@ -232,10 +244,19 @@ export default function EmployeeApplyLeave() {
               <strong>{applyNotice.title}</strong>
             </p>
             <ul className="leave-status-notice__list">
+              {!isSlType ? (
+                <li>{LEAVE_APPLY_DEADLINE_ERROR}</li>
+              ) : null}
               {applyNotice.lines.map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>
+          </div>
+        ) : null}
+
+        {applyDeadlineError ? (
+          <div className="alert alert--warning alert--block form-grid__full" role="alert">
+            {applyDeadlineError}
           </div>
         ) : null}
 
@@ -265,7 +286,7 @@ export default function EmployeeApplyLeave() {
         )}
 
         <div className="form-actions form-actions--sticky">
-          <button type="submit" className="btn btn-primary" disabled={submitting}>
+          <button type="submit" className="btn btn-primary" disabled={submitting || Boolean(applyDeadlineError)}>
             {submitting ? 'Submitting…' : 'Submit request'}
           </button>
         </div>

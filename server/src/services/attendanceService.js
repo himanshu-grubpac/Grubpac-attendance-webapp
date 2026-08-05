@@ -28,6 +28,10 @@ import {
   getISTTimeHHmm,
 } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
+import {
+  hasApprovedWfhForIstDate,
+  validateWfhCheckInMode,
+} from './wfhPolicyService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -76,7 +80,7 @@ async function loadPendingLeaveForToday(userId) {
   };
 }
 
-function buildTodayStatus(records, office, pendingLeaveToday = null) {
+function buildTodayStatus(records, office, pendingLeaveToday = null, wfhApprovedToday = false) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
 
@@ -86,6 +90,7 @@ function buildTodayStatus(records, office, pendingLeaveToday = null) {
     canCheckIn: !checkIn,
     canCheckOut: Boolean(checkIn) && !checkOut,
     pendingLeaveToday,
+    wfhApprovedToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
     office: {
@@ -103,12 +108,14 @@ function buildTodayStatus(records, office, pendingLeaveToday = null) {
 }
 
 export async function getTodayStatus(userId) {
-  const [records, office, pendingLeaveToday] = await Promise.all([
+  const istToday = getISTDateInputValue();
+  const [records, office, pendingLeaveToday, wfhApprovedToday] = await Promise.all([
     getTodayRecords(userId),
     getOfficeSettings(),
     loadPendingLeaveForToday(userId),
+    hasApprovedWfhForIstDate(userId, istToday),
   ]);
-  return buildTodayStatus(records, office, pendingLeaveToday);
+  return buildTodayStatus(records, office, pendingLeaveToday, wfhApprovedToday);
 }
 
 export async function markAttendance(userId, type, payload, auditContext = {}) {
@@ -131,6 +138,13 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       });
 
       const businessReasons = [];
+      if (type === 'check_in' && attendanceMode === 'wfh') {
+        const wfhApprovedToday = await hasApprovedWfhForIstDate(userId, getISTDateInputValue());
+        const wfhCheckInError = validateWfhCheckInMode(attendanceMode, wfhApprovedToday);
+        if (wfhCheckInError) {
+          businessReasons.push(wfhCheckInError);
+        }
+      }
       if (type === 'check_in' && !today.canCheckIn) {
         businessReasons.push('You have already checked in today.');
       }

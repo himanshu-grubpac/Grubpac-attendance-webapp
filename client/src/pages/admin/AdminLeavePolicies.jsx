@@ -1,31 +1,22 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { adjustLeaveBalanceSchema, createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
+import { createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
 import { PERMISSIONS } from '@shared/permissions.js';
-import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
+import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
-import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { validateForm } from '../../utils/validation.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
-import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
+import LeaveCarryBulkModal from './LeaveCarryBulkModal.jsx';
+import EmployeeLeaveAdjustment from './EmployeeLeaveAdjustment.jsx';
 
 const currentCalendarYear = new Date().getFullYear();
-
-const emptyCreditForm = {
-  userId: '',
-  leaveTypeId: '',
-  fromYear: currentCalendarYear - 1,
-  toYear: currentCalendarYear,
-  carried: '',
-  reason: '',
-};
 
 const emptyTypeForm = {
   code: '',
@@ -56,27 +47,6 @@ function buildYearOptions() {
 }
 
 const balanceYearOptions = buildYearOptions();
-
-const MIN_BALANCE_YEAR = 2000;
-const MAX_BALANCE_YEAR = 2100;
-
-function isValidBalanceYear(year) {
-  const numericYear = Number(year);
-  return (
-    year !== '' &&
-    year != null &&
-    !Number.isNaN(numericYear) &&
-    numericYear >= MIN_BALANCE_YEAR &&
-    numericYear <= MAX_BALANCE_YEAR
-  );
-}
-
-function buildCarryAuditReason(fromYear, toYear, userReason) {
-  const prefix = `Carry from ${fromYear} to ${toYear}`;
-  const trimmed = userReason.trim();
-  if (!trimmed) return prefix;
-  return `${prefix}: ${trimmed}`;
-}
 
 function TableSkeleton() {
   return (
@@ -141,7 +111,6 @@ export default function AdminLeavePolicies() {
   const { hasPermission } = useAuth();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const editModalTitleId = useId();
-  const balanceModalTitleId = useId();
   const addTypeModalTitleId = useId();
   const addPolicyModalTitleId = useId();
   const canAdjustBalances = hasPermission(PERMISSIONS.LEAVE_ADJUST_BALANCES);
@@ -158,17 +127,7 @@ export default function AdminLeavePolicies() {
   const [modalError, setModalError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
-  const [employees, setEmployees] = useState([]);
-  const [employeeSearch, setEmployeeSearch] = useState('');
-  const debouncedEmployeeSearch = useDebouncedValue(employeeSearch, 350);
   const [leaveTypes, setLeaveTypes] = useState([]);
-  const [balances, setBalances] = useState([]);
-  const [fromBalances, setFromBalances] = useState([]);
-  const [creditForm, setCreditForm] = useState(emptyCreditForm);
-  const [creditErrors, setCreditErrors] = useState({});
-  const [balanceError, setBalanceError] = useState('');
-  const [creditSubmitting, setCreditSubmitting] = useState(false);
 
   const [typeModalOpen, setTypeModalOpen] = useState(false);
   const [typeForm, setTypeForm] = useState(emptyTypeForm);
@@ -181,6 +140,8 @@ export default function AdminLeavePolicies() {
   const [policyFieldErrors, setPolicyFieldErrors] = useState({});
   const [policyModalError, setPolicyModalError] = useState('');
   const [policySubmitting, setPolicySubmitting] = useState(false);
+
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
 
   const requestKeyRef = useRef('');
 
@@ -218,168 +179,9 @@ export default function AdminLeavePolicies() {
   }, []);
 
   useEffect(() => {
-    if (!canManagePolicies) return;
+    if (!canManagePolicies && !canAdjustBalances) return;
     loadLeaveTypes();
-  }, [canManagePolicies, loadLeaveTypes]);
-
-  useEffect(() => {
-    if (!canAdjustBalances || !balanceModalOpen) return;
-
-    adminApi
-      .listEmployees({
-        page: 1,
-        limit: 100,
-        search: debouncedEmployeeSearch || undefined,
-      })
-      .then((employeeData) => setEmployees(employeeData.employees ?? []))
-      .catch((err) => setBalanceError(getErrorMessage(err)));
-  }, [canAdjustBalances, balanceModalOpen, debouncedEmployeeSearch]);
-
-  useEffect(() => {
-    if (!canAdjustBalances || !balanceModalOpen || !creditForm.userId) {
-      setBalances([]);
-      setFromBalances([]);
-      return;
-    }
-
-    if (!isValidBalanceYear(creditForm.fromYear) || !isValidBalanceYear(creditForm.toYear)) {
-      setBalances([]);
-      setFromBalances([]);
-      setBalanceError('');
-      return;
-    }
-
-    Promise.all([
-      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
-      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
-    ])
-      .then(([toYearData, fromYearData]) => {
-        setBalances(toYearData.balances ?? []);
-        setFromBalances(fromYearData.balances ?? []);
-      })
-      .catch((err) => setBalanceError(getErrorMessage(err)));
-  }, [
-    canAdjustBalances,
-    balanceModalOpen,
-    creditForm.userId,
-    creditForm.fromYear,
-    creditForm.toYear,
-  ]);
-
-  async function refreshBalances() {
-    if (!creditForm.userId) return;
-    if (!isValidBalanceYear(creditForm.fromYear) || !isValidBalanceYear(creditForm.toYear)) {
-      setBalances([]);
-      setFromBalances([]);
-      return;
-    }
-    const [toYearData, fromYearData] = await Promise.all([
-      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.toYear }),
-      leaveApi.getBalances({ userId: creditForm.userId, year: creditForm.fromYear }),
-    ]);
-    setBalances(toYearData.balances ?? []);
-    setFromBalances(fromYearData.balances ?? []);
-  }
-
-  async function handleCreditSubmit(event) {
-    event.preventDefault();
-    setBalanceError('');
-
-    if (!creditForm.userId) {
-      setBalanceError('Select an employee.');
-      return;
-    }
-
-    const fromYear = Number(creditForm.fromYear);
-    const toYear = Number(creditForm.toYear);
-    const yearErrors = {};
-
-    if (!creditForm.fromYear || Number.isNaN(fromYear)) {
-      yearErrors.fromYear = 'Select the source (from) year.';
-    }
-    if (!creditForm.toYear || Number.isNaN(toYear)) {
-      yearErrors.toYear = 'Select the target (to) year.';
-    }
-    if (
-      !Number.isNaN(fromYear) &&
-      !Number.isNaN(toYear) &&
-      creditForm.fromYear &&
-      creditForm.toYear &&
-      toYear < fromYear
-    ) {
-      yearErrors.toYear = 'To year must be the same as or after from year.';
-    }
-    if (Object.keys(yearErrors).length > 0) {
-      setCreditErrors(yearErrors);
-      return;
-    }
-
-    if (creditForm.carried === '' || Number.isNaN(Number(creditForm.carried))) {
-      setCreditErrors({ carried: 'Enter the number of carried days.' });
-      return;
-    }
-
-    const payload = {
-      leaveTypeId: creditForm.leaveTypeId,
-      year: toYear,
-      carried: Number(creditForm.carried),
-      reason: buildCarryAuditReason(fromYear, toYear, creditForm.reason),
-    };
-
-    const validation = validateForm(adjustLeaveBalanceSchema, payload);
-    if (!validation.data) {
-      setCreditErrors(validation.errors);
-      return;
-    }
-
-    setCreditErrors({});
-
-    await requestConfirm({
-      title: 'Apply manual leave credit?',
-      message: `Credit ${validation.data.carried} carried day(s) from ${fromYear} to ${validation.data.year} for the selected employee and leave type?`,
-      confirmLabel: 'Apply credit',
-      variant: 'danger',
-      onConfirm: async () => {
-        setCreditSubmitting(true);
-        try {
-          await leaveApi.adjustBalance(creditForm.userId, validation.data);
-          showSuccess('Leave credit applied.');
-          setCreditForm((prev) => ({ ...prev, carried: '', reason: '' }));
-          await refreshBalances();
-        } catch (err) {
-          setBalanceError(getErrorMessage(err));
-        } finally {
-          setCreditSubmitting(false);
-        }
-      },
-    });
-  }
-
-  function openBalanceModal() {
-    const year = Number(policyYear);
-    setCreditForm({
-      ...emptyCreditForm,
-      fromYear: year - 1,
-      toYear: year,
-    });
-    setCreditErrors({});
-    setBalanceError('');
-    setEmployeeSearch('');
-    setBalances([]);
-    setFromBalances([]);
-    setBalanceModalOpen(true);
-  }
-
-  function closeBalanceModal() {
-    if (creditSubmitting) return;
-    setBalanceModalOpen(false);
-    setCreditForm(emptyCreditForm);
-    setCreditErrors({});
-    setBalanceError('');
-    setEmployeeSearch('');
-    setBalances([]);
-    setFromBalances([]);
-  }
+  }, [canManagePolicies, canAdjustBalances, loadLeaveTypes]);
 
   function openEditModal(policy) {
     setForm(policyToForm(policy));
@@ -430,7 +232,6 @@ export default function AdminLeavePolicies() {
   }
 
   useEscapeKey(Boolean(modalPolicy), closeModal);
-  useEscapeKey(balanceModalOpen && !creditSubmitting, closeBalanceModal);
   useEscapeKey(typeModalOpen && !typeSubmitting, closeTypeModal);
   useEscapeKey(policyModalOpen && !policySubmitting, closePolicyModal);
 
@@ -653,268 +454,18 @@ export default function AdminLeavePolicies() {
       </section>
 
       {canAdjustBalances ? (
-        <section className="card leave-carry-forward-panel" aria-label="Manual leave balance entry">
-          <div className="leave-carry-forward-panel__header">
-            <div>
-              <p className="card__section-title">Manual leave balance entry</p>
-              <p className="muted small leave-carry-forward-panel__lead">
-                Enter opening carried days for each employee and leave type at year start (enhanced
-                leave, cash-in, or last-year balance). Amounts are typed manually — the system does
-                not auto-calculate carry-forward.
-              </p>
-            </div>
-            <button type="button" className="btn btn-primary" onClick={openBalanceModal}>
-              Add carried days
-            </button>
-          </div>
-        </section>
+        <EmployeeLeaveAdjustment
+          policyYear={policyYear}
+          onOpenAuditReport={() => setAuditModalOpen(true)}
+        />
       ) : null}
 
-      {balanceModalOpen
-        ? createPortal(
-            <div className="modal__backdrop" role="presentation" onClick={closeBalanceModal}>
-              <div
-                className="modal modal--wide leave-policies-modal leave-carry-forward-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={balanceModalTitleId}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <header className="modal__header leave-carry-forward-modal__header">
-                  <div className="leave-carry-forward-modal__header-top">
-                    <div className="leave-carry-forward-modal__header-titles">
-                      <h2 id={balanceModalTitleId} className="modal__title">
-                        Manual leave balance entry
-                      </h2>
-                      <p className="modal__lead muted">
-                        Type carried days manually for an employee and leave type. Choose the source
-                        year (leftover context) and target year (where days are credited). The
-                        system does not auto-calculate carry-forward.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-ghost leave-carry-forward-modal__close"
-                      onClick={closeBalanceModal}
-                      disabled={creditSubmitting}
-                      aria-label="Close"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </header>
-
-                <form className="modal__form" onSubmit={handleCreditSubmit}>
-                  <div className="modal__body leave-policies-modal__body leave-carry-forward-modal__body">
-                    {balanceError ? (
-                      <div className="alert alert--error modal__alert">{balanceError}</div>
-                    ) : null}
-
-                    <label className="modal__field form-grid__full">
-                      <span className="label">Employee</span>
-                      <div className="field-stack">
-                        <SearchInput
-                          value={employeeSearch}
-                          onChange={(event) => setEmployeeSearch(event.target.value)}
-                          placeholder="Search employees…"
-                          ariaLabel="Search employees"
-                        />
-                        <SelectField
-                          value={creditForm.userId}
-                          onChange={(value) => setCreditForm({ ...creditForm, userId: value })}
-                          options={[
-                            { value: '', label: 'Select employee' },
-                            ...employees.map((employee) => ({
-                              value: employee.id,
-                              label: `${employee.name} (${employee.email})`,
-                            })),
-                          ]}
-                          placeholder="Select employee"
-                          aria-label="Employee"
-                        />
-                      </div>
-                    </label>
-
-                    <div className="leave-policies-modal__grid">
-                      <label className="modal__field">
-                        <span className="label">Leave type</span>
-                        <SelectField
-                          value={creditForm.leaveTypeId}
-                          onChange={(value) => setCreditForm({ ...creditForm, leaveTypeId: value })}
-                          options={[
-                            { value: '', label: 'Select type' },
-                            ...leaveTypes
-                              .filter((item) => item.isActive)
-                              .map((item) => ({
-                              value: item.id,
-                              label: `${item.code} — ${item.name}`,
-                            })),
-                          ]}
-                          placeholder="Select type"
-                          aria-label="Leave type"
-                        />
-                        <FieldError message={creditErrors.leaveTypeId} />
-                      </label>
-
-                      <label className="modal__field">
-                        <span className="label">From year</span>
-                        <SelectField
-                          value={String(creditForm.fromYear)}
-                          onChange={(value) =>
-                            setCreditForm({ ...creditForm, fromYear: value ? Number(value) : '' })
-                          }
-                          options={[
-                            { value: '', label: 'Select year' },
-                            ...balanceYearOptions,
-                          ]}
-                          placeholder="Select year"
-                          aria-label="From year"
-                        />
-                        <FieldError message={creditErrors.fromYear} />
-                      </label>
-
-                      <label className="modal__field">
-                        <span className="label">To year</span>
-                        <SelectField
-                          value={String(creditForm.toYear)}
-                          onChange={(value) =>
-                            setCreditForm({ ...creditForm, toYear: value ? Number(value) : '' })
-                          }
-                          options={[
-                            { value: '', label: 'Select year' },
-                            ...balanceYearOptions,
-                          ]}
-                          placeholder="Select year"
-                          aria-label="To year"
-                        />
-                        <FieldError message={creditErrors.toYear} />
-                      </label>
-
-                      <label className="modal__field">
-                        <span className="label">Carried days</span>
-                        <input
-                          autoFocus
-                          className="input input--narrow"
-                          type="number"
-                          step="0.5"
-                          min="0"
-                          max="365"
-                          placeholder="e.g. 5"
-                          value={creditForm.carried}
-                          onChange={(event) =>
-                            setCreditForm({ ...creditForm, carried: event.target.value })
-                          }
-                        />
-                        <FieldError message={creditErrors.carried} />
-                      </label>
-                    </div>
-
-                    <label className="modal__field">
-                      <span className="label">Reason</span>
-                      <input
-                        className="input"
-                        type="text"
-                        value={creditForm.reason}
-                        onChange={(event) =>
-                          setCreditForm({ ...creditForm, reason: event.target.value })
-                        }
-                        placeholder="e.g. Year-end carry-in approved by HR (from→to years are recorded automatically)"
-                      />
-                      <FieldError message={creditErrors.reason} />
-                    </label>
-
-                    {fromBalances.length > 0 ? (
-                      <div>
-                        <p className="card__section-title">
-                          Source year balances ({creditForm.fromYear})
-                        </p>
-                        <div className="table-wrap table-wrap--responsive leave-carry-forward-modal__table-wrap">
-                          <table className="table data-table leave-carry-forward-table">
-                            <thead>
-                              <tr>
-                                <th>Type</th>
-                                <th>Entitled</th>
-                                <th>Carried</th>
-                                <th>Used</th>
-                                <th>Pending</th>
-                                <th>Encashed</th>
-                                <th>Available</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {fromBalances.map((item) => (
-                                <tr key={item.id}>
-                                  <td data-label="Type">{item.leaveTypeCode}</td>
-                                  <td data-label="Entitled">{item.entitled}</td>
-                                  <td data-label="Carried">{item.carried}</td>
-                                  <td data-label="Used">{item.used}</td>
-                                  <td data-label="Pending">{item.pending}</td>
-                                  <td data-label="Encashed">{item.encashed}</td>
-                                  <td data-label="Available">{item.available}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {balances.length > 0 ? (
-                      <div>
-                        <p className="card__section-title">
-                          Target year balances ({creditForm.toYear})
-                        </p>
-                        <div className="table-wrap table-wrap--responsive leave-carry-forward-modal__table-wrap">
-                          <table className="table data-table leave-carry-forward-table">
-                            <thead>
-                              <tr>
-                                <th>Type</th>
-                                <th>Entitled</th>
-                                <th>Carried</th>
-                                <th>Used</th>
-                                <th>Pending</th>
-                                <th>Encashed</th>
-                                <th>Available</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {balances.map((item) => (
-                                <tr key={item.id}>
-                                  <td data-label="Type">{item.leaveTypeCode}</td>
-                                  <td data-label="Entitled">{item.entitled}</td>
-                                  <td data-label="Carried">{item.carried}</td>
-                                  <td data-label="Used">{item.used}</td>
-                                  <td data-label="Pending">{item.pending}</td>
-                                  <td data-label="Encashed">{item.encashed}</td>
-                                  <td data-label="Available">{item.available}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <footer className="modal__footer">
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={closeBalanceModal}
-                      disabled={creditSubmitting}
-                    >
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn btn-primary" disabled={creditSubmitting}>
-                      {creditSubmitting ? 'Applying…' : 'Apply carried days'}
-                    </button>
-                  </footer>
-                </form>
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
+      <LeaveCarryBulkModal
+        open={auditModalOpen && canAdjustBalances}
+        onClose={() => setAuditModalOpen(false)}
+        defaultYear={policyYear}
+        yearOptions={balanceYearOptions}
+      />
 
       {confirmDialog}
 

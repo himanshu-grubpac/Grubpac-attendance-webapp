@@ -31,6 +31,7 @@ import {
   resolveLeaveApprovalUserIds,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
+import { validateLeaveApplyDeadline } from './wfhPolicyService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -150,6 +151,17 @@ export async function validateLeaveRequestInput({
 
   if (halfDay && startDateInput !== endDateInput) {
     throwError('Half-day leave must use the same start and end date.');
+  }
+
+  if (!adminException) {
+    const deadlineError = validateLeaveApplyDeadline(
+      startDateInput,
+      endDateInput,
+      leaveType.code,
+    );
+    if (deadlineError) {
+      throwError(deadlineError);
+    }
   }
 
   const year = resolveLeaveYear(startDateInput);

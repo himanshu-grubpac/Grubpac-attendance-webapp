@@ -15,36 +15,64 @@ export function setCsrfToken(token) {
 
 const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-async function downloadExcelBlob(url, { errorMessage = 'Failed to download Excel file.' } = {}) {
-  const response = await fetch(url, {
-    credentials: 'include',
-    headers: {
-      Accept: EXCEL_MIME,
-    },
-  });
+function normalizeApiPath(url) {
+  if (url.startsWith('/api/')) return url.slice(4);
+  if (url.startsWith('/api')) return url.slice(4) || '/';
+  return url;
+}
 
-  if (!response.ok) {
-    let message = errorMessage;
-    try {
-      const body = await response.json();
-      message = body.message ?? message;
-    } catch {
-      // Non-JSON error body — keep default message.
+function parseDownloadErrorBody(data, fallback) {
+  if (!data) return fallback;
+  try {
+    if (data instanceof ArrayBuffer) {
+      const text = new TextDecoder().decode(data);
+      const body = JSON.parse(text);
+      return body.message ?? fallback;
     }
-    throw new Error(message);
+    if (typeof data === 'object' && data.message) return data.message;
+  } catch {
+    // Non-JSON error body — keep default message.
   }
+  return fallback;
+}
 
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength < 4) {
-    throw new Error('Downloaded Excel file is empty.');
+async function downloadExcelBlob(
+  url,
+  { errorMessage = 'Failed to download Excel file.', onProgress } = {},
+) {
+  const path = normalizeApiPath(url);
+
+  try {
+    const response = await api.get(path, {
+      responseType: 'arraybuffer',
+      headers: { Accept: EXCEL_MIME },
+      onDownloadProgress: onProgress
+        ? (event) => {
+            if (event.total > 0) {
+              onProgress(Math.round((event.loaded / event.total) * 100));
+            }
+          }
+        : undefined,
+    });
+
+    const buffer = response.data;
+    if (buffer.byteLength < 4) {
+      throw new Error('Downloaded Excel file is empty.');
+    }
+
+    const magic = new Uint8Array(buffer.slice(0, 2));
+    if (magic[0] !== 0x50 || magic[1] !== 0x4b) {
+      throw new Error('Downloaded file is not a valid Excel workbook.');
+    }
+
+    onProgress?.(100);
+    return new Blob([buffer], { type: EXCEL_MIME });
+  } catch (error) {
+    if (!error?.response) {
+      throw error instanceof Error ? error : new Error(errorMessage);
+    }
+    throw new Error(parseDownloadErrorBody(error.response.data, errorMessage));
   }
-
-  const magic = new Uint8Array(buffer.slice(0, 2));
-  if (magic[0] !== 0x50 || magic[1] !== 0x4b) {
-    throw new Error('Downloaded file is not a valid Excel workbook.');
-  }
-
-  return new Blob([buffer], { type: EXCEL_MIME });
 }
 
 const api = axios.create({
@@ -217,6 +245,44 @@ export const leaveApi = {
   getBalances: (params = {}) => api.get('/leave/balances', { params }).then((r) => r.data),
   adjustBalance: (userId, payload) =>
     api.patch(`/leave/balances/${userId}`, payload).then((r) => r.data),
+  getAdjustmentGrid: (params = {}) =>
+    api.get('/leave/adjustments/grid', { params }).then((r) => r.data),
+  batchAdjustCarried: (payload) =>
+    api.post('/leave/adjustments/batch', payload).then((r) => r.data),
+  downloadCarryTemplate: (params = {}) => {
+    const search = new URLSearchParams();
+    if (params.year != null) search.set('year', String(params.year));
+    if (params.fromYear != null) search.set('fromYear', String(params.fromYear));
+    if (params.toYear != null) search.set('toYear', String(params.toYear));
+    if (params.departmentId) search.set('departmentId', params.departmentId);
+    if (params.userIds) search.set('userIds', params.userIds);
+    const query = search.toString();
+    return downloadExcelBlob(`/api/leave/carry-bulk/template${query ? `?${query}` : ''}`, {
+      errorMessage: 'Failed to download carried leave template.',
+    });
+  },
+  downloadCarryAuditReport: (params = {}, { onProgress } = {}) => {
+    const search = new URLSearchParams();
+    if (params.year != null) search.set('year', String(params.year));
+    if (params.fromYear != null) search.set('fromYear', String(params.fromYear));
+    if (params.toYear != null) search.set('toYear', String(params.toYear));
+    if (params.departmentId) search.set('departmentId', params.departmentId);
+    if (params.userIds) search.set('userIds', params.userIds);
+    const query = search.toString();
+    return downloadExcelBlob(`/api/leave/carry-bulk/audit-report${query ? `?${query}` : ''}`, {
+      errorMessage: 'Failed to download leave audit report.',
+      onProgress,
+    });
+  },
+  uploadCarryBulk: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api
+      .post('/leave/carry-bulk/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data);
+  },
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
   createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
