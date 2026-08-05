@@ -136,6 +136,14 @@ export const NAV_ITEMS = [
     permission: PERMISSIONS.OFFICE_MANAGE,
   },
   {
+    to: '/admin/faq-demo',
+    label: 'FAQ & Demo',
+    icon: '❓',
+    section: 'Operations',
+    portal: 'admin',
+    anyPermission: [PERMISSIONS.DEMO_FAQ_MANAGE, PERMISSIONS.DEMO_FAQ_READ],
+  },
+  {
     to: '/admin/departments',
     label: 'Departments',
     icon: '▦',
@@ -200,6 +208,14 @@ export const NAV_ITEMS = [
     section: 'Payroll',
     portal: 'employee',
     permission: PERMISSIONS.SALARY_READ,
+  },
+  {
+    to: '/employee/faq-demo',
+    label: 'FAQ & Demo',
+    icon: '❓',
+    section: 'Support',
+    portal: 'employee',
+    permission: PERMISSIONS.DEMO_FAQ_READ,
   },
   {
     to: '/employee/help',
@@ -388,6 +404,7 @@ export function getMoreNavItems(user, loginPortal) {
     '/employee/leave/balances',
     '/employee/leave/requests',
     '/employee/pay-estimate',
+    '/employee/faq-demo',
     '/employee/help',
   ];
   const byPath = new Map(moreLinks.map((item) => [item.to, item]));

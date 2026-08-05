@@ -13,6 +13,7 @@ import AdminBulkUpload from './pages/admin/AdminBulkUpload.jsx';
 import AdminDashboard from './pages/admin/AdminDashboard.jsx';
 import AdminDepartments from './pages/admin/AdminDepartments.jsx';
 import AdminOfficeSettings from './pages/admin/AdminOfficeSettings.jsx';
+import AdminFaqDemo from './pages/admin/AdminFaqDemo.jsx';
 import AdminRoles from './pages/admin/AdminRoles.jsx';
 import AdminUsers from './pages/admin/AdminUsers.jsx';
 import AdminEmployeeDetail from './pages/admin/AdminEmployeeDetail.jsx';
@@ -113,6 +114,20 @@ export default function App() {
                 element={
                   <ProtectedRoute portal="admin" permission={PERMISSIONS.OFFICE_MANAGE}>
                     <AdminOfficeSettings />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/faq-demo"
+                element={
+                  <ProtectedRoute
+                    portal="admin"
+                    anyPermission={[
+                      PERMISSIONS.DEMO_FAQ_MANAGE,
+                      PERMISSIONS.DEMO_FAQ_READ,
+                    ]}
+                  >
+                    <AdminFaqDemo />
                   </ProtectedRoute>
                 }
               />
@@ -253,6 +268,14 @@ export default function App() {
                 element={
                   <ProtectedRoute portal="employee" permission={PERMISSIONS.SALARY_READ}>
                     <EmployeePayEstimate />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="employee/faq-demo"
+                element={
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.DEMO_FAQ_READ}>
+                    <AdminFaqDemo />
                   </ProtectedRoute>
                 }
               />

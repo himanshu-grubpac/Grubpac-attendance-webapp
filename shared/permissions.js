@@ -26,6 +26,8 @@ export const PERMISSIONS = {
   AUDIT_READ: 'audit.read',
   DEPARTMENTS_MANAGE: 'departments.manage',
   NOTIFICATIONS_READ: 'notifications.read',
+  DEMO_FAQ_READ: 'demo_faq.read',
+  DEMO_FAQ_MANAGE: 'demo_faq.manage',
 };
 
 export const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -89,6 +91,13 @@ export const PERMISSION_GROUPS = [
       { key: PERMISSIONS.NOTIFICATIONS_READ, label: 'Notifications' },
     ],
   },
+  {
+    label: 'FAQ & Demo',
+    permissions: [
+      { key: PERMISSIONS.DEMO_FAQ_READ, label: 'View FAQ & Demo items' },
+      { key: PERMISSIONS.DEMO_FAQ_MANAGE, label: 'Manage FAQ & Demo items' },
+    ],
+  },
 ];
 
 /**
@@ -116,6 +125,7 @@ export const ADMIN_PORTAL_PERMISSIONS = [
   PERMISSIONS.LEAVE_MANAGE_POLICIES,
   PERMISSIONS.LEAVE_ADJUST_BALANCES,
   PERMISSIONS.LEAVE_APPROVE,
+  PERMISSIONS.DEMO_FAQ_MANAGE,
 ];
 
 export const SYSTEM_ROLE_SLUGS = {
@@ -133,6 +143,7 @@ export const SYSTEM_ROLES = [
     isSystem: true,
     permissions: [...ALL_PERMISSIONS],
   },
+  // NOTE: Admin gets DEMO_FAQ_MANAGE via ALL_PERMISSIONS spread above.
   {
     name: 'HR',
     slug: SYSTEM_ROLE_SLUGS.HR,
@@ -156,6 +167,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.HELP_MANAGE,
       PERMISSIONS.AUDIT_READ,
       PERMISSIONS.NOTIFICATIONS_READ,
+      PERMISSIONS.DEMO_FAQ_READ,
     ],
   },
   {
@@ -174,6 +186,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.HELP_MANAGE,
       PERMISSIONS.SALARY_READ_TEAM,
       PERMISSIONS.NOTIFICATIONS_READ,
+      PERMISSIONS.DEMO_FAQ_READ,
     ],
   },
   {
@@ -189,6 +202,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.HELP_WRITE,
       PERMISSIONS.SALARY_READ,
       PERMISSIONS.NOTIFICATIONS_READ,
+      PERMISSIONS.DEMO_FAQ_READ,
     ],
   },
 ];

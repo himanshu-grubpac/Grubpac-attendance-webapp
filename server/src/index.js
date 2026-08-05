@@ -16,6 +16,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
 import helpRoutes from './routes/helpRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
+import demoFaqRoutes from './routes/demoFaqRoutes.js';
 
 export const app = express();
 
@@ -93,6 +94,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/help', helpRoutes);
 app.use('/api/salary', salaryRoutes);
+app.use('/api/demo-faq', demoFaqRoutes);
 
 app.use(errorHandler);
 

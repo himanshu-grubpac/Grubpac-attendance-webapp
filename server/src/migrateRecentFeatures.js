@@ -9,6 +9,7 @@
  * - LeavePolicy.year backfill + compound index (leaveTypeId + year)
  * - User.managedDepartmentIds backfill
  * - Dual-portal system role permissions (HR attendance.read_own)
+ * - DemoFaqItem collection indexes + demo_faq.* role permissions
  *
  * Usage: node src/migrateRecentFeatures.js
  */
@@ -37,6 +38,7 @@ import { LeaveType } from './models/LeaveType.js';
 import { LeavePolicy } from './models/LeavePolicy.js';
 import { LeaveBalance } from './models/LeaveBalance.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
+import { DemoFaqItem } from './models/DemoFaqItem.js';
 import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears } from './services/leaveBalanceService.js';
 
 const KEY_EMAILS = ['admin@grubpac.com', 'salunke.himanshu@grubpac.com'];
@@ -57,6 +59,7 @@ const INDEX_MODELS = [
   LeavePolicy,
   LeaveBalance,
   OfficeSettings,
+  DemoFaqItem,
 ];
 
 async function syncAllIndexes() {

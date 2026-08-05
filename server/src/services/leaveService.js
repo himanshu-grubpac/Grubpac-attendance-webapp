@@ -589,10 +589,13 @@ export async function listLeaveRequests(actor, permissions, query) {
 }
 
 export async function getTeamCalendar(actor, permissions, query) {
-  if (
-    !hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) &&
-    !hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)
-  ) {
+  const canViewAllLeave =
+    hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)
+    || hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canViewTeamLeave =
+    canViewAllLeave || hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM);
+
+  if (!canViewTeamLeave) {
     throwError('You do not have permission to view team calendar.', 403);
   }
 
@@ -607,7 +610,7 @@ export async function getTeamCalendar(actor, permissions, query) {
   const userFilter = { isActive: true };
   if (query.departmentId) {
     userFilter.departmentId = query.departmentId;
-  } else if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+  } else if (!canViewAllLeave) {
     const scopedIds = await resolveTeamScopedUserIds(
       actor,
       permissions,
@@ -630,9 +633,43 @@ export async function getTeamCalendar(actor, permissions, query) {
     .populate(LEAVE_REQUEST_POPULATE)
     .sort({ startDate: 1 });
 
+  const leaveTypeIds = [
+    ...new Set(
+      requests
+        .map((item) => {
+          const leaveTypeRef = item.leaveTypeId;
+          if (!leaveTypeRef) return null;
+          if (typeof leaveTypeRef === 'object' && leaveTypeRef._id) {
+            return leaveTypeRef._id.toString();
+          }
+          return leaveTypeRef.toString?.() ?? null;
+        })
+        .filter((id) => id && mongoose.isValidObjectId(id)),
+    ),
+  ];
+  const leaveTypesById = new Map();
+  if (leaveTypeIds.length > 0) {
+    const leaveTypes = await LeaveType.find({ _id: { $in: leaveTypeIds } }).select('code name');
+    for (const leaveType of leaveTypes) {
+      leaveTypesById.set(leaveType._id.toString(), leaveType);
+    }
+  }
+
+  const entries = requests.map((item) => {
+    const json = item.toSafeJSON();
+    if (!json.leaveTypeCode && json.leaveTypeId) {
+      const leaveType = leaveTypesById.get(String(json.leaveTypeId));
+      if (leaveType) {
+        json.leaveTypeCode = leaveType.code;
+        json.leaveTypeName = json.leaveTypeName ?? leaveType.name;
+      }
+    }
+    return json;
+  });
+
   return {
     month,
-    entries: requests.map((item) => item.toSafeJSON()),
+    entries,
     users: users.map((user) => ({
       id: user._id.toString(),
       name: user.name,

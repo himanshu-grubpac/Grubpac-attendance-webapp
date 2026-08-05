@@ -354,6 +354,50 @@ function leaveCoversDay(entry, dayKey) {
   return dayKey >= startKey && dayKey <= endKey;
 }
 
+function resolveLeaveTypeDisplayCode(entry, leaveTypeCodeById = null) {
+  const leaveTypeRef = entry?.leaveTypeId;
+  const rawCode =
+    entry?.leaveTypeCode
+    || entry?.leaveType?.code
+    || (leaveTypeRef && typeof leaveTypeRef === 'object' ? leaveTypeRef.code : null);
+  if (rawCode) return String(rawCode).trim().toUpperCase();
+  const typeId =
+    leaveTypeRef && typeof leaveTypeRef === 'object'
+      ? leaveTypeRef.id ?? leaveTypeRef._id
+      : leaveTypeRef;
+  if (typeId && leaveTypeCodeById) {
+    const mapped = leaveTypeCodeById.get(String(typeId));
+    if (mapped) return mapped;
+  }
+  const name = String(entry?.leaveTypeName || entry?.leaveType?.name || '').trim();
+  if (/work\s*from\s*home|^wfh$/i.test(name)) return 'WFH';
+  return 'LV';
+}
+
+function buildLeaveTypeCodeById(types, leaveEntries) {
+  const map = new Map(
+    (types ?? []).map((item) => [
+      String(item.id),
+      String(item.code ?? '').trim().toUpperCase(),
+    ]),
+  );
+  for (const entry of leaveEntries ?? []) {
+    const leaveTypeRef = entry?.leaveTypeId;
+    const typeId =
+      leaveTypeRef && typeof leaveTypeRef === 'object'
+        ? leaveTypeRef.id ?? leaveTypeRef._id
+        : leaveTypeRef;
+    const code =
+      entry?.leaveTypeCode
+      || entry?.leaveType?.code
+      || (leaveTypeRef && typeof leaveTypeRef === 'object' ? leaveTypeRef.code : null);
+    if (typeId && code) {
+      map.set(String(typeId), String(code).trim().toUpperCase());
+    }
+  }
+  return map;
+}
+
 function employeeDesignation(employee) {
   return employee.designation || employee.departmentName || employee.department || null;
 }
@@ -408,6 +452,7 @@ function classifyDayCell({
   recordIndex,
   holidaySet,
   leaveEntries,
+  leaveTypeCodeById,
   todayKey,
   policy,
 }) {
@@ -418,18 +463,37 @@ function classifyDayCell({
     return { kind: 'holiday' };
   }
 
-  const onLeave = leaveEntries.some((entry) => {
-    const entryUserId = entry.userId?.id ?? entry.userId;
-    return String(entryUserId) === String(userId) && leaveCoversDay(entry, dayKey);
-  });
-  if (onLeave) {
-    return { kind: 'leave' };
-  }
-
   const dayRecords = recordIndex.get(userId)?.get(dayKey) ?? [];
   const allowedCheckIn = dayRecords.find((r) => r.type === 'check_in' && r.status === 'allowed');
   const allowedCheckOut = dayRecords.find((r) => r.type === 'check_out' && r.status === 'allowed');
   const rejectedCheckIn = dayRecords.find((r) => r.type === 'check_in' && r.status === 'rejected');
+
+  const leaveEntry = leaveEntries.find((entry) => {
+    const userRef = entry.userId;
+    const entryUserId =
+      userRef && typeof userRef === 'object'
+        ? userRef.id ?? userRef._id
+        : userRef;
+    return String(entryUserId) === String(userId) && leaveCoversDay(entry, dayKey);
+  });
+  if (leaveEntry) {
+    const leaveCell = {
+      kind: 'leave',
+      leaveTypeCode: resolveLeaveTypeDisplayCode(leaveEntry, leaveTypeCodeById),
+    };
+    if (allowedCheckIn) {
+      return {
+        ...leaveCell,
+        modeTag: allowedCheckIn.attendanceMode === 'wfh' ? 'WFH' : 'OFC',
+        checkInTime: formatCompactISTTime(allowedCheckIn.timestamp),
+        checkOutTime: formatCompactISTTime(allowedCheckOut?.timestamp),
+        checkInLocationHref: mapsLocationHref(allowedCheckIn),
+        checkOutLocationHref: mapsLocationHref(allowedCheckOut),
+        lateNote: allowedCheckIn.lateNote ?? null,
+      };
+    }
+    return leaveCell;
+  }
 
   if (allowedCheckIn) {
     const { statusTag, warningTag } = derivePolicyFromRecord(allowedCheckIn, policy);
@@ -656,6 +720,11 @@ function modeTagTone(modeTag) {
   return modeTag === 'WFH' ? 'wfh' : 'office';
 }
 
+function leaveTypeTagTone(leaveTypeCode) {
+  if (String(leaveTypeCode ?? '').toUpperCase() === 'WFH') return 'wfh';
+  return 'info';
+}
+
 function mapsLocationHref(record) {
   if (!Number.isFinite(record?.latitude) || !Number.isFinite(record?.longitude)) return null;
   return `https://www.google.com/maps?q=${record.latitude},${record.longitude}`;
@@ -682,12 +751,28 @@ function DayCell({ cell, cardClassName }) {
       </div>
     );
   } else if (cell.kind === 'leave') {
+    const leaveCode = cell.leaveTypeCode || resolveLeaveTypeDisplayCode(cell);
     inner = (
       <div className="attendance-grid__cell attendance-grid__cell--leave">
         <DayCellBadgeRow
-          right={<AttendanceStatusTag code="LV" tone="info" />}
+          left={
+            cell.modeTag ? (
+              <AttendanceStatusTag
+                code={cell.modeTag}
+                tone={modeTagTone(cell.modeTag)}
+                title={cellTitle ?? cell.modeTag}
+              />
+            ) : null
+          }
+          right={<AttendanceStatusTag code={leaveCode} tone={leaveTypeTagTone(leaveCode)} />}
         />
-        <span className="attendance-grid__empty">—</span>
+        <CheckInOutTimes
+          checkInTime={cell.checkInTime}
+          checkOutTime={cell.checkOutTime}
+          checkInLocationHref={cell.checkInLocationHref}
+          checkOutLocationHref={cell.checkOutLocationHref}
+          lateNote={cell.lateNote}
+        />
       </div>
     );
   } else if (cell.kind === 'absent') {
@@ -1013,6 +1098,7 @@ export default function AdminAttendance() {
   const [employees, setEmployees] = useState([]);
   const [recordIndex, setRecordIndex] = useState(new Map());
   const [leaveEntries, setLeaveEntries] = useState([]);
+  const [leaveTypeCodeById, setLeaveTypeCodeById] = useState(() => new Map());
   const [holidaySet, setHolidaySet] = useState(new Set());
   const [policy, setPolicy] = useState(DEFAULT_POLICY);
   const [quarterWarnings, setQuarterWarnings] = useState({ byUser: {}, quarter: null, allowance: 3 });
@@ -1054,13 +1140,14 @@ export default function AdminAttendance() {
       const dayKeys = buildWeekDayKeys(weekStart);
       const years = [...new Set(dayKeys.map((key) => key.slice(0, 4)))];
 
-      const [employeeList, officeResponse, warningResponse, confirmationResponse, weekRecords] =
+      const [employeeList, officeResponse, warningResponse, confirmationResponse, weekRecords, leaveTypesResponse] =
         await Promise.all([
           fetchActiveEmployees(),
           adminApi.getOfficeSettings().catch(() => ({ settings: null })),
           adminApi.getQuarterWarnings().catch(() => ({ byUser: {}, quarter: null, allowance: 3 })),
           adminApi.listWeekConfirmations(weekStart).catch(() => ({ confirmations: [] })),
           fetchWeekRecords(weekStart),
+          leaveApi.listTypes().catch(() => ({ types: [] })),
         ]);
 
       setPolicy(resolvePolicy(officeResponse.settings));
@@ -1107,11 +1194,13 @@ export default function AdminAttendance() {
       setRecordIndex(indexRecordsByUserAndDay(allRecords));
       setHolidaySet(holidays);
       setLeaveEntries(leaves);
+      setLeaveTypeCodeById(buildLeaveTypeCodeById(leaveTypesResponse.types, leaves));
     } catch (err) {
       setError(getErrorMessage(err));
       setEmployees([]);
       setRecordIndex(new Map());
       setLeaveEntries([]);
+      setLeaveTypeCodeById(new Map());
       setHolidaySet(new Set());
       setQuarterWarnings({ byUser: {}, quarter: null, allowance: 3 });
     } finally {
@@ -1184,6 +1273,7 @@ export default function AdminAttendance() {
           recordIndex,
           holidaySet,
           leaveEntries,
+          leaveTypeCodeById,
           todayKey,
           policy,
         }),
@@ -1192,7 +1282,7 @@ export default function AdminAttendance() {
       const warningCount = cells.filter((cell) => cell.warningTag).length;
       return { employee, cells, rejectedCount, warningCount };
     });
-  }, [employees, weekDays, recordIndex, holidaySet, leaveEntries, todayKey, policy]);
+  }, [employees, weekDays, recordIndex, holidaySet, leaveEntries, leaveTypeCodeById, todayKey, policy]);
 
   const summary = useMemo(() => {
     let present = 0;

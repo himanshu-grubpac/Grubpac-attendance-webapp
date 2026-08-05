@@ -282,6 +282,14 @@ export const salaryApi = {
     api.patch(`/salary/transfers/${id}`, payload).then((r) => r.data),
 };
 
+export const demoFaqApi = {
+  list: () => api.get('/demo-faq').then((r) => r.data),
+  listManage: () => api.get('/demo-faq/manage').then((r) => r.data),
+  create: (payload) => api.post('/demo-faq', payload).then((r) => r.data),
+  update: (id, payload) => api.put(`/demo-faq/${id}`, payload).then((r) => r.data),
+  remove: (id) => api.delete(`/demo-faq/${id}`).then((r) => r.data),
+};
+
 export function getErrorMessage(error) {
   const data = error?.response?.data;
   if (data?.errors?.length) {

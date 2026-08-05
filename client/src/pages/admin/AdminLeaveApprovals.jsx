@@ -122,7 +122,7 @@ function decidedLabel(value) {
 }
 
 function isDefaultMonthFilter(month) {
-  return month === getTodayMonthIst();
+  return !month;
 }
 
 function parseMonthFilterValue(value) {
@@ -239,9 +239,7 @@ export default function AdminLeaveApprovals() {
   const [yearFilter, setYearFilter] = useState(() =>
     clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
   );
-  const [monthPartFilter, setMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
+  const [monthPartFilter, setMonthPartFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [employeesLoading, setEmployeesLoading] = useState(true);
   const [error, setError] = useState('');
@@ -359,11 +357,11 @@ export default function AdminLeaveApprovals() {
   }
 
   function clearFilters() {
-    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    const { year } = parseMonthFilterValue(getTodayMonthIst());
     setEmployeeFilter('');
     setYearFilter(year);
-    setMonthPartFilter(month);
-    loadRequests({ nextPage: 1, nextEmployee: '', nextYear: year, nextMonthPart: month });
+    setMonthPartFilter('');
+    loadRequests({ nextPage: 1, nextEmployee: '', nextYear: year, nextMonthPart: '' });
   }
 
   function toggleExpanded(id) {

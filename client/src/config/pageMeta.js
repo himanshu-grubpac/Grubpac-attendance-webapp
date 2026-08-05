@@ -23,6 +23,7 @@ const PAGE_META = [
     subtitle: 'Organize teams with named units and codes used across employee records.',
   },
   { match: '/admin/office-settings', title: 'Geolocation', subtitle: 'Geofence, office hours, and attendance policy thresholds.' },
+  { match: '/admin/faq-demo', title: 'FAQ & Demo', subtitle: 'Guides and demo videos for your role' },
   { match: '/admin/attendance', title: 'Attendance history', subtitle: 'View and manage team attendance records.' },
   {
     match: '/admin/audit-logs',
@@ -58,6 +59,7 @@ const PAGE_META = [
   { match: '/employee/leave/apply', title: 'Apply leave', subtitle: 'Submit a new leave request.' },
   { match: '/employee/leave/requests', title: 'My requests', subtitle: '' },
   { match: '/employee/pay-estimate', title: 'My pay estimate', subtitle: '' },
+  { match: '/employee/faq-demo', title: 'FAQ & Demo', subtitle: 'Guides and demo videos for your role' },
   { match: '/employee/help', title: 'Help', subtitle: '' },
   { match: '/employee/profile', title: 'Account settings', subtitle: 'Your account details.' },
   { match: '/employee/change-password', title: 'Change password', subtitle: 'Update your sign-in password.' },

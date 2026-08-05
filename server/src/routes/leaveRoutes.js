@@ -143,7 +143,11 @@ router.post(
 
 router.get(
   '/team-calendar',
-  requirePermission(PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_READ_ALL),
+  requirePermission(
+    PERMISSIONS.LEAVE_READ_TEAM,
+    PERMISSIONS.LEAVE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+  ),
   asyncHandler(getTeamCalendarHandler),
 );
 
