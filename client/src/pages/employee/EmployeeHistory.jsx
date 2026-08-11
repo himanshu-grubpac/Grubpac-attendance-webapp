@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { attendanceApi, getErrorMessage } from '../../services/api.js';
-import { formatISTDateTime } from '../../utils/datetime.js';
+import { formatISTDateTime, getISTDateInputValue } from '../../utils/datetime.js';
 import { formatHistoryModeShort, formatHistoryShortCode, formatQuarterWarningBalance } from '../../utils/attendanceOutcome.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
@@ -13,6 +13,19 @@ function statusBadgeClass(status) {
 
 function attendanceModeLabel(mode) {
   return mode === 'wfh' ? 'Work from Home' : 'Office';
+}
+
+function buildAllowedCheckInByIstDay(records) {
+  const map = new Map();
+  for (const record of records) {
+    if (record.type === 'check_in' && record.status === 'allowed') {
+      const dayKey = getISTDateInputValue(new Date(record.timestamp));
+      if (!map.has(dayKey)) {
+        map.set(dayKey, record);
+      }
+    }
+  }
+  return map;
 }
 
 export default function EmployeeHistory() {
@@ -42,6 +55,8 @@ export default function EmployeeHistory() {
     loadHistory(1);
     attendanceApi.getQuarterWarnings().then(setQuarterWarnings).catch(() => setQuarterWarnings(null));
   }, []);
+
+  const checkInByIstDay = records.length > 0 ? buildAllowedCheckInByIstDay(records) : null;
 
   return (
     <div className="page">
@@ -80,29 +95,37 @@ export default function EmployeeHistory() {
                   </tr>
                 </thead>
                 <tbody>
-                  {records.map((record) => (
-                    <tr key={record._id}>
-                      <td data-label="Type">{record.type === 'check_in' ? 'Check-in' : 'Check-out'}</td>
-                      <td data-label="Status">
-                        <span className={statusBadgeClass(record.status)}>
-                          {record.status}
-                        </span>
-                      </td>
-                      <td data-label="Outcome">
-                        {formatHistoryShortCode(record) ? (
-                          <span className="badge badge-muted">{formatHistoryShortCode(record)}</span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td data-label="Mode">
-                        <span className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}`}>
-                          {formatHistoryModeShort(record) ?? attendanceModeLabel(record.attendanceMode)}
-                        </span>
-                      </td>
-                      <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>
-                    </tr>
-                  ))}
+                  {records.map((record) => {
+                    const outcomeCode = formatHistoryShortCode(record, {
+                      sameDayCheckIn:
+                        record.type === 'check_out'
+                          ? checkInByIstDay?.get(getISTDateInputValue(new Date(record.timestamp)))
+                          : undefined,
+                    });
+                    return (
+                      <tr key={record._id}>
+                        <td data-label="Type">{record.type === 'check_in' ? 'Check-in' : 'Check-out'}</td>
+                        <td data-label="Status">
+                          <span className={statusBadgeClass(record.status)}>
+                            {record.status}
+                          </span>
+                        </td>
+                        <td data-label="Outcome">
+                          {outcomeCode ? (
+                            <span className="badge badge-muted">{outcomeCode}</span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                        <td data-label="Mode">
+                          <span className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}`}>
+                            {formatHistoryModeShort(record) ?? attendanceModeLabel(record.attendanceMode)}
+                          </span>
+                        </td>
+                        <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -24,6 +24,7 @@ import {
   normalizeEmployeeCode,
   resolveEmployeeCodeForCreate,
 } from './employeeCodeService.js';
+import { parseDateInputAsISTDay } from '../utils/istDate.js';
 
 export { normalizeMobile };
 
@@ -50,6 +51,9 @@ async function persistEmployee(parsed, passwordHash, role, department, manager, 
         employeeCode,
         designation: parsed.designation || undefined,
         joiningDate: parsed.joiningDate,
+        dateOfBirth: parsed.dateOfBirth
+          ? parseDateInputAsISTDay(parsed.dateOfBirth)
+          : null,
         endingDate: parsed.endingDate ?? null,
         department: department?.name ?? parsed.department ?? undefined,
         departmentId: department?._id ?? undefined,
@@ -143,10 +147,12 @@ const headerMap = {
   reportingmanageremail: 'reportingManagerEmail',
   reportingmanagercode: 'reportingManagerCode',
   joiningdate: 'joiningDate',
+  dateofbirth: 'dateOfBirth',
+  dob: 'dateOfBirth',
   endingdate: 'endingDate',
 };
 
-const DATE_FIELDS = new Set(['joiningDate', 'endingDate']);
+const DATE_FIELDS = new Set(['joiningDate', 'dateOfBirth', 'endingDate']);
 
 function formatIsoDateParts(year, month, day) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -382,6 +388,7 @@ export function buildEmployeeTemplateWorkbook() {
       'reportingManagerEmail',
       'reportingManagerCode',
       'joiningDate',
+      'dateOfBirth',
       'endingDate',
     ],
     [
@@ -396,6 +403,7 @@ export function buildEmployeeTemplateWorkbook() {
       'manager@grubpac.com',
       'TL001',
       '2026-01-15',
+      '1995-06-20',
       '',
     ],
   ]);

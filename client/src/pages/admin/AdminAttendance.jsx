@@ -116,10 +116,16 @@ function formatDayPickerLabel(dayKey) {
   }).format(date);
 }
 
+function isEditableAttendanceCell(cell) {
+  if (!cell) return false;
+  if (cell.kind === 'absent') return true;
+  return Boolean(cell.checkInRecordId && cell.checkInRecord);
+}
+
 function getEditableWeekDays(cells, weekDayKeys) {
   return weekDayKeys
     .map((dayKey, index) => ({ dayKey, cell: cells[index] }))
-    .filter(({ cell }) => Boolean(cell?.checkInRecordId && cell.checkInRecord));
+    .filter(({ cell }) => isEditableAttendanceCell(cell));
 }
 
 function formatWeekRangeLabel(weekStartKey, weekEndKey) {
@@ -482,6 +488,7 @@ function classifyDayCell({
       leaveTypeCode: resolveLeaveTypeDisplayCode(leaveEntry, leaveTypeCodeById),
     };
     if (allowedCheckIn) {
+      const editMeta = pickEditMetadata(allowedCheckIn);
       return {
         ...leaveCell,
         modeTag: allowedCheckIn.attendanceMode === 'wfh' ? 'WFH' : 'OFC',
@@ -490,6 +497,11 @@ function classifyDayCell({
         checkInLocationHref: mapsLocationHref(allowedCheckIn),
         checkOutLocationHref: mapsLocationHref(allowedCheckOut),
         lateNote: allowedCheckIn.lateNote ?? null,
+        checkInRecordId: recordId(allowedCheckIn),
+        checkOutRecordId: recordId(allowedCheckOut),
+        checkInRecord: allowedCheckIn,
+        checkOutRecord: allowedCheckOut ?? null,
+        ...editMeta,
       };
     }
     return leaveCell;
@@ -888,7 +900,8 @@ function AttendanceDayPickerModal({ target, onClose, onSelectDay }) {
             Select day to edit
           </h2>
           <p className="modal__lead muted">
-            {target.employee.name} · {target.editableDays.length} days with check-in this week
+            {target.employee.name} · {target.editableDays.length} editable day
+            {target.editableDays.length === 1 ? '' : 's'} this week
           </p>
         </header>
         <div className="modal__body attendance-day-picker-modal__list">
@@ -905,6 +918,8 @@ function AttendanceDayPickerModal({ target, onClose, onSelectDay }) {
                   In {cell.checkInTime}
                   {cell.checkOutTime ? ` · Out ${cell.checkOutTime}` : ''}
                 </span>
+              ) : cell.kind === 'absent' ? (
+                <span className="attendance-day-picker-modal__time muted">Absent — create attendance</span>
               ) : null}
             </button>
           ))}
@@ -989,9 +1004,11 @@ function AttendanceEditModal({
               />
             </label>
 
-            {target.hasCheckOut ? (
+            {target.hasCheckOutField ? (
               <label className="modal__field">
-                <span className="modal__label">Check-out time (IST)</span>
+                <span className="modal__label">
+                  Check-out time (IST){target.isCreate ? ' (optional)' : ''}
+                </span>
                 <TimeField
                   value={form.checkOutTime}
                   onChange={(value) => onChange({ checkOutTime: value })}
@@ -1329,14 +1346,37 @@ export default function AdminAttendance() {
   );
 
   function openEditForDay(employee, dayKey, cell) {
-    if (!cell?.checkInRecordId || !cell.checkInRecord) return;
+    if (!isEditableAttendanceCell(cell)) return;
 
     setEditPickerTarget(null);
+
+    if (cell.kind === 'absent') {
+      setEditTarget({
+        employee,
+        dayKey,
+        checkInRecordId: null,
+        isCreate: true,
+        hasCheckOutField: true,
+        cellKind: cell.kind,
+        checkInRecord: null,
+      });
+      setEditForm({
+        checkInTime: normalizeHHmmTime(policy.officeStartTime) ?? '09:00',
+        checkOutTime: '',
+        statusCode: 'P',
+        attendanceMode: 'office',
+        lateNote: '',
+      });
+      setEditError('');
+      return;
+    }
+
     setEditTarget({
       employee,
       dayKey,
       checkInRecordId: cell.checkInRecordId,
-      hasCheckOut: Boolean(cell.checkOutRecordId),
+      isCreate: false,
+      hasCheckOutField: Boolean(cell.checkOutRecordId),
       cellKind: cell.kind,
       checkInRecord: cell.checkInRecord,
     });
@@ -1378,12 +1418,17 @@ export default function AdminAttendance() {
   }
 
   async function saveAttendanceEdit() {
-    if (!editTarget?.checkInRecordId) return;
+    if (!editTarget) return;
+    if (!editTarget.isCreate && !editTarget.checkInRecordId) return;
     if (!isValidHHmmTime(editForm.checkInTime)) {
       setEditError('Enter a valid check-in time.');
       return;
     }
-    if (editTarget.hasCheckOut && editForm.checkOutTime && !isValidHHmmTime(editForm.checkOutTime)) {
+    if (
+      editTarget.hasCheckOutField &&
+      editForm.checkOutTime &&
+      !isValidHHmmTime(editForm.checkOutTime)
+    ) {
       setEditError('Enter a valid check-out time.');
       return;
     }
@@ -1397,17 +1442,30 @@ export default function AdminAttendance() {
         attendanceMode: editForm.attendanceMode,
         lateNote: editForm.lateNote.trim() ? editForm.lateNote.trim() : null,
       };
-      if (editTarget.hasCheckOut) {
+      if (editTarget.hasCheckOutField) {
         payload.checkOutTime = editForm.checkOutTime
           ? normalizeHHmmTime(editForm.checkOutTime)
           : null;
       }
 
-      await adminApi.editAttendanceRecord(editTarget.checkInRecordId, payload);
+      if (editTarget.isCreate) {
+        await adminApi.upsertAttendanceRecord({
+          userId: editTarget.employee.id,
+          dayKey: editTarget.dayKey,
+          ...payload,
+        });
+      } else {
+        await adminApi.editAttendanceRecord(editTarget.checkInRecordId, payload);
+      }
       const employeeName = editTarget.employee.name;
+      const created = editTarget.isCreate;
       setEditTarget(null);
       await loadWeek();
-      showSuccess(`Attendance updated for ${employeeName}.`);
+      showSuccess(
+        created
+          ? `Attendance created for ${employeeName}.`
+          : `Attendance updated for ${employeeName}.`,
+      );
     } catch (err) {
       const message = getErrorMessage(err);
       setEditError(message);
@@ -1634,8 +1692,8 @@ export default function AdminAttendance() {
                   const editButtonTitle = canEditWeek
                     ? editableWeekDays.length === 1
                       ? `Edit ${formatDayPickerLabel(editableWeekDays[0].dayKey)} attendance`
-                      : `Edit attendance (${editableWeekDays.length} days with check-in this week)`
-                    : 'No check-in to edit this week';
+                      : `Edit attendance (${editableWeekDays.length} editable days this week)`
+                    : 'No past working days to edit this week';
                   return (
                     <tr key={id}>
                       <td className="attendance-grid__row-num">{rowIndex + 1}</td>
@@ -1698,7 +1756,7 @@ export default function AdminAttendance() {
                             aria-label={
                               canEditWeek
                                 ? `Edit attendance for ${employee.name}, ${editableWeekDays.length} day${editableWeekDays.length === 1 ? '' : 's'} available`
-                                : 'Edit unavailable — no check-in this week'
+                                : 'Edit unavailable — no past working days this week'
                             }
                             onClick={() => openEditForRow(employee, cells)}
                           >

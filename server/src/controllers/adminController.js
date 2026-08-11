@@ -12,12 +12,19 @@ import {
   importEmployeesFromRows,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
-import { getAdminAttendance, adminEditAttendanceRecord } from '../services/attendanceService.js';
-import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
+import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay } from '../services/attendanceService.js';
+import {
+  getQuarterWarningSummaryForUsers,
+  resetQuarterWarningsForUsers,
+} from '../services/attendancePolicyService.js';
 import { officeSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
-import { adminAttendanceEditSchema } from '../../../shared/validation/attendance.js';
+import {
+  adminAttendanceEditSchema,
+  adminAttendanceUpsertSchema,
+  resetQuarterWarningsSchema,
+} from '../../../shared/validation/attendance.js';
 import { auditLogQuerySchema } from '../../../shared/validation/audit.js';
 import {
   buildEmployeeProfileUpdateSchema,
@@ -359,6 +366,7 @@ export async function updateEmployee(req, res) {
     mobile: employee.mobile,
     designation: employee.designation,
     joiningDate: employee.joiningDate,
+    dateOfBirth: employee.dateOfBirth,
     endingDate: employee.endingDate,
   };
 
@@ -422,6 +430,10 @@ export async function updateEmployee(req, res) {
   if (parsed.joiningDate !== undefined) {
     employee.joiningDate = parsed.joiningDate;
   }
+  if (parsed.dateOfBirth !== undefined) {
+    employee.dateOfBirth =
+      parsed.dateOfBirth === null ? null : parseDateInputAsISTDay(parsed.dateOfBirth);
+  }
   if (parsed.endingDate !== undefined) {
     employee.endingDate = parsed.endingDate;
   }
@@ -450,6 +462,7 @@ export async function updateEmployee(req, res) {
       mobile: employee.mobile,
       designation: employee.designation,
       joiningDate: employee.joiningDate,
+      dateOfBirth: employee.dateOfBirth,
       endingDate: employee.endingDate,
     },
   });
@@ -603,6 +616,46 @@ export async function editAttendanceRecord(req, res) {
   });
 }
 
+export async function upsertAttendanceRecord(req, res) {
+  const parsed = adminAttendanceUpsertSchema.parse(req.body);
+  const { userId, dayKey, ...payload } = parsed;
+  const auditContext = {
+    ...getRequestAuditContext(req),
+    email: req.user?.email,
+  };
+  const result = await adminUpsertAttendanceForDay({
+    userId,
+    dayKey,
+    payload,
+    actor: req.user,
+    permissions: req.userPermissions,
+    auditContext,
+  });
+
+  res.status(result.created ? 201 : 200).json({
+    record: {
+      id: result.checkIn._id.toString(),
+      userId: result.checkIn.userId.toString(),
+      type: result.checkIn.type,
+      timestamp: result.checkIn.timestamp,
+      attendanceMode: result.checkIn.attendanceMode,
+      attendanceTag: result.checkIn.attendanceTag,
+      warningIssued: result.checkIn.warningIssued,
+      quarterWarningIndex: result.checkIn.quarterWarningIndex,
+      lateNote: result.checkIn.lateNote,
+      status: result.checkIn.status,
+      dayKey: result.dayKey,
+      checkInTime: result.checkInTime,
+      checkOutTime: result.checkOutTime,
+      checkOutRecordId: result.checkOut?._id?.toString() ?? null,
+      lastEditedAt: result.checkIn.lastEditedAt ?? null,
+      lastEditedBy: result.checkIn.lastEditedBy ?? null,
+      editHistory: result.checkIn.editHistory ?? [],
+      created: Boolean(result.created),
+    },
+  });
+}
+
 export async function getQuarterWarningSummary(req, res) {
   res.set('Cache-Control', 'no-store');
   const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
@@ -626,6 +679,52 @@ export async function getQuarterWarningSummary(req, res) {
 
   const summary = await getQuarterWarningSummaryForUsers(userIds);
   res.json(summary);
+}
+
+export async function resetQuarterWarnings(req, res) {
+  const { userIds } = resetQuarterWarningsSchema.parse(req.body);
+
+  const scopedIds = await resolveTeamScopedUserIds(
+    req.user,
+    req.userPermissions,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+
+  if (scopedIds !== null) {
+    const scopedSet = new Set(scopedIds.map((id) => id.toString()));
+    const unauthorized = userIds.filter((id) => !scopedSet.has(id));
+    if (unauthorized.length) {
+      return res.status(403).json({
+        message: 'You do not have permission to reset warnings for one or more selected employees.',
+      });
+    }
+  }
+
+  const result = await resetQuarterWarningsForUsers(userIds);
+  const summary = await getQuarterWarningSummaryForUsers(result.userIds);
+
+  auditLog('quarter_warnings_reset', {
+    adminId: req.user._id.toString(),
+    userIds: result.userIds,
+    quarter: result.quarter?.label ?? null,
+    clearedWarnings: result.clearedWarnings,
+    reclassifiedLv: result.reclassifiedLv,
+    ...getRequestAuditContext(req),
+  });
+
+  res.json({
+    success: true,
+    quarter: {
+      year: result.quarter.year,
+      quarter: result.quarter.quarter,
+      label: result.quarter.label,
+    },
+    userIds: result.userIds,
+    clearedWarnings: result.clearedWarnings,
+    reclassifiedLv: result.reclassifiedLv,
+    summary,
+  });
 }
 
 const weekConfirmationSchema = z.object({

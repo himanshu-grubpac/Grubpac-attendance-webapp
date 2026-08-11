@@ -9,7 +9,9 @@ import {
   getOfficeSettingsHandler,
   listAttendance,
   editAttendanceRecord,
+  upsertAttendanceRecord,
   getQuarterWarningSummary,
+  resetQuarterWarnings,
   listWeekConfirmations,
   confirmWeekAttendance,
   unconfirmWeekAttendance,
@@ -139,6 +141,11 @@ router.get(
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
   asyncHandler(listAttendance),
 );
+router.post(
+  '/attendance/records',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(upsertAttendanceRecord),
+);
 router.patch(
   '/attendance/records/:id',
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
@@ -148,6 +155,11 @@ router.get(
   '/attendance/quarter-warnings',
   requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
   asyncHandler(getQuarterWarningSummary),
+);
+router.post(
+  '/attendance/quarter-warnings/reset',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(resetQuarterWarnings),
 );
 router.get(
   '/attendance/week-confirmations',

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Employee User Guide — Grubpac Attendance</title>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --heading: #0f172a;
+      --primary: #f26522;
+      --primary-soft: rgba(242, 101, 34, 0.1);
+      --border: #e2e8f0;
+      --code-bg: #f1f5f9;
+      --max-width: 52rem;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 1rem;
+      line-height: 1.65;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .guide-header {
+      background: linear-gradient(135deg, #1a2332 0%, #2d3748 100%);
+      color: #f8fafc;
+      padding: 2rem 1.25rem 2.5rem;
+    }
+    .guide-header__inner { max-width: var(--max-width); margin: 0 auto; }
+    .guide-badge {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+      margin-bottom: 0.75rem;
+    }
+    .guide-header h1 { margin: 0 0 0.5rem; font-size: 1.75rem; line-height: 1.25; }
+    .guide-meta { margin: 0; font-size: 0.875rem; color: #cbd5e1; }
+    .guide-meta a { color: #fdba74; }
+    main { max-width: var(--max-width); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    .toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .toc h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--heading); }
+    .toc ol { margin: 0; padding-left: 1.25rem; }
+    .toc li { margin: 0.35rem 0; }
+    .toc a { color: var(--primary); text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+    section { margin-bottom: 2.5rem; }
+    h2 {
+      font-size: 1.35rem;
+      color: var(--heading);
+      border-bottom: 2px solid var(--primary-soft);
+      padding-bottom: 0.4rem;
+      margin: 0 0 1rem;
+    }
+    h3 { font-size: 1.05rem; color: var(--heading); margin: 1.25rem 0 0.5rem; }
+    p { margin: 0 0 0.85rem; }
+    ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+    li { margin: 0.35rem 0; }
+    .callout {
+      background: var(--primary-soft);
+      border-left: 4px solid var(--primary);
+      padding: 0.85rem 1rem;
+      border-radius: 0 6px 6px 0;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+    }
+    .callout--warn {
+      background: #fffbeb;
+      border-left-color: #f59e0b;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 1rem 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--code-bg); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    code {
+      font-family: ui-monospace, "Cascadia Code", monospace;
+      font-size: 0.88em;
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+    }
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li {
+      counter-increment: step;
+      position: relative;
+      padding-left: 2.5rem;
+      margin: 0.85rem 0;
+    }
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0.1rem;
+      width: 1.65rem;
+      height: 1.65rem;
+      background: var(--primary);
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 700;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    footer {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 2rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+    }
+    @media (max-width: 600px) {
+      .guide-header h1 { font-size: 1.4rem; }
+      table { font-size: 0.82rem; }
+      th, td { padding: 0.45rem 0.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="guide-header">
+    <div class="guide-header__inner">
+      <span class="guide-badge">Employee</span>
+      <h1>Grubpac Attendance — Employee User Guide</h1>
+      <p class="guide-meta">
+        Portal: <a href="https://d24p2zn8763d4h.cloudfront.net" target="_blank" rel="noopener">https://d24p2zn8763d4h.cloudfront.net</a>
+        &nbsp;·&nbsp; Last updated: 6 August 2026
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#getting-started">Getting started</a></li>
+        <li><a href="#daily-tasks">Daily tasks — check in &amp; check out</a></li>
+        <li><a href="#leave-wfh">Leave &amp; work from home (WFH)</a></li>
+        <li><a href="#calendar">Calendar &amp; approved leave</a></li>
+        <li><a href="#history">Attendance history &amp; outcome codes</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <section id="getting-started">
+      <h2>1. Getting started</h2>
+      <p>
+        Grubpac Attendance is your self-service portal for daily attendance, leave requests, balances,
+        and pay estimates. Sign in on the <strong>Employee</strong> tab using your work email or employee
+        code and password.
+      </p>
+      <ol class="steps">
+        <li>Open the staging portal at <a href="https://d24p2zn8763d4h.cloudfront.net">d24p2zn8763d4h.cloudfront.net</a>.</li>
+        <li>Choose <strong>Employee</strong> on the login screen and enter your credentials.</li>
+        <li>After login you land on the <strong>Dashboard</strong> — your home for check-in/out and the month calendar.</li>
+        <li>Use the bottom navigation (mobile) or sidebar (desktop) for Leave, Attendance history, Help, and FAQ.</li>
+      </ol>
+      <div class="callout">
+        <strong>Tip:</strong> If you also have a manager or admin role, you may switch portals from your profile.
+        This guide covers the <em>employee</em> experience only.
+      </div>
+    </section>
+
+    <section id="daily-tasks">
+      <h2>2. Daily tasks — check in &amp; check out</h2>
+
+      <h3>No Office / WFH toggle</h3>
+      <p>
+        You do <strong>not</strong> choose Office or WFH manually. Tap <strong>Check in</strong> or
+        <strong>Check out</strong> only — the server automatically detects whether you are at the office
+        (within the configured geofence) or working from home.
+      </p>
+
+      <h3>Office check-in</h3>
+      <ol class="steps">
+        <li>Allow location access when prompted (required for attendance).</li>
+        <li>On the Dashboard, confirm your location shows you are within the office radius.</li>
+        <li>Tap <strong>Check in</strong> when you start work and <strong>Check out</strong> when you leave.</li>
+      </ol>
+
+      <h3>WFH check-in</h3>
+      <p>
+        To work from home on a given day, you must have <strong>approved WFH leave</strong> for that date.
+        Without it, check-in from home will be blocked with a message that WFH approval is required.
+      </p>
+      <p>Once WFH is approved, you may check in and check out from your home location as usual.</p>
+
+      <h3>When check-in is blocked</h3>
+      <ul>
+        <li><strong>Approved non-WFH leave</strong> (CL, EL, SL, etc.) for today — you cannot check in on a full leave day.</li>
+        <li><strong>No approved WFH</strong> when you are outside the office geofence.</li>
+        <li><strong>Outside office radius</strong> when the system expects an office check-in.</li>
+        <li><strong>Already checked in/out</strong> for the current session.</li>
+      </ul>
+    </section>
+
+    <section id="leave-wfh">
+      <h2>3. Leave &amp; work from home (WFH)</h2>
+
+      <h3>Applying for leave</h3>
+      <p>Go to <strong>Apply leave / WFH</strong> from the Leave section. Select the leave type, date range, and reason.</p>
+
+      <h3>Application deadlines</h3>
+      <table>
+        <thead>
+          <tr><th>Leave type</th><th>Deadline for tomorrow</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Sick Leave (SL)</strong></td>
+            <td>Can be applied anytime — no 11:59 PM cutoff for tomorrow.</td>
+          </tr>
+          <tr>
+            <td><strong>All other types</strong> (CL, EL, WFH, CO, RH, etc.)</td>
+            <td>Must be submitted <strong>before 11:59 PM IST today</strong> to include tomorrow.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>After 11:59 PM IST, the portal will reject new requests that cover the next calendar day (IST).</p>
+
+      <h3>WFH vs other leave</h3>
+      <ul>
+        <li><strong>WFH</strong> — apply in advance; once approved, you may check in from home on those dates.</li>
+        <li><strong>CL, EL, RH, etc.</strong> — approved days block check-in; the day counts as leave.</li>
+        <li><strong>SL</strong> — often auto-approved; still blocks check-in on approved sick days.</li>
+      </ul>
+
+      <div class="callout callout--warn">
+        <strong>Permanent / long-term WFH:</strong> The portal does not have a separate “permanent WFH” mode.
+        For extended work-from-home arrangements, submit a long WFH leave request for approval, or ask HR/Admin
+        to configure your account appropriately.
+      </div>
+    </section>
+
+    <section id="calendar">
+      <h2>4. Calendar &amp; approved leave</h2>
+      <p>
+        The month calendar on your Dashboard highlights days with <strong>approved leave</strong> so you
+        can see your schedule at a glance. Pending requests may show differently from approved leave — check
+        <strong>My requests</strong> for status.
+      </p>
+      <p>Use <strong>Leave balances</strong> to see remaining quota for each leave type.</p>
+    </section>
+
+    <section id="history">
+      <h2>5. Attendance history &amp; outcome codes</h2>
+      <p>
+        Open <strong>Attendance history</strong> to review past check-ins. Each day shows short
+        <strong>OUTCOME</strong> and <strong>MODE</strong> codes:
+      </p>
+      <table>
+        <thead>
+          <tr><th>Code</th><th>Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>P</code></td><td>Present — on-time office check-in.</td></tr>
+          <tr><td><code>OFC</code></td><td>Office mode — checked in at the office.</td></tr>
+          <tr><td><code>WFH</code></td><td>Work from home — approved WFH day.</td></tr>
+          <tr><td><code>HD</code></td><td>Half day — check-in at or after the half-day threshold.</td></tr>
+          <tr><td><code>W1</code>, <code>W2</code>, <code>W3</code></td><td>Late present with quarterly warning (1st, 2nd, or 3rd warning).</td></tr>
+          <tr><td><code>LV</code></td><td>Leave violation — late check-in with no warnings remaining in the quarter.</td></tr>
+        </tbody>
+      </table>
+      <p>Check-out rows inherit the same outcome code as that day’s check-in.</p>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>6. Troubleshooting</h2>
+      <h3>Location not detected</h3>
+      <ul>
+        <li>Enable GPS/location for your browser.</li>
+        <li>On mobile, allow location “While using the app”.</li>
+        <li>Refresh the page and wait a few seconds for the map to update.</li>
+      </ul>
+      <h3>Cannot check in at office</h3>
+      <ul>
+        <li>Move closer until you are inside the office geofence (shown on the map).</li>
+        <li>Confirm you do not have approved leave for today.</li>
+      </ul>
+      <h3>Cannot check in from home</h3>
+      <ul>
+        <li>Ensure WFH leave is <strong>approved</strong> for today (not just pending).</li>
+        <li>Apply WFH before the 11:59 PM IST cutoff if the date is tomorrow.</li>
+      </ul>
+      <h3>Still stuck?</h3>
+      <p>Raise a <strong>Help</strong> ticket (category: Attendance or Leave) with a screenshot if possible.</p>
+    </section>
+
+    <section id="faq">
+      <h2>7. FAQ</h2>
+      <h3>Do I need to select Office or WFH?</h3>
+      <p>No. The system detects your location and approved leave automatically.</p>
+      <h3>Can I check in on a casual leave day?</h3>
+      <p>No. Approved CL/EL/SL (non-WFH) leave blocks check-in for that day.</p>
+      <h3>Why was my tomorrow WFH request rejected?</h3>
+      <p>Non-SL leave for tomorrow must be submitted before 11:59 PM IST today.</p>
+      <h3>I work from home every day. What should I do?</h3>
+      <p>There is no permanent WFH toggle. Request long-duration WFH approval or contact HR/Admin for setup.</p>
+      <h3>Where is my pay information?</h3>
+      <p><strong>My pay estimate</strong> (if enabled for your role) shows a monthly estimate — not a payslip.</p>
+    </section>
+  </main>
+
+  <footer>
+    Grubpac Attendance · Employee guide · Staging portal · © Grubpac
+  </footer>
+</body>
+</html>

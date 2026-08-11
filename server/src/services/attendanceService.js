@@ -10,7 +10,7 @@ import {
   parseStatusCodeToPolicyFields,
   statusCodeFromRecord,
 } from './attendancePolicyService.js';
-import { getHolidayDateSet } from './leaveService.js';
+import { getHolidayMapForYear } from './leaveService.js';
 import {
   isUserInTeamScope,
   resolveTeamScopedUserIds,
@@ -30,8 +30,8 @@ import {
 import { auditLog } from '../utils/auditLog.js';
 import {
   hasApprovedWfhForIstDate,
-  validateWfhCheckInMode,
 } from './wfhPolicyService.js';
+import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -80,16 +80,54 @@ async function loadPendingLeaveForToday(userId) {
   };
 }
 
-function buildTodayStatus(records, office, pendingLeaveToday = null, wfhApprovedToday = false) {
+async function loadApprovedLeaveForToday(userId) {
+  const todayDay = parseDateInputAsISTDay(getISTDateInputValue());
+  const request = await LeaveRequest.findOne({
+    userId,
+    status: 'approved',
+    startDate: { $lte: todayDay },
+    endDate: { $gte: todayDay },
+  })
+    .populate(LEAVE_REQUEST_POPULATE[0])
+    .sort({ createdAt: -1 });
+
+  if (!request) {
+    return null;
+  }
+
+  const safe = request.toSafeJSON();
+  return {
+    id: safe.id,
+    leaveTypeCode: safe.leaveTypeCode,
+    leaveTypeName: safe.leaveTypeName,
+    startDate: safe.startDate,
+    endDate: safe.endDate,
+    days: safe.days,
+    halfDay: safe.halfDay,
+  };
+}
+
+export function isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday) {
+  return Boolean(approvedLeaveToday) && !wfhApprovedToday;
+}
+
+function buildTodayStatus(
+  records,
+  office,
+  pendingLeaveToday = null,
+  wfhApprovedToday = false,
+  approvedLeaveToday = null,
+) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
 
   return {
     checkIn,
     checkOut,
-    canCheckIn: !checkIn,
+    canCheckIn: !checkIn && !isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday),
     canCheckOut: Boolean(checkIn) && !checkOut,
     pendingLeaveToday,
+    approvedLeaveToday,
     wfhApprovedToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
@@ -109,13 +147,20 @@ function buildTodayStatus(records, office, pendingLeaveToday = null, wfhApproved
 
 export async function getTodayStatus(userId) {
   const istToday = getISTDateInputValue();
-  const [records, office, pendingLeaveToday, wfhApprovedToday] = await Promise.all([
+  const [records, office, pendingLeaveToday, wfhApprovedToday, approvedLeaveToday] = await Promise.all([
     getTodayRecords(userId),
     getOfficeSettings(),
     loadPendingLeaveForToday(userId),
     hasApprovedWfhForIstDate(userId, istToday),
+    loadApprovedLeaveForToday(userId),
   ]);
-  return buildTodayStatus(records, office, pendingLeaveToday, wfhApprovedToday);
+  return buildTodayStatus(
+    records,
+    office,
+    pendingLeaveToday,
+    wfhApprovedToday,
+    approvedLeaveToday,
+  );
 }
 
 export async function markAttendance(userId, type, payload, auditContext = {}) {
@@ -124,40 +169,59 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
   try {
     let result;
     await session.withTransaction(async () => {
-      const office = await getOfficeSettings();
+  const office = await getOfficeSettings();
       const records = await getTodayRecords(userId, session);
-      const today = buildTodayStatus(records, office);
+      const istToday = getISTDateInputValue();
+      let wfhApprovedToday = false;
+      let approvedLeaveToday = null;
+      if (type === 'check_in') {
+        [wfhApprovedToday, approvedLeaveToday] = await Promise.all([
+          hasApprovedWfhForIstDate(userId, istToday),
+          loadApprovedLeaveForToday(userId),
+        ]);
+      }
+      const today = buildTodayStatus(
+        records,
+        office,
+        null,
+        wfhApprovedToday,
+        approvedLeaveToday,
+      );
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
-      const attendanceMode = type === 'check_out' && existingCheckIn
-        ? existingCheckIn.attendanceMode ?? 'office'
-        : payload.attendanceMode;
+      let attendanceMode;
+      if (type === 'check_out' && existingCheckIn) {
+        attendanceMode = existingCheckIn.attendanceMode ?? 'office';
+      } else if (type === 'check_in') {
+        attendanceMode = wfhApprovedToday ? 'wfh' : 'office';
+      } else {
+        attendanceMode = payload.attendanceMode ?? 'office';
+      }
+
+      const enforceOfficeRadius = attendanceMode === 'office';
       const geo = evaluateGeoAttendance({
         ...payload,
         office,
-        enforceOfficeRadius: attendanceMode === 'office',
+        enforceOfficeRadius,
       });
 
-      const businessReasons = [];
-      if (type === 'check_in' && attendanceMode === 'wfh') {
-        const wfhApprovedToday = await hasApprovedWfhForIstDate(userId, getISTDateInputValue());
-        const wfhCheckInError = validateWfhCheckInMode(attendanceMode, wfhApprovedToday);
-        if (wfhCheckInError) {
-          businessReasons.push(wfhCheckInError);
+  const businessReasons = [];
+      if (type === 'check_in') {
+        if (today.checkIn) {
+    businessReasons.push('You have already checked in today.');
+        } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
+          businessReasons.push('Check-in is not available on approved leave days.');
         }
-      }
-      if (type === 'check_in' && !today.canCheckIn) {
-        businessReasons.push('You have already checked in today.');
-      }
-      if (type === 'check_out' && !today.canCheckOut) {
-        if (!today.checkIn) {
-          businessReasons.push('Check-in is required before check-out.');
-        } else {
-          businessReasons.push('You have already checked out today.');
-        }
-      }
+  }
+  if (type === 'check_out' && !today.canCheckOut) {
+    if (!today.checkIn) {
+      businessReasons.push('Check-in is required before check-out.');
+    } else {
+      businessReasons.push('You have already checked out today.');
+    }
+  }
 
-      const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
-      const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
+  const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
+  const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
 
       let policyFields = {};
       if (type === 'check_in' && status === 'allowed') {
@@ -167,19 +231,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       const [record] = await AttendanceRecord.create(
         [
           {
-            userId,
-            type,
+    userId,
+    type,
             attendanceMode,
-            timestamp: new Date(),
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            accuracyMeters: payload.accuracyMeters,
-            distanceMeters: geo.distanceMeters,
-            officeLatitude: office.latitude,
-            officeLongitude: office.longitude,
-            radiusMeters: office.radiusMeters,
-            status,
-            rejectionReasons,
+    timestamp: new Date(),
+    latitude: payload.latitude,
+    longitude: payload.longitude,
+    accuracyMeters: payload.accuracyMeters,
+    distanceMeters: geo.distanceMeters,
+    officeLatitude: office.latitude,
+    officeLongitude: office.longitude,
+    radiusMeters: office.radiusMeters,
+    status,
+    rejectionReasons,
             lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
             ...policyFields,
           },
@@ -231,7 +295,7 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
   const skip = (page - 1) * limit;
   const [records, total] = await Promise.all([
     AttendanceRecord.find({ userId })
-      .sort({ timestamp: -1 })
+    .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit),
     AttendanceRecord.countDocuments({ userId }),
@@ -308,8 +372,8 @@ export async function getAdminAttendance({
   const skip = (page - 1) * limit;
   const [records, total] = await Promise.all([
     AttendanceRecord.find(query)
-      .populate('userId', 'name email mobile employeeCode department')
-      .sort({ timestamp: -1 })
+    .populate('userId', 'name email mobile employeeCode department')
+    .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit),
     AttendanceRecord.countDocuments(query),
@@ -350,32 +414,116 @@ async function loadCheckInDayStatusMap(userId, monthStart, monthEnd) {
   return map;
 }
 
-async function loadApprovedLeaveDaySet(userId, monthStart, monthEnd, holidayDates) {
+/**
+ * Split approved leave covering the month into regular leave vs WFH working days (IST keys).
+ * WFH is returned separately so the employee calendar can show a WFH status instead of generic leave.
+ */
+async function loadApprovedLeaveDaySets(userId, monthStart, monthEnd, holidayDates) {
   const requests = await LeaveRequest.find({
     userId,
     status: 'approved',
     startDate: { $lte: monthEnd },
     endDate: { $gte: monthStart },
-  }).select('startDate endDate');
+  })
+    .select('startDate endDate leaveTypeId')
+    .populate({ path: 'leaveTypeId', select: 'code' });
 
   const leaveDays = new Set();
+  const wfhDays = new Set();
   for (const request of requests) {
     const overlapStart = request.startDate > monthStart ? request.startDate : monthStart;
     const overlapEnd = request.endDate < monthEnd ? request.endDate : monthEnd;
     if (overlapEnd < overlapStart) {
       continue;
     }
+    const code = String(request.leaveTypeId?.code ?? '').toUpperCase();
+    const target = code === WFH_LEAVE_TYPE_CODE ? wfhDays : leaveDays;
     for (const dayKey of listWorkingDaysIST(overlapStart, overlapEnd, holidayDates)) {
-      leaveDays.add(dayKey);
+      target.add(dayKey);
     }
   }
-  return leaveDays;
+  return { leaveDays, wfhDays };
+}
+
+/**
+ * Pure day classifier for employee month calendar status codes.
+ * Priority: weekend → holiday → (future leave/WFH) → check-in present/half_day → WFH → leave → absent.
+ */
+export function resolveEmployeeMonthDayStatus({
+  dayKey,
+  todayKey,
+  isWeekend,
+  isHoliday,
+  checkInStatus = null,
+  wfhDay = false,
+  leaveDay = false,
+}) {
+  if (isWeekend) return 'weekend';
+  if (isHoliday) return 'holiday';
+  if (dayKey > todayKey) {
+    if (wfhDay) return 'wfh_future';
+    if (leaveDay) return 'leave_future';
+    return 'future';
+  }
+  if (checkInStatus) return checkInStatus;
+  if (wfhDay) return 'wfh';
+  if (leaveDay) return 'leave';
+  if (dayKey < todayKey) return 'absent';
+  return 'none';
+}
+
+/**
+ * Group active employees whose DOB month-day falls in the given calendar month (IST).
+ * Year of birth is ignored. Feb 29 only appears in leap years on that day.
+ * Privacy: returns firstName + display name only.
+ */
+export function buildMonthBirthdayMap(users, monthKey) {
+  const birthdays = {};
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(monthKey)) {
+    return birthdays;
+  }
+  const [, calendarMonth] = monthKey.split('-');
+
+  for (const user of users) {
+    if (!user?.dateOfBirth) continue;
+    const dobInput = getISTDateInputValue(user.dateOfBirth);
+    if (!dobInput || dobInput.length < 10) continue;
+    const month = dobInput.slice(5, 7);
+    const day = dobInput.slice(8, 10);
+    if (month !== calendarMonth) continue;
+
+    const dayKey = `${monthKey}-${day}`;
+    const firstName = (user.firstName || '').trim() || (user.name || '').trim().split(/\s+/)[0] || 'Colleague';
+    const name = (user.name || '').trim() || firstName;
+    if (!birthdays[dayKey]) {
+      birthdays[dayKey] = [];
+    }
+    birthdays[dayKey].push({ firstName, name });
+  }
+
+  for (const dayKey of Object.keys(birthdays)) {
+    birthdays[dayKey].sort((a, b) => a.firstName.localeCompare(b.firstName, 'en'));
+  }
+  return birthdays;
+}
+
+export async function loadMonthBirthdays(monthKey) {
+  const users = await User.find({
+    isActive: true,
+    dateOfBirth: { $ne: null },
+    role: { $ne: 'admin' },
+  })
+    .select('firstName name dateOfBirth')
+    .lean();
+  return buildMonthBirthdayMap(users, monthKey);
 }
 
 /**
  * Per-day attendance status for a calendar month (IST).
  * v1 scope: employee own data via /attendance/month-summary; admins may pass userId when
  * ATTENDANCE_READ_ALL or ATTENDANCE_READ_TEAM (direct reports only) allows it.
+ *
+ * Also returns holiday names and company birthdays for the month calendar UI.
  */
 export async function getMonthDayStatusSummary(userId, monthInput) {
   const range = parseMonthInputAsISTRange(monthInput);
@@ -386,44 +534,41 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
   const { year, monthKey, start, end, daysInMonth } = range;
   const office = await getOfficeSettings();
   const weekendDays = office?.weekendDays ?? [0, 6];
-  const holidayDates = await getHolidayDateSet(year);
+  const [holidayMap, birthdays] = await Promise.all([
+    getHolidayMapForYear(year),
+    loadMonthBirthdays(monthKey),
+  ]);
+  const holidayDates = new Set(holidayMap.keys());
   const todayKey = getISTDateInputValue();
 
-  const [checkInDayStatusMap, leaveDaySet] = await Promise.all([
+  const [checkInDayStatusMap, { leaveDays, wfhDays }] = await Promise.all([
     loadCheckInDayStatusMap(userId, start, end),
-    loadApprovedLeaveDaySet(userId, start, end, holidayDates),
+    loadApprovedLeaveDaySets(userId, start, end, holidayDates),
   ]);
 
   const days = {};
+  const holidays = {};
   for (let dayNum = 1; dayNum <= daysInMonth; dayNum += 1) {
     const dayKey = `${monthKey}-${String(dayNum).padStart(2, '0')}`;
     const dayDate = parseDateInputAsISTDay(dayKey);
+    const isHoliday = holidayDates.has(dayKey);
 
-    if (isWeekendIST(dayDate, weekendDays)) {
-      days[dayKey] = 'weekend';
-      continue;
+    days[dayKey] = resolveEmployeeMonthDayStatus({
+      dayKey,
+      todayKey,
+      isWeekend: isWeekendIST(dayDate, weekendDays),
+      isHoliday,
+      checkInStatus: checkInDayStatusMap.get(dayKey) ?? null,
+      wfhDay: wfhDays.has(dayKey),
+      leaveDay: leaveDays.has(dayKey),
+    });
+
+    if (days[dayKey] === 'holiday') {
+      const holiday = holidayMap.get(dayKey);
+      if (holiday) {
+        holidays[dayKey] = { name: holiday.name, type: holiday.type };
+      }
     }
-    if (holidayDates.has(dayKey)) {
-      days[dayKey] = 'holiday';
-      continue;
-    }
-    if (dayKey > todayKey) {
-      days[dayKey] = 'future';
-      continue;
-    }
-    if (checkInDayStatusMap.has(dayKey)) {
-      days[dayKey] = checkInDayStatusMap.get(dayKey);
-      continue;
-    }
-    if (leaveDaySet.has(dayKey)) {
-      days[dayKey] = 'leave';
-      continue;
-    }
-    if (dayKey < todayKey) {
-      days[dayKey] = 'absent';
-      continue;
-    }
-    days[dayKey] = 'none';
   }
 
   return {
@@ -431,6 +576,8 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
     month: monthKey,
     today: todayKey,
     days,
+    holidays,
+    birthdays,
   };
 }
 
@@ -631,6 +778,71 @@ function serializeAdminAttendanceListRecord(record) {
   };
 }
 
+/** Synthetic geo fields for admin-created attendance (no live device location). */
+export function buildAdminSyntheticGeoFields(office) {
+  return {
+    latitude: office.latitude,
+    longitude: office.longitude,
+    accuracyMeters: 1,
+    distanceMeters: 0,
+    officeLatitude: office.latitude,
+    officeLongitude: office.longitude,
+    radiusMeters: office.radiusMeters,
+  };
+}
+
+/**
+ * Returns a block reason when admins must not create attendance for dayKey, else null.
+ * Used by adminUpsertAttendanceForDay (create path only).
+ */
+export function getAdminAttendanceCreateDayBlockReason(dayKey, todayKey = getISTDateInputValue()) {
+  if (!dayKey || !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+    return 'Invalid attendance day.';
+  }
+  if (dayKey > todayKey) {
+    return 'Cannot create attendance for a future day.';
+  }
+  const istDay = parseDateInputAsISTDay(dayKey);
+  if (!istDay) {
+    return 'Invalid attendance day.';
+  }
+  if (isWeekendIST(istDay)) {
+    return 'Cannot create attendance on a weekend.';
+  }
+  return null;
+}
+
+async function findCheckInForUserDay(userId, dayStart, dayEnd) {
+  const allowed = await AttendanceRecord.findOne({
+    userId,
+    type: 'check_in',
+    status: 'allowed',
+    timestamp: { $gte: dayStart, $lte: dayEnd },
+  }).sort({ timestamp: 1 });
+  if (allowed) return allowed;
+
+  return AttendanceRecord.findOne({
+    userId,
+    type: 'check_in',
+    timestamp: { $gte: dayStart, $lte: dayEnd },
+  }).sort({ timestamp: 1 });
+}
+
+function buildAdminCreateEditChanges({ checkInTime, checkOutTime, statusCode, attendanceMode, lateNote }) {
+  const changes = [
+    { field: 'checkInTime', from: null, to: checkInTime },
+    { field: 'statusCode', from: null, to: statusCode },
+    { field: 'attendanceMode', from: null, to: attendanceMode },
+  ];
+  if (lateNote != null) {
+    changes.push({ field: 'lateNote', from: null, to: lateNote });
+  }
+  if (checkOutTime) {
+    changes.push({ field: 'checkOutTime', from: null, to: checkOutTime });
+  }
+  return changes;
+}
+
 export async function adminEditAttendanceRecord({
   recordId,
   payload,
@@ -715,6 +927,17 @@ export async function adminEditAttendanceRecord({
         checkOutRecord.timestamp = newCheckOutTs;
         checkOutRecord.attendanceMode = payload.attendanceMode;
         await checkOutRecord.save();
+      } else {
+        const office = await getOfficeSettings();
+        checkOutRecord = await AttendanceRecord.create({
+          userId: checkInRecord.userId,
+          type: 'check_out',
+          attendanceMode: payload.attendanceMode,
+          timestamp: newCheckOutTs,
+          status: 'allowed',
+          rejectionReasons: [],
+          ...buildAdminSyntheticGeoFields(office),
+        });
       }
     }
   }
@@ -752,5 +975,148 @@ export async function adminEditAttendanceRecord({
     dayKey,
     checkInTime: getISTTimeHHmm(checkInRecord.timestamp),
     checkOutTime: checkOutRecord ? getISTTimeHHmm(checkOutRecord.timestamp) : null,
+  };
+}
+
+/**
+ * Create attendance for a user/day when no check-in exists, or update the existing check-in.
+ * Same RBAC scope as adminEditAttendanceRecord.
+ */
+export async function adminUpsertAttendanceForDay({
+  userId,
+  dayKey,
+  payload,
+  actor,
+  permissions,
+  auditContext = {},
+}) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throwError('Employee not found.', 404);
+  }
+
+  const allowed = await isUserInTeamScope(
+    actor,
+    permissions,
+    userId,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+  if (!allowed) {
+    throwError('You do not have permission to edit this attendance record.', 403);
+  }
+
+  const employee = await User.findById(userId).select('_id isActive');
+  if (!employee?.isActive) {
+    throwError('Employee not found.', 404);
+  }
+
+  const istDay = parseDateInputAsISTDay(dayKey);
+  if (!istDay) {
+    throwError('Invalid attendance day.');
+  }
+
+  const dayStart = startOfDayIST(istDay);
+  const dayEnd = endOfDayIST(istDay);
+  const existingCheckIn = await findCheckInForUserDay(userId, dayStart, dayEnd);
+  if (existingCheckIn) {
+    return adminEditAttendanceRecord({
+      recordId: existingCheckIn._id.toString(),
+      payload,
+      actor,
+      permissions,
+      auditContext,
+    });
+  }
+
+  const blockReason = getAdminAttendanceCreateDayBlockReason(dayKey);
+  if (blockReason) {
+    throwError(blockReason);
+  }
+
+  const newCheckInTs = buildISTTimestampFromDayAndTime(dayKey, payload.checkInTime);
+  if (!newCheckInTs) {
+    throwError('Invalid check-in time.');
+  }
+  if (newCheckInTs < dayStart || newCheckInTs > dayEnd) {
+    throwError('Check-in time must fall within the attendance day (IST).');
+  }
+
+  let newCheckOutTs = null;
+  if (payload.checkOutTime) {
+    newCheckOutTs = buildISTTimestampFromDayAndTime(dayKey, payload.checkOutTime);
+    if (!newCheckOutTs) {
+      throwError('Invalid check-out time.');
+    }
+    if (newCheckOutTs <= newCheckInTs) {
+      throwError('Check-out time must be after check-in time.');
+    }
+    if (newCheckOutTs > dayEnd) {
+      throwError('Check-out time must fall within the attendance day (IST).');
+    }
+  }
+
+  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode);
+  const office = await getOfficeSettings();
+  const geoFields = buildAdminSyntheticGeoFields(office);
+
+  const checkInRecord = await AttendanceRecord.create({
+    userId,
+    type: 'check_in',
+    attendanceMode: payload.attendanceMode,
+    timestamp: newCheckInTs,
+    status: 'allowed',
+    rejectionReasons: [],
+    lateNote: payload.lateNote ?? null,
+    ...policyFields,
+    ...geoFields,
+  });
+
+  let checkOutRecord = null;
+  if (newCheckOutTs) {
+    checkOutRecord = await AttendanceRecord.create({
+      userId,
+      type: 'check_out',
+      attendanceMode: payload.attendanceMode,
+      timestamp: newCheckOutTs,
+      status: 'allowed',
+      rejectionReasons: [],
+      ...geoFields,
+    });
+  }
+
+  const checkInTime = getISTTimeHHmm(checkInRecord.timestamp);
+  const checkOutTime = checkOutRecord ? getISTTimeHHmm(checkOutRecord.timestamp) : null;
+  const changes = buildAdminCreateEditChanges({
+    checkInTime,
+    checkOutTime,
+    statusCode: payload.statusCode,
+    attendanceMode: payload.attendanceMode,
+    lateNote: payload.lateNote ?? null,
+  });
+  appendAttendanceEditHistory(checkInRecord, { actor, changes });
+  await checkInRecord.save();
+
+  auditLog('attendance_admin_create', {
+    adminId: actor._id.toString(),
+    email: auditContext.email,
+    recordId: checkInRecord._id.toString(),
+    userId: userId.toString(),
+    dayKey,
+    after: {
+      checkIn: snapshotAttendanceRecord(checkInRecord),
+      checkOut: snapshotAttendanceRecord(checkOutRecord),
+    },
+    changes,
+    ip: auditContext.ip,
+    userAgent: auditContext.userAgent,
+  });
+
+  return {
+    checkIn: checkInRecord,
+    checkOut: checkOutRecord,
+    dayKey,
+    checkInTime,
+    checkOutTime,
+    created: true,
   };
 }

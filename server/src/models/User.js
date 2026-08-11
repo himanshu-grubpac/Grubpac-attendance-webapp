@@ -47,6 +47,8 @@ const userSchema = new mongoose.Schema(
     /** Job title — separate from RBAC roleId. */
     designation: { type: String, trim: true, default: null },
     joiningDate: { type: Date, default: null },
+    /** Optional date of birth (calendar birthdays). Null when not set. */
+    dateOfBirth: { type: Date, default: null },
     /** Null while employed; set when the employee separates. */
     endingDate: { type: Date, default: null },
     passwordHash: { type: String, required: true },
@@ -103,6 +105,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     employeeCode: this.employeeCode ?? null,
     designation: this.designation ?? null,
     joiningDate: this.joiningDate ?? null,
+    dateOfBirth: this.dateOfBirth ?? null,
     endingDate: this.endingDate ?? null,
     department: departmentDoc?.name ?? this.department ?? null,
     departmentId: departmentDoc?._id?.toString() ?? this.departmentId?.toString?.() ?? null,

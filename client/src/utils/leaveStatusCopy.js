@@ -19,7 +19,7 @@ export function selectLeavePolicyForType(policies, leaveTypeId, year = new Date(
   );
 }
 
-/** Paid vs unpaid copy follows LeavePolicy.paid; WFH is always paid (matches salaryService). */
+/** Paid vs unpaid policy copy; WFH is treated as paid by policy (overdraw still LOP in salary). */
 export function resolveLeavePolicyPaid({ leaveTypeCode, policy } = {}) {
   if (String(leaveTypeCode ?? '').toUpperCase() === 'WFH') {
     return true;
@@ -33,6 +33,31 @@ export function formatLeaveTypeLabel({ leaveTypeCode, leaveTypeName } = {}) {
     return `${leaveTypeCode} — ${leaveTypeName}`;
   }
   return leaveTypeCode || leaveTypeName || 'Leave';
+}
+
+/**
+ * Mohit-style warning when apply would overdraw remaining balance.
+ * Does not block submit — caller shows banner and continues.
+ */
+export function buildNegativeBalanceWarning({
+  leaveTypeCode,
+  leaveTypeName,
+  available,
+  requestedDays,
+} = {}) {
+  const code = String(leaveTypeCode ?? '').trim() || String(leaveTypeName ?? '').trim() || 'leave';
+  const remaining = Number(available);
+  const days = Number(requestedDays);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  if (!Number.isFinite(remaining)) return null;
+  if (remaining >= days) return null;
+
+  if (remaining <= 0) {
+    return `You don't have ${code} now. If you take it, it will be unpaid and will go in minus.`;
+  }
+
+  const overdrawn = Math.round((days - remaining) * 100) / 100;
+  return `You have only ${remaining} day(s) of ${code} left. If you apply for ${days} day(s), ${overdrawn} day(s) will be unpaid and will go in minus.`;
 }
 
 /** Info notice on Apply leave — all types; paid line when policy.paid is true. */
@@ -62,6 +87,27 @@ export function buildApplyLeaveNotice({ leaveTypeCode, leaveTypeName, policyPaid
       'If that day passes without approval and you do not mark attendance, it may count as loss of pay (LOP).',
     ],
   };
+}
+
+/** Read-only dashboard label for today's auto-detected attendance mode. */
+export function buildTodayAttendanceModeLabel({
+  wfhApprovedToday,
+  approvedLeaveToday,
+  checkIn,
+} = {}) {
+  if (checkIn) {
+    return checkIn.attendanceMode === 'wfh'
+      ? 'Today: Work from home'
+      : 'Today: Office attendance';
+  }
+  if (wfhApprovedToday) {
+    return 'Today: Work from home (approved)';
+  }
+  if (approvedLeaveToday) {
+    const label = formatLeaveTypeLabel(approvedLeaveToday);
+    return `Today: ${label} (approved) — check-in not available on leave days`;
+  }
+  return 'Today: Office attendance';
 }
 
 /** Dashboard banner when pending leave covers today (before check-in). */

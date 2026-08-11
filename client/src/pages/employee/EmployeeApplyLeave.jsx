@@ -6,12 +6,14 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import {
   buildApplyLeaveNotice,
+  buildNegativeBalanceWarning,
   resolveLeavePolicyPaid,
   selectLeavePolicyForType,
 } from '../../utils/leaveStatusCopy.js';
 import {
   isLeaveTypeExemptFromApplyDeadline,
   validateLeaveApplyDeadline,
+  LEAVE_APPLY_ADVANCE_ERROR,
   LEAVE_APPLY_DEADLINE_ERROR,
 } from '@shared/utils/wfhPolicy.js';
 import DateField from '../../components/DateField.jsx';
@@ -37,6 +39,7 @@ export default function EmployeeApplyLeave() {
   const { showSuccess } = useToast();
   const [types, setTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
+  const [balances, setBalances] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [preview, setPreview] = useState(null);
@@ -60,6 +63,11 @@ export default function EmployeeApplyLeave() {
       .listPolicies({ year })
       .then((data) => setPolicies(data.policies ?? []))
       .catch(() => setPolicies([]));
+
+    leaveApi
+      .getMyBalances({ year })
+      .then((data) => setBalances(data.balances ?? []))
+      .catch(() => setBalances([]));
   }, []);
 
   useEffect(() => {
@@ -126,6 +134,11 @@ export default function EmployeeApplyLeave() {
       );
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
+      const year = new Date().getFullYear();
+      leaveApi
+        .getMyBalances({ year })
+        .then((data) => setBalances(data.balances ?? []))
+        .catch(() => {});
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -146,6 +159,18 @@ export default function EmployeeApplyLeave() {
         }),
       })
     : null;
+
+  const selectedBalance = balances.find((item) => item.leaveTypeId === form.leaveTypeId);
+  const requestedDays = Number(preview?.days ?? 0);
+  const negativeBalanceWarning =
+    selectedType && preview && requestedDays > 0
+      ? buildNegativeBalanceWarning({
+          leaveTypeCode: selectedType.code,
+          leaveTypeName: selectedType.name,
+          available: selectedBalance?.available ?? 0,
+          requestedDays,
+        })
+      : null;
 
   const isSlType = selectedType && isLeaveTypeExemptFromApplyDeadline(selectedType.code);
 
@@ -245,12 +270,21 @@ export default function EmployeeApplyLeave() {
             </p>
             <ul className="leave-status-notice__list">
               {!isSlType ? (
-                <li>{LEAVE_APPLY_DEADLINE_ERROR}</li>
+                <>
+                  <li>{LEAVE_APPLY_ADVANCE_ERROR}</li>
+                  <li>{LEAVE_APPLY_DEADLINE_ERROR}</li>
+                </>
               ) : null}
               {applyNotice.lines.map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>
+          </div>
+        ) : null}
+
+        {negativeBalanceWarning ? (
+          <div className="alert alert--warning alert--block form-grid__full" role="alert">
+            {negativeBalanceWarning}
           </div>
         ) : null}
 

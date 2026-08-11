@@ -33,7 +33,7 @@ export function evaluateOfficeGeoPreview(position, office) {
     let message =
       `You appear outside the office radius (${distanceMeters.toFixed(0)} m from centre, allowed ${office.radiusMeters} m).`;
     if (distanceMeters > 1000) {
-      message += ` You appear about ${(distanceMeters / 1000).toFixed(1)} km from the office — switch to Work from Home if you are not on-site.`;
+      message += ` You appear about ${(distanceMeters / 1000).toFixed(1)} km from the office.`;
     }
     issues.push(message);
   } else if (position.accuracyMeters > office.maxAccuracyMeters) {

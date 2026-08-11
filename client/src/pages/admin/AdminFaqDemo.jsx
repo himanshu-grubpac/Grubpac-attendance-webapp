@@ -16,6 +16,7 @@ import FieldError from '../../components/FieldError.jsx';
 import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
+import UserGuideLinks from '../../components/UserGuideLinks.jsx';
 
 /* ── Constants ── */
 
@@ -353,6 +354,8 @@ export default function AdminFaqDemo() {
 
   return (
     <div className="page page--faq-demo">
+      <UserGuideLinks />
+
       {!canManage ? (
         <ReadOnlyView items={items} loading={loading} error={error} />
       ) : (

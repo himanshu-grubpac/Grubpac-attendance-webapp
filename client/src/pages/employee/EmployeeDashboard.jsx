@@ -20,6 +20,7 @@ import { formatQuarterWarningBalance } from '../../utils/attendanceOutcome.js';
 import {
   buildPendingLeaveCheckInFollowUp,
   buildPendingLeaveCheckInWarning,
+  buildTodayAttendanceModeLabel,
 } from '../../utils/leaveStatusCopy.js';
 import { evaluateOfficeGeoPreview } from '../../utils/geoPreview.js';
 
@@ -74,7 +75,7 @@ function isLateCheckIn(graceTime) {
 }
 
 const OFFICE_GEO_REJECTION_FALLBACK =
-  'Outside office radius — switch to Work from Home or move closer.';
+  'Outside office radius — move closer to the office to check in or check out.';
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
@@ -87,11 +88,12 @@ export default function EmployeeDashboard() {
   const [clock, setClock] = useState(getCurrentISTClock());
   const [calendarMonth, setCalendarMonth] = useState(getISTMonthInputValue());
   const [calendarDays, setCalendarDays] = useState({});
+  const [calendarHolidays, setCalendarHolidays] = useState({});
+  const [calendarBirthdays, setCalendarBirthdays] = useState({});
   const [calendarToday, setCalendarToday] = useState(getISTDateInputValue());
   const [calendarLoading, setCalendarLoading] = useState(true);
   const [calendarError, setCalendarError] = useState('');
   const [quarterWarnings, setQuarterWarnings] = useState(null);
-  const [attendanceMode, setAttendanceMode] = useState('office');
   const [lateNoteOpen, setLateNoteOpen] = useState(false);
   const [lateNoteText, setLateNoteText] = useState('');
   const { getPosition, loading: geoLoading, error: geoError, position, sampleInfo } =
@@ -123,6 +125,8 @@ export default function EmployeeDashboard() {
     try {
       const data = await attendanceApi.getMonthSummary({ month });
       setCalendarDays(data.days ?? {});
+      setCalendarHolidays(data.holidays ?? {});
+      setCalendarBirthdays(data.birthdays ?? {});
       setCalendarToday(data.today ?? getISTDateInputValue());
     } catch (err) {
       setCalendarError(getErrorMessage(err));
@@ -148,12 +152,6 @@ export default function EmployeeDashboard() {
   }, [refreshToday, loadQuarterWarnings]);
 
   useEffect(() => {
-    if (today && !today.wfhApprovedToday && attendanceMode === 'wfh') {
-      setAttendanceMode('office');
-    }
-  }, [today, attendanceMode]);
-
-  useEffect(() => {
     loadCalendar(calendarMonth);
   }, [calendarMonth, loadCalendar]);
 
@@ -161,17 +159,23 @@ export default function EmployeeDashboard() {
     getPosition({ fresh: false }).catch(() => {});
   }, [getPosition]);
 
+  const effectiveAttendanceMode = today?.checkIn
+    ? today.checkIn.attendanceMode ?? 'office'
+    : today?.wfhApprovedToday
+      ? 'wfh'
+      : 'office';
+
   async function handleAttendance(type, lateNote) {
     setActionLoading(true);
     setError('');
     setResult(null);
     try {
       const coords = await getPosition({ fresh: true });
-      const mode = type === 'check_out'
-        ? (today?.checkIn?.attendanceMode ?? 'office')
-        : attendanceMode;
+      const todayCheckInMode = today?.checkIn?.attendanceMode ?? 'office';
+      const requiresOfficeGeo =
+        type === 'check_in' ? !today?.wfhApprovedToday : todayCheckInMode !== 'wfh';
 
-      if (type === 'check_in' && mode === 'office' && office) {
+      if (requiresOfficeGeo && office) {
         const preview = evaluateOfficeGeoPreview(coords, office);
         if (preview && !preview.isWithinOffice) {
           const message = preview.issues.join(' ') || OFFICE_GEO_REJECTION_FALLBACK;
@@ -182,8 +186,8 @@ export default function EmployeeDashboard() {
       }
 
       const data = type === 'check_in'
-        ? await attendanceApi.checkIn(coords, mode, lateNote)
-        : await attendanceApi.checkOut(coords, mode);
+        ? await attendanceApi.checkIn(coords, lateNote)
+        : await attendanceApi.checkOut(coords);
       setResult(data);
       if (data.quarterWarnings) {
         setQuarterWarnings(data.quarterWarnings);
@@ -222,6 +226,11 @@ export default function EmployeeDashboard() {
   }
 
   const displayName = user?.name?.split(' ')[0] || 'there';
+  const todayModeLabel = buildTodayAttendanceModeLabel({
+    wfhApprovedToday: today?.wfhApprovedToday,
+    approvedLeaveToday: today?.approvedLeaveToday,
+    checkIn: today?.checkIn,
+  });
   const pendingLeaveWarning = buildPendingLeaveCheckInWarning(today?.pendingLeaveToday);
   const dateLabel = new Intl.DateTimeFormat('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -269,42 +278,9 @@ export default function EmployeeDashboard() {
           </div>
         </div>
 
-        {!today?.checkIn ? (
-          <div className="attendance-mode-picker" role="group" aria-label="Work location for today">
-            <span className="attendance-mode-picker__label">Today&apos;s work location</span>
-            <div className="attendance-mode-picker__options">
-              <button
-                type="button"
-                className={`attendance-mode-picker__option${attendanceMode === 'office' ? ' attendance-mode-picker__option--active' : ''}`}
-                aria-pressed={attendanceMode === 'office'}
-                onClick={() => setAttendanceMode('office')}
-                disabled={actionLoading || geoLoading}
-              >
-                Office
-              </button>
-              <button
-                type="button"
-                className={`attendance-mode-picker__option${attendanceMode === 'wfh' ? ' attendance-mode-picker__option--active' : ''}`}
-                aria-pressed={attendanceMode === 'wfh'}
-                onClick={() => setAttendanceMode('wfh')}
-                disabled={actionLoading || geoLoading || !today?.wfhApprovedToday}
-              >
-                Work from home
-              </button>
-            </div>
-            <p className="attendance-mode-picker__hint muted small">
-              {!today?.wfhApprovedToday
-                ? 'Work from Home requires manager-approved WFH leave for today. Office check-in is always available within the office radius.'
-                : attendanceMode === 'office'
-                  ? 'Office check-in requires you to be within the configured office radius. Approved WFH leave also allows Work from Home check-in.'
-                  : 'Work from Home records your current location without applying the office-radius check.'}
-            </p>
-          </div>
-        ) : (
-          <p className="attendance-mode-current muted small">
-            Work location: <strong>{today.checkIn.attendanceMode === 'wfh' ? 'Work from Home' : 'Office'}</strong>
-          </p>
-        )}
+        <p className="attendance-mode-current muted small" role="status">
+          {todayModeLabel}
+        </p>
 
         {pendingLeaveWarning && !today?.checkIn ? (
           <div
@@ -332,7 +308,7 @@ export default function EmployeeDashboard() {
                 Capturing…
               </>
             ) : (
-              `Check in${attendanceMode === 'wfh' ? ' (WFH)' : ''}`
+              'Check in'
             )}
           </button>
           <button
@@ -341,7 +317,7 @@ export default function EmployeeDashboard() {
             disabled={!today?.canCheckOut || actionLoading || geoLoading}
             onClick={() => handleAttendance('check_out')}
           >
-            {`Check out${today?.checkIn?.attendanceMode === 'wfh' ? ' (WFH)' : ''}`}
+            Check out
           </button>
         </div>
 
@@ -360,7 +336,7 @@ export default function EmployeeDashboard() {
           loading={geoLoading}
           office={office}
           sampleInfo={sampleInfo}
-          attendanceMode={today?.checkIn ? today.checkIn.attendanceMode ?? 'office' : attendanceMode}
+          attendanceMode={effectiveAttendanceMode}
           onRefresh={() => getPosition({ fresh: true }).catch(() => {})}
         />
           </section>
@@ -395,6 +371,8 @@ export default function EmployeeDashboard() {
           <MonthCalendar
             month={calendarMonth}
             days={calendarDays}
+            holidays={calendarHolidays}
+            birthdays={calendarBirthdays}
             today={calendarToday}
             loading={calendarLoading}
             compact

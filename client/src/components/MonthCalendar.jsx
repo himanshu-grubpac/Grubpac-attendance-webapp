@@ -6,11 +6,20 @@ const STATUS_LABELS = {
   present: 'Present',
   half_day: 'Half day',
   leave: 'Leave',
+  leave_future: 'Approved leave (upcoming)',
+  wfh: 'WFH',
+  wfh_future: 'Approved WFH (upcoming)',
   holiday: 'Holiday',
   absent: 'Absent / LOP',
   weekend: 'Weekend',
   future: 'Upcoming',
   none: 'No mark',
+};
+
+/** Short in-cell tags (leave stays color-only; WFH is labeled explicitly). */
+const STATUS_CELL_TAGS = {
+  wfh: 'WFH',
+  wfh_future: 'WFH',
 };
 
 function getMonthMatrix(year, monthKey) {
@@ -42,9 +51,42 @@ function formatMonthTitle(monthKey) {
   }).format(new Date(Date.UTC(y, m - 1, 15)));
 }
 
+function formatBirthdayLabel(entry) {
+  const first = (entry?.firstName || entry?.name || '').trim();
+  if (!first) return 'Birthday';
+  return `${first}'s birthday`;
+}
+
+function buildCellMeta(dayKey, status, holidays, birthdays) {
+  const holiday = holidays?.[dayKey];
+  const dayBirthdays = birthdays?.[dayKey] ?? [];
+  const holidayName = holiday?.name?.trim() || '';
+  const birthdayLabels = dayBirthdays.map(formatBirthdayLabel);
+  const detailParts = [];
+  if (status === 'holiday' && holidayName) {
+    detailParts.push(holidayName);
+  } else if (status !== 'none') {
+    detailParts.push(STATUS_LABELS[status] ?? status);
+  }
+  detailParts.push(...birthdayLabels);
+
+  const title = detailParts.length ? `${dayKey}: ${detailParts.join(' · ')}` : dayKey;
+  const ariaExtra = detailParts.length ? `, ${detailParts.join(', ')}` : '';
+
+  return {
+    holidayName,
+    birthdayLabels,
+    title,
+    ariaExtra,
+    hasBirthday: birthdayLabels.length > 0,
+  };
+}
+
 export default function MonthCalendar({
   month,
   days = {},
+  holidays = {},
+  birthdays = {},
   today,
   loading = false,
   onPrev,
@@ -95,16 +137,43 @@ export default function MonthCalendar({
             const status = days[dayKey] ?? 'none';
             const dayNum = Number(dayKey.slice(-2));
             const isToday = dayKey === today;
+            const meta = buildCellMeta(dayKey, status, holidays, birthdays);
+            const showHolidayName = Boolean(meta.holidayName);
+            const showBirthday = meta.hasBirthday;
+            const statusTag = STATUS_CELL_TAGS[status] ?? null;
+            const primaryLabel = showHolidayName
+              ? meta.holidayName
+              : showBirthday
+                ? meta.birthdayLabels[0]
+                : statusTag;
+            const secondaryLabel =
+              showHolidayName && showBirthday
+                ? meta.birthdayLabels[0]
+                : showBirthday && meta.birthdayLabels.length > 1
+                  ? `+${meta.birthdayLabels.length - 1} more`
+                  : showBirthday && statusTag
+                    ? statusTag
+                    : null;
 
             return (
               <span
                 key={dayKey}
                 role="gridcell"
-                className={`month-calendar__cell month-calendar__cell--${status}${isToday ? ' month-calendar__cell--today' : ''}`}
-                title={`${dayKey}: ${STATUS_LABELS[status] ?? status}`}
-                aria-label={`${dayNum}, ${STATUS_LABELS[status] ?? status}${isToday ? ', today' : ''}`}
+                className={`month-calendar__cell month-calendar__cell--${status}${isToday ? ' month-calendar__cell--today' : ''}${showBirthday ? ' month-calendar__cell--birthday' : ''}`}
+                title={meta.title}
+                aria-label={`${dayNum}${meta.ariaExtra}${isToday ? ', today' : ''}`}
               >
                 <span className="month-calendar__day">{dayNum}</span>
+                {primaryLabel ? (
+                  <span className="month-calendar__note" aria-hidden="true">
+                    {primaryLabel}
+                  </span>
+                ) : null}
+                {secondaryLabel ? (
+                  <span className="month-calendar__note month-calendar__note--secondary" aria-hidden="true">
+                    {secondaryLabel}
+                  </span>
+                ) : null}
               </span>
             );
           })}
@@ -112,12 +181,16 @@ export default function MonthCalendar({
       )}
 
       <div className="month-calendar__legend" aria-label="Calendar legend">
-        {['present', 'half_day', 'leave', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
+        {['present', 'half_day', 'leave', 'leave_future', 'wfh', 'wfh_future', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
           <span key={status} className="month-calendar__legend-item">
             <span className={`month-calendar__swatch month-calendar__swatch--${status}`} aria-hidden="true" />
             {STATUS_LABELS[status]}
           </span>
         ))}
+        <span className="month-calendar__legend-item">
+          <span className="month-calendar__swatch month-calendar__swatch--birthday" aria-hidden="true" />
+          Birthday
+        </span>
       </div>
     </div>
   );

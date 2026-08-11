@@ -44,8 +44,14 @@ export function formatCheckInOutcomeShort(record) {
 }
 
 /** Employee history short codes: P / HD / W1 / OFC / WFH / LV */
-export function formatHistoryShortCode(record) {
-  if (!record || record.type !== 'check_in' || record.status !== 'allowed') {
+export function formatHistoryShortCode(record, { sameDayCheckIn } = {}) {
+  if (!record) return null;
+
+  if (record.type === 'check_out' && record.status === 'allowed' && sameDayCheckIn) {
+    return formatHistoryShortCode(sameDayCheckIn);
+  }
+
+  if (record.type !== 'check_in' || record.status !== 'allowed') {
     return null;
   }
 

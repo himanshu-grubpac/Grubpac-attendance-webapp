@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildApplyLeaveNotice,
+  buildNegativeBalanceWarning,
   buildPendingLeaveCheckInFollowUp,
   buildPendingLeaveCheckInWarning,
   formatLeaveTypeLabel,
@@ -99,4 +100,37 @@ test('buildPendingLeaveCheckInWarning mentions unpaid when pending', () => {
 test('buildPendingLeaveCheckInFollowUp references pending request', () => {
   const line = buildPendingLeaveCheckInFollowUp({ leaveTypeCode: 'SL', leaveTypeName: 'Sick Leave' });
   assert.match(line, /still pending/);
+});
+
+test('buildNegativeBalanceWarning when no balance left', () => {
+  assert.equal(
+    buildNegativeBalanceWarning({
+      leaveTypeCode: 'CL',
+      available: 0,
+      requestedDays: 1,
+    }),
+    "You don't have CL now. If you take it, it will be unpaid and will go in minus.",
+  );
+});
+
+test('buildNegativeBalanceWarning when partially covered', () => {
+  assert.equal(
+    buildNegativeBalanceWarning({
+      leaveTypeCode: 'CL',
+      available: 1,
+      requestedDays: 3,
+    }),
+    'You have only 1 day(s) of CL left. If you apply for 3 day(s), 2 day(s) will be unpaid and will go in minus.',
+  );
+});
+
+test('buildNegativeBalanceWarning returns null when fully covered', () => {
+  assert.equal(
+    buildNegativeBalanceWarning({
+      leaveTypeCode: 'SL',
+      available: 2,
+      requestedDays: 1,
+    }),
+    null,
+  );
 });

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin User Guide — Grubpac Attendance</title>
+  <style>
+    :root {
+      --bg: #f4f6f9; --surface: #ffffff; --text: #1e293b; --text-muted: #64748b;
+      --heading: #0f172a; --primary: #f26522; --primary-soft: rgba(242, 101, 34, 0.1);
+      --border: #e2e8f0; --code-bg: #f1f5f9; --max-width: 52rem;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size: 1rem; line-height: 1.65; color: var(--text); background: var(--bg); }
+    .guide-header { background: linear-gradient(135deg, #1a2332 0%, #2d3748 100%); color: #f8fafc; padding: 2rem 1.25rem 2.5rem; }
+    .guide-header__inner { max-width: var(--max-width); margin: 0 auto; }
+    .guide-badge { display: inline-block; background: var(--primary); color: #fff; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.25rem 0.65rem; border-radius: 4px; margin-bottom: 0.75rem; }
+    .guide-header h1 { margin: 0 0 0.5rem; font-size: 1.75rem; line-height: 1.25; }
+    .guide-meta { margin: 0; font-size: 0.875rem; color: #cbd5e1; }
+    .guide-meta a { color: #fdba74; }
+    main { max-width: var(--max-width); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 2rem; }
+    .toc h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--heading); }
+    .toc ol { margin: 0; padding-left: 1.25rem; }
+    .toc a { color: var(--primary); text-decoration: none; }
+    section { margin-bottom: 2.5rem; }
+    h2 { font-size: 1.35rem; color: var(--heading); border-bottom: 2px solid var(--primary-soft); padding-bottom: 0.4rem; margin: 0 0 1rem; }
+    h3 { font-size: 1.05rem; color: var(--heading); margin: 1.25rem 0 0.5rem; }
+    p { margin: 0 0 0.85rem; }
+    ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+    .callout { background: var(--primary-soft); border-left: 4px solid var(--primary); padding: 0.85rem 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; font-size: 0.95rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--code-bg); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    code { font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; }
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { counter-increment: step; position: relative; padding-left: 2.5rem; margin: 0.85rem 0; }
+    .steps li::before { content: counter(step); position: absolute; left: 0; top: 0.1rem; width: 1.65rem; height: 1.65rem; background: var(--primary); color: #fff; font-size: 0.8rem; font-weight: 700; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    footer { max-width: var(--max-width); margin: 0 auto; padding: 1.5rem 1.25rem 2rem; font-size: 0.8rem; color: var(--text-muted); border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header class="guide-header">
+    <div class="guide-header__inner">
+      <span class="guide-badge">Admin / HR</span>
+      <h1>Grubpac Attendance — Admin User Guide</h1>
+      <p class="guide-meta">
+        Portal: <a href="https://d24p2zn8763d4h.cloudfront.net" target="_blank" rel="noopener">https://d24p2zn8763d4h.cloudfront.net</a>
+        &nbsp;·&nbsp; Last updated: 6 August 2026
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#getting-started">Getting started</a></li>
+        <li><a href="#employees">Employees &amp; organization</a></li>
+        <li><a href="#attendance-policy">Attendance policy (current behaviour)</a></li>
+        <li><a href="#leave-wfh">Leave, WFH &amp; calendar</a></li>
+        <li><a href="#operations">Operations &amp; settings</a></li>
+        <li><a href="#support">Help, FAQ &amp; audit</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <section id="getting-started">
+      <h2>1. Getting started</h2>
+      <p>
+        <strong>Admin</strong> and <strong>HR</strong> users manage the full Grubpac Attendance system: employees,
+        roles, departments, office geofence, leave policies, company-wide attendance, and support tickets.
+      </p>
+      <ol class="steps">
+        <li>Sign in on the <strong>Admin</strong> tab at <a href="https://d24p2zn8763d4h.cloudfront.net">d24p2zn8763d4h.cloudfront.net</a>.</li>
+        <li>Dashboard shows org-wide summaries (open help tickets, pending leave, etc.).</li>
+        <li>Sidebar sections: <strong>Overview</strong>, <strong>Employees</strong>, <strong>Leaves</strong>, <strong>Operations</strong>.</li>
+      </ol>
+      <div class="callout">
+        HR has nearly full admin access except some system roles. Full <strong>Admin</strong> has all permissions including role management.
+      </div>
+    </section>
+
+    <section id="employees">
+      <h2>2. Employees &amp; organization</h2>
+      <h3>Register &amp; import</h3>
+      <ul>
+        <li><strong>Register Employee</strong> — single employee with department, role, reporting manager.</li>
+        <li><strong>Bulk Import</strong> — Excel template with department, reporting manager email/code.</li>
+        <li><strong>Employee List</strong> — search, open profile, edit org details, leave balances, salary (if permitted).</li>
+      </ul>
+      <h3>Reporting managers &amp; department heads</h3>
+      <ul>
+        <li>Every <strong>Employee</strong> role requires a <strong>reporting manager</strong>.</li>
+        <li><strong>Reporting Manager</strong> role should have at least one <strong>managed department</strong> for department-head scope.</li>
+        <li>Set <strong>delegate approver</strong> on a manager profile for temporary approval coverage.</li>
+      </ul>
+      <h3>Departments &amp; roles</h3>
+      <ul>
+        <li><strong>Departments</strong> — org structure codes (DEV, DES, etc.).</li>
+        <li><strong>Roles &amp; Permissions</strong> — system roles (Admin, HR, Reporting Manager, Employee) plus custom roles.</li>
+      </ul>
+    </section>
+
+    <section id="attendance-policy">
+      <h2>3. Attendance policy (current behaviour)</h2>
+      <p>Configure and communicate these rules to all staff:</p>
+      <table>
+        <thead><tr><th>Rule</th><th>System behaviour</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Check-in UX</td>
+            <td><strong>No Office/WFH toggle</strong> — employees check in/out only; server auto-detects mode from GPS + leave.</td>
+          </tr>
+          <tr>
+            <td>Office</td>
+            <td>Within geofence → office check-in (<code>OFC</code> / <code>P</code>).</td>
+          </tr>
+          <tr>
+            <td>WFH</td>
+            <td>Requires <strong>approved WFH leave</strong> for that IST day; home check-in allowed when approved.</td>
+          </tr>
+          <tr>
+            <td>Other leave</td>
+            <td>Approved CL/EL/SL/RH/etc. <strong>blocks check-in</strong> for covered dates.</td>
+          </tr>
+          <tr>
+            <td>Apply deadline</td>
+            <td><strong>SL</strong> anytime; <strong>all other types</strong> must be submitted before <strong>11:59 PM IST</strong> to include tomorrow.</td>
+          </tr>
+          <tr>
+            <td>Permanent WFH</td>
+            <td><strong>Not supported</strong> as a profile flag — use long WFH approval or manual HR process.</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>Outcome codes (employee history)</h3>
+      <p>
+        <code>P</code>, <code>OFC</code>, <code>WFH</code>, <code>HD</code>, <code>W1</code>–<code>W3</code>, <code>LV</code>
+        — configure grace/half-day thresholds under <strong>Geolocation &amp; Timings</strong>.
+      </p>
+      <h3>Attendance history (all employees)</h3>
+      <p>Admin/HR with <em>read all</em> permission can filter any employee. Managers see team scope only.</p>
+    </section>
+
+    <section id="leave-wfh">
+      <h2>4. Leave, WFH &amp; calendar</h2>
+      <h3>Leave policies</h3>
+      <p>Configure quotas, accrual, carry-forward, and paid/LOP rules per leave type (SL, CL, EL, WFH, CO, RH).</p>
+      <h3>Pending requests</h3>
+      <p>HR/Admin can approve any request in the global queue. Managers approve their reporting lines.</p>
+      <h3>Calendar management</h3>
+      <p>Set company holidays and restricted holidays. Employee dashboards <strong>highlight approved leave</strong> on the month calendar.</p>
+      <h3>Balance adjustments</h3>
+      <p>Manual balance corrections and year-end carry-forward (admin tools on employee profile / policies page).</p>
+    </section>
+
+    <section id="operations">
+      <h2>5. Operations &amp; settings</h2>
+      <h3>Geolocation &amp; Timings</h3>
+      <ul>
+        <li>Office coordinates and radius (metres).</li>
+        <li>Work start, grace period, half-day cutoff times (IST).</li>
+      </ul>
+      <h3>Salary summary</h3>
+      <p>Org-wide salary rollup and export (Admin + salary permissions).</p>
+      <h3>Login logs</h3>
+      <p>Audit authentication events for security review.</p>
+      <h3>FAQ &amp; Demo</h3>
+      <p>Publish role-targeted FAQ items and demo links; static HTML user guides live under <code>/guides/</code>.</p>
+    </section>
+
+    <section id="support">
+      <h2>6. Help, FAQ &amp; audit</h2>
+      <h3>Help tickets</h3>
+      <ul>
+        <li><strong>Help tickets</strong> — all employee-raised tickets (full admin).</li>
+        <li><strong>Team issues</strong> — manager-scoped tickets for reporting managers.</li>
+      </ul>
+      <h3>Staging deployment</h3>
+      <p>Guides ship with the frontend static assets. After updating guides, redeploy the client to staging so <code>/guides/*.html</code> is available on CloudFront.</p>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>7. Troubleshooting</h2>
+      <h3>Employee cannot WFH check-in</h3>
+      <ul>
+        <li>Verify WFH leave is <strong>approved</strong> for today (IST).</li>
+        <li>Check they applied before cutoff if the date was tomorrow.</li>
+      </ul>
+      <h3>Wrong manager in approval chain</h3>
+      <p>Update <strong>reporting manager</strong> on the employee profile.</p>
+      <h3>Geofence too strict</h3>
+      <p>Adjust radius in <strong>Geolocation &amp; Timings</strong>; communicate changes to staff.</p>
+      <h3>Long-term remote worker</h3>
+      <p>No permanent WFH mode — approve extended WFH leave or document an offline HR exception.</p>
+    </section>
+
+    <section id="faq">
+      <h2>8. FAQ</h2>
+      <h3>Where are user guides stored?</h3>
+      <p>Static HTML in <code>client/public/guides/</code> — linked from Help and FAQ &amp; Demo pages.</p>
+      <h3>Can I edit guides without a deploy?</h3>
+      <p>Locally yes (<code>npm run dev</code>). Staging/production require a frontend build and S3 sync.</p>
+      <h3>Who sees which guide?</h3>
+      <p>Employee portal → Employee guide. Admin portal → Admin, Dept Head, or Reporting Manager guide based on role and managed departments.</p>
+    </section>
+  </main>
+
+  <footer>Grubpac Attendance · Admin guide · Staging portal · © Grubpac</footer>
+</body>
+</html>

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   derivePolicyFromSettings,
+  isExhaustionRelatedLv,
   parseStatusCodeToPolicyFields,
   statusCodeFromRecord,
 } from './attendancePolicyService.js';
@@ -56,4 +57,56 @@ test('statusCodeFromRecord reconstructs admin edit status codes', () => {
     'W3',
   );
   assert.equal(statusCodeFromRecord({ attendanceTag: 'LV', warningIssued: false }), 'LV');
+});
+
+test('isExhaustionRelatedLv matches late window used by evaluateCheckInPolicy for LV', () => {
+  assert.equal(isExhaustionRelatedLv(istTime(9, 20), policy), true);
+  assert.equal(isExhaustionRelatedLv(istTime(9, 1), policy), true);
+  assert.equal(isExhaustionRelatedLv(istTime(9, 0), policy), false);
+  assert.equal(isExhaustionRelatedLv(istTime(10, 0), policy), false);
+  assert.equal(isExhaustionRelatedLv(istTime(10, 15), policy), false);
+});
+
+test('isExhaustionRelatedLv ignores weekend check-ins', () => {
+  // 2026-07-25 is Saturday in IST
+  const saturdayLate = new Date('2026-07-25T09:20:00+05:30');
+  assert.equal(isExhaustionRelatedLv(saturdayLate, policy, [0, 6]), false);
+});
+
+test('reset semantics: warning fields clear leaves P tag; exhaustion LV is reclassifiable to P', () => {
+  const warningRecord = {
+    attendanceTag: 'P',
+    warningIssued: true,
+    quarterWarningIndex: 2,
+  };
+  const cleared = {
+    ...warningRecord,
+    warningIssued: false,
+    quarterWarningIndex: null,
+  };
+  assert.equal(statusCodeFromRecord(cleared), 'P');
+
+  const exhaustionLv = {
+    attendanceTag: 'LV',
+    warningIssued: false,
+    quarterWarningIndex: null,
+    timestamp: istTime(9, 25),
+  };
+  assert.equal(isExhaustionRelatedLv(exhaustionLv.timestamp, policy), true);
+  assert.equal(
+    statusCodeFromRecord({
+      attendanceTag: 'P',
+      warningIssued: false,
+      quarterWarningIndex: null,
+    }),
+    'P',
+  );
+
+  const adminLvOutsideWindow = {
+    attendanceTag: 'LV',
+    warningIssued: false,
+    quarterWarningIndex: null,
+    timestamp: istTime(8, 30),
+  };
+  assert.equal(isExhaustionRelatedLv(adminLvOutsideWindow.timestamp, policy), false);
 });

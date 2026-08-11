@@ -178,6 +178,8 @@ export const adminApi = {
     api.get('/admin/attendance', { params }).then((r) => r.data),
   getQuarterWarnings: () =>
     api.get('/admin/attendance/quarter-warnings').then((r) => r.data),
+  resetQuarterWarnings: (userIds) =>
+    api.post('/admin/attendance/quarter-warnings/reset', { userIds }).then((r) => r.data),
   listWeekConfirmations: (weekStart) =>
     api.get('/admin/attendance/week-confirmations', { params: { weekStart } }).then((r) => r.data),
   confirmWeekAttendance: (payload) =>
@@ -186,6 +188,8 @@ export const adminApi = {
     api.delete('/admin/attendance/week-confirmations', { params }).then((r) => r.data),
   editAttendanceRecord: (id, payload) =>
     api.patch(`/admin/attendance/records/${id}`, payload).then((r) => r.data),
+  upsertAttendanceRecord: (payload) =>
+    api.post('/admin/attendance/records', payload).then((r) => r.data),
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
@@ -193,24 +197,22 @@ export const adminApi = {
 
 export const attendanceApi = {
   getToday: () => api.get('/attendance/today').then((r) => r.data),
-  checkIn: (payload, attendanceMode = 'office', lateNote) => {
+  checkIn: (payload, lateNote) => {
     const { deviceId } = getDeviceFingerprint();
     return api
       .post('/attendance/check-in', {
         ...payload,
         deviceId,
-        attendanceMode,
         ...(lateNote ? { lateNote } : {}),
       })
       .then((r) => r.data);
   },
-  checkOut: (payload, attendanceMode = 'office') => {
+  checkOut: (payload) => {
     const { deviceId } = getDeviceFingerprint();
     return api
       .post('/attendance/check-out', {
         ...payload,
         deviceId,
-        attendanceMode,
       })
       .then((r) => r.data);
   },

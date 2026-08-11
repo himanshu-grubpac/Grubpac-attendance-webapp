@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   computeCombinedCarryForward,
   computeStandaloneCarryForward,
+  getAvailableBalance,
+  getPaidLeaveQuota,
   isCarryForwardEligiblePolicy,
 } from './leaveBalanceService.js';
 
@@ -98,4 +100,26 @@ test('computeCombinedCarryForward returns empty list when no remaining balance',
     20,
   );
   assert.deepEqual(allocations, []);
+});
+
+test('getAvailableBalance can go negative when used exceeds stock', () => {
+  assert.equal(
+    getAvailableBalance({ entitled: 1, carried: 0, used: 2, pending: 0, encashed: 0 }),
+    -1,
+  );
+  assert.equal(
+    getAvailableBalance({ entitled: 5, carried: 1, used: 2, pending: 1, encashed: 0 }),
+    3,
+  );
+});
+
+test('getPaidLeaveQuota ignores used and pending', () => {
+  assert.equal(
+    getPaidLeaveQuota({ entitled: 5, carried: 2, used: 10, pending: 3, encashed: 1 }),
+    6,
+  );
+  assert.equal(
+    getPaidLeaveQuota({ entitled: 0, carried: 0, used: 0, pending: 0, encashed: 0 }),
+    0,
+  );
 });

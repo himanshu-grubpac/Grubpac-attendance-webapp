@@ -75,7 +75,30 @@ const endingDateInputSchema = z
   .optional()
   .transform((value) => (value ? value : undefined));
 
+/** Optional DOB on create/bulk — empty clears to undefined (omit). */
+const optionalDateOfBirthInputSchema = z
+  .union([dateInputSchema, z.literal(''), z.null()])
+  .optional()
+  .transform((value) => (value ? value : undefined));
+
+/** Optional DOB on profile update — empty/null clears the field. */
+const nullableDateOfBirthInputSchema = z
+  .union([dateInputSchema, z.literal(''), z.null()])
+  .optional()
+  .transform((value) => (value === '' || value === null || value === undefined ? null : value));
+
 const managedDepartmentIdsSchema = z.array(objectIdSchema).optional().default([]);
+
+const MIN_DATE_OF_BIRTH = '1900-01-01';
+
+function getTodayIstDateInput() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
 
 /** Ending date must be on or after joining date when both are set. */
 export function applyEmployeeDateRangeRules(data, ctx) {
@@ -84,6 +107,27 @@ export function applyEmployeeDateRangeRules(data, ctx) {
       code: z.ZodIssueCode.custom,
       path: ['endingDate'],
       message: 'Ending date must be on or after joining date.',
+    });
+  }
+}
+
+/** Optional DOB must be a reasonable past date (IST calendar day). */
+export function applyDateOfBirthRules(data, ctx) {
+  if (!data.dateOfBirth) return;
+  if (data.dateOfBirth < MIN_DATE_OF_BIRTH) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dateOfBirth'],
+      message: 'Date of birth must be on or after 1900-01-01.',
+    });
+    return;
+  }
+  const today = getTodayIstDateInput();
+  if (data.dateOfBirth > today) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dateOfBirth'],
+      message: 'Date of birth must be today or earlier.',
     });
   }
 }
@@ -134,6 +178,7 @@ export const employeeInputSchema = z.object({
   employeeCode: employeeCodeInputSchema.optional().or(z.literal('')),
   designation: designationSchema,
   joiningDate: dateInputSchema,
+  dateOfBirth: optionalDateOfBirthInputSchema,
   endingDate: endingDateInputSchema,
   department: z
     .string()
@@ -156,6 +201,7 @@ export function buildEmployeeInputSchema(context = {}) {
   const schema = context.bulkImport ? bulkEmployeeInputSchema : employeeInputSchema;
   return schema.superRefine((data, ctx) => {
     applyEmployeeDateRangeRules(data, ctx);
+    applyDateOfBirthRules(data, ctx);
     applyEmployeeOrgContextRules(data, context, ctx);
   });
 }
@@ -167,6 +213,7 @@ const PROFILE_ORG_FIELD_KEYS = [
   'mobile',
   'designation',
   'joiningDate',
+  'dateOfBirth',
   'endingDate',
   'roleId',
   'departmentId',
@@ -191,6 +238,7 @@ export const employeeProfileUpdateSchema = z.object({
   mobile: indianMobileSchema,
   designation: designationSchema,
   joiningDate: dateInputSchema,
+  dateOfBirth: nullableDateOfBirthInputSchema,
   endingDate: z
     .union([dateInputSchema, z.literal(''), z.null()])
     .optional()
@@ -205,6 +253,7 @@ export const employeeProfileUpdateSchema = z.object({
 export function buildEmployeeProfileUpdateSchema(context = {}) {
   return employeeProfileUpdateSchema.superRefine((data, ctx) => {
     applyEmployeeDateRangeRules(data, ctx);
+    applyDateOfBirthRules(data, ctx);
     applyEmployeeOrgContextRules(data, context, ctx);
   });
 }
@@ -228,6 +277,7 @@ export const updateEmployeeOrgSchema = z
     mobile: indianMobileSchema.optional(),
     designation: designationSchema.optional(),
     joiningDate: dateInputSchema.optional(),
+    dateOfBirth: dateInputSchema.nullable().optional(),
     endingDate: dateInputSchema.nullable().optional(),
     managedDepartmentIds: z.array(objectIdSchema).optional(),
   })
@@ -244,4 +294,7 @@ export const updateEmployeeOrgSchema = z
       message: 'Ending date must be on or after joining date.',
       path: ['endingDate'],
     },
-  );
+  )
+  .superRefine((value, ctx) => {
+    applyDateOfBirthRules(value, ctx);
+  });

@@ -13,7 +13,7 @@ import { formatISTDate, formatISTDateTime } from '../../utils/datetime.js';
 import { validateForm } from '../../utils/validation.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import BackLink from '../../components/BackLink.jsx';
-import DateField from '../../components/DateField.jsx';
+import DateField, { getTodayIstValue } from '../../components/DateField.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
@@ -44,6 +44,7 @@ const emptyOrgForm = {
   mobile: '',
   designation: '',
   joiningDate: '',
+  dateOfBirth: '',
   endingDate: '',
 };
 
@@ -189,6 +190,18 @@ function EmploymentEditFields({
           aria-label="Joining date"
         />
         <FieldError message={fieldErrors.joiningDate} />
+      </div>
+
+      <div className="employee-detail-field-control">
+        <DetailLabel optional>Date of birth</DetailLabel>
+        <DateField
+          value={orgForm.dateOfBirth}
+          onChange={(value) => updateField('dateOfBirth', value)}
+          min="1900-01-01"
+          max={getTodayIstValue()}
+          aria-label="Date of birth"
+        />
+        <FieldError message={fieldErrors.dateOfBirth} />
       </div>
 
       <div className="employee-detail-field-control">
@@ -423,6 +436,7 @@ export default function AdminEmployeeDetail() {
       mobile: emp.mobile ?? '',
       designation: emp.designation ?? '',
       joiningDate: emp.joiningDate ? String(emp.joiningDate).slice(0, 10) : '',
+      dateOfBirth: emp.dateOfBirth ? String(emp.dateOfBirth).slice(0, 10) : '',
       endingDate: emp.endingDate ? String(emp.endingDate).slice(0, 10) : '',
     };
   }
@@ -592,6 +606,7 @@ export default function AdminEmployeeDetail() {
         mobile: validation.data.mobile,
         designation: validation.data.designation,
         joiningDate: validation.data.joiningDate,
+        dateOfBirth: validation.data.dateOfBirth ?? null,
         endingDate: validation.data.endingDate ?? null,
       });
 
@@ -896,6 +911,10 @@ export default function AdminEmployeeDetail() {
                 <DetailField label="Reporting manager" value={employee.reportingManagerName} />
                 <DetailField label="Delegate approver" value={employee.delegateApproverName} />
                 <DetailField label="Joining date" value={formatISTDate(employee.joiningDate)} />
+                <DetailField
+                  label="Date of birth"
+                  value={employee.dateOfBirth ? formatISTDate(employee.dateOfBirth) : null}
+                />
                 <DetailField
                   label="Ending date"
                   value={employee.endingDate ? formatISTDate(employee.endingDate) : null}

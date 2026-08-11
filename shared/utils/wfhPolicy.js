@@ -3,13 +3,15 @@ const IST_TIMEZONE = 'Asia/Kolkata';
 
 export const WFH_LEAVE_TYPE_CODE = 'WFH';
 export const SL_LEAVE_TYPE_CODE = 'SL';
-export const LEAVE_APPLY_CUTOFF_TIME = '12:00';
+export const LEAVE_APPLY_CUTOFF_TIME = '23:59';
 /** @deprecated Use LEAVE_APPLY_CUTOFF_TIME */
 export const WFH_APPLY_CUTOFF_TIME = LEAVE_APPLY_CUTOFF_TIME;
 export const LEAVE_APPLY_DEADLINE_ERROR =
-  'Leave requests for tomorrow must be submitted before 12:00 PM IST today.';
+  'Leave requests for tomorrow must be submitted before 11:59 PM IST today.';
 /** @deprecated Use LEAVE_APPLY_DEADLINE_ERROR */
 export const WFH_APPLY_DEADLINE_ERROR = LEAVE_APPLY_DEADLINE_ERROR;
+export const LEAVE_APPLY_ADVANCE_ERROR =
+  'Leave requests (except Sick Leave) must be submitted at least 1 day in advance.';
 export const WFH_CHECKIN_REQUIRES_APPROVAL_ERROR =
   'Work from Home check-in requires approved WFH leave for today.';
 
@@ -64,12 +66,12 @@ export function normalizeLeaveTypeCode(code) {
   return String(code ?? '').trim().toUpperCase();
 }
 
-/** Sick leave is exempt from the 12:00 PM IST tomorrow apply cutoff. */
+/** Sick leave is exempt from same-day advance and 11:59 PM IST tomorrow apply cutoffs. */
 export function isLeaveTypeExemptFromApplyDeadline(leaveTypeCode) {
   return normalizeLeaveTypeCode(leaveTypeCode) === SL_LEAVE_TYPE_CODE;
 }
 
-/** True at or after 12:00 PM IST on the application day. */
+/** True at or after 11:59 PM IST on the application day. */
 export function isPastLeaveApplyCutoff(appliedAt = new Date()) {
   const todayKey = getISTDateInputValue(appliedAt);
   const cutoff = buildISTTimestampFromDayAndTime(todayKey, LEAVE_APPLY_CUTOFF_TIME);
@@ -92,9 +94,11 @@ export function wfhRangeIncludesISTDate(fromDate, toDate, targetDateKey) {
 }
 
 /**
- * Apply deadline for all leave types except SL: after 12:00 PM IST, reject ranges that include
- * tomorrow (IST). Multi-day ranges are blocked when any covered day is tomorrow and the cutoff
- * has passed. Returns an error message string, or null when allowed.
+ * Apply rules for all leave types except SL:
+ * 1) Same-day (today IST) is never allowed — must apply at least 1 day in advance.
+ * 2) After 11:59 PM IST, reject ranges that include tomorrow (IST).
+ * Multi-day ranges are blocked when any covered day violates either rule.
+ * Returns an error message string, or null when allowed.
  */
 export function validateLeaveApplyDeadline(
   fromDate,
@@ -107,6 +111,10 @@ export function validateLeaveApplyDeadline(
   }
   if (isLeaveTypeExemptFromApplyDeadline(leaveTypeCode)) {
     return null;
+  }
+  const todayKey = getISTDateInputValue(appliedAt);
+  if (wfhRangeIncludesISTDate(fromDate, toDate, todayKey)) {
+    return LEAVE_APPLY_ADVANCE_ERROR;
   }
   if (!isPastLeaveApplyCutoff(appliedAt)) {
     return null;

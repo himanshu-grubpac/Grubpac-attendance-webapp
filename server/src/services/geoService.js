@@ -84,7 +84,7 @@ export function evaluateGeoAttendance({
     let message =
       `You are outside the office radius (${distanceMeters.toFixed(1)} m from centre, GPS uncertainty ±${accuracyMeters.toFixed(1)} m, allowed ${office.radiusMeters} m).`;
     if (distanceMeters > FAR_FROM_OFFICE_METERS) {
-      message += ` You appear about ${(distanceMeters / 1000).toFixed(1)} km from the office — use Work from Home if you are not on-site, or ask an admin to verify office coordinates.`;
+      message += ` You appear about ${(distanceMeters / 1000).toFixed(1)} km from the office — ask an admin to verify office coordinates.`;
     }
     rejectionReasons.push(message);
   } else if (

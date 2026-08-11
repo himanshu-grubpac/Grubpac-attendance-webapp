@@ -55,6 +55,10 @@ export default function ProfilePage() {
       { label: 'Department', value: user?.departmentName || user?.department },
       { label: 'Role', value: user?.roleName || user?.role },
       { label: 'Joining date', value: user?.joiningDate ? formatISTDate(user.joiningDate) : null },
+      {
+        label: 'Date of birth',
+        value: user?.dateOfBirth ? formatISTDate(user.dateOfBirth) : null,
+      },
       { label: 'Ending date', value: user?.endingDate ? formatISTDate(user.endingDate) : null },
     ],
     [user],

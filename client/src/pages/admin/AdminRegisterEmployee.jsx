@@ -8,7 +8,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import { parseInrInput } from '../../utils/formatNumber.js';
-import DateField from '../../components/DateField.jsx';
+import DateField, { getTodayIstValue } from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
 import MultiSelectField from '../../components/MultiSelectField.jsx';
@@ -23,6 +23,7 @@ const emptyForm = {
   employeeCode: '',
   designation: '',
   joiningDate: '',
+  dateOfBirth: '',
   endingDate: '',
   roleId: '',
   departmentId: '',
@@ -387,6 +388,19 @@ export default function AdminRegisterEmployee() {
                 disabled={formDisabled}
               />
               <FieldError message={fieldErrors.joiningDate} />
+            </div>
+
+            <div className="register-field">
+              <RegisterLabel optional>Date of birth</RegisterLabel>
+              <DateField
+                value={form.dateOfBirth}
+                onChange={(value) => updateField('dateOfBirth', value)}
+                min="1900-01-01"
+                max={getTodayIstValue()}
+                aria-label="Date of birth"
+                disabled={formDisabled}
+              />
+              <FieldError message={fieldErrors.dateOfBirth} />
             </div>
 
             <div className="register-field">

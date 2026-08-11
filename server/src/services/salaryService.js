@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveType } from '../models/LeaveType.js';
@@ -11,12 +12,15 @@ import { SalarySettings } from '../models/SalarySettings.js';
 import { SALARY_TRANSFER_STATUS, SalaryTransfer } from '../models/SalaryTransfer.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { getHolidayDateSet } from './leaveService.js';
+import { getPaidLeaveQuota } from './leaveBalanceService.js';
 import {
   countWorkingDaysIST,
   getISTDateInputValue,
   getISTYear,
   listWorkingDaysIST,
+  parseDateInputAsISTDay,
   parseMonthInputAsISTRange,
+  startOfDayIST,
 } from '../utils/istDate.js';
 
 function throwError(message, statusCode = 400) {
@@ -58,7 +62,7 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   return creditByDay;
 }
 
-/** WFH is always payable when approved — independent of LeavePolicy.paid (business rule). */
+/** WFH stays in the payable type set; overdraw still becomes LOP via paidQuota. */
 export function unionWfhLeaveTypeId(paidTypeIds, wfhLeaveTypeId) {
   const result = new Set(paidTypeIds);
   if (wfhLeaveTypeId) {
@@ -76,72 +80,55 @@ async function loadPaidLeaveTypeIds(year = getISTYear()) {
   return unionWfhLeaveTypeId(paidIds, wfhType?._id);
 }
 
-/**
- * Paid leave days overlapping a salary month (total for display).
- * Uses stored request.days (half-day, sandwich, etc.) and prorates when the request spans month boundaries.
- */
-function countPaidLeaveDaysInMonth(request, monthStart, monthEnd, holidayDates) {
-  const overlapStart = request.startDate > monthStart ? request.startDate : monthStart;
-  const overlapEnd = request.endDate < monthEnd ? request.endDate : monthEnd;
-  if (overlapEnd < overlapStart) {
-    return 0;
-  }
-
-  const totalWorkingDays = countWorkingDaysIST(
-    request.startDate,
-    request.endDate,
-    holidayDates,
-  );
-  if (totalWorkingDays === 0) {
-    return 0;
-  }
-
-  const overlapWorkingDays = countWorkingDaysIST(overlapStart, overlapEnd, holidayDates);
-  if (overlapWorkingDays === 0) {
-    return 0;
-  }
-
-  // request.days is authoritative (0.5 for half-day, sandwich-adjusted totals, etc.)
-  return (request.days * overlapWorkingDays) / totalWorkingDays;
+function requestSortKey(request) {
+  const start = request.startDate instanceof Date ? request.startDate.getTime() : 0;
+  const end = request.endDate instanceof Date ? request.endDate.getTime() : 0;
+  const id = request._id?.toString?.() ?? request.id?.toString?.() ?? '';
+  return { start, end, id };
 }
 
-async function sumPaidLeaveDays(userId, monthStart, monthEnd, holidayDates) {
-  const paidTypeIds = await loadPaidLeaveTypeIds(getISTYear(monthStart));
-  if (paidTypeIds.size === 0) {
-    return 0;
-  }
-
-  const requests = await LeaveRequest.find({
-    userId,
-    status: 'approved',
-    startDate: { $lte: monthEnd },
-    endDate: { $gte: monthStart },
-  }).select('leaveTypeId startDate endDate days halfDay');
-
-  let total = 0;
-  for (const request of requests) {
-    if (!paidTypeIds.has(request.leaveTypeId.toString())) {
-      continue;
-    }
-    total += countPaidLeaveDaysInMonth(request, monthStart, monthEnd, holidayDates);
-  }
-  return roundMoney(total);
+function compareLeaveRequestsChronologically(a, b) {
+  const ka = requestSortKey(a);
+  const kb = requestSortKey(b);
+  if (ka.start !== kb.start) return ka.start - kb.start;
+  if (ka.end !== kb.end) return ka.end - kb.end;
+  return ka.id.localeCompare(kb.id);
 }
 
 /**
  * Distributes paid leave fractions across IST working days (for per-day payable cap).
+ *
+ * V1 paid vs overdrawn (LOP): per leave type per calendar year, only the first
+ * `paidQuota` approved leave days — chronological by request start, then working day —
+ * count as paid. `paidQuota` = entitled + carried − encashed (see getPaidLeaveQuota).
+ * Approved days beyond that quota are unpaid/LOP even when LeavePolicy.paid is true
+ * (including WFH). Pending never counts as paid.
+ *
+ * When `paidQuotaByTypeId` is provided, pass year-scoped approved requests (year start
+ * through salary month end) so earlier months consume quota first. When omitted, all
+ * approved days of paid types in the month overlap count as paid (legacy/tests).
  */
-export function buildPaidLeaveDayMap(requests, monthStart, monthEnd, holidayDates, paidTypeIds) {
+export function buildPaidLeaveDayMap(
+  requests,
+  monthStart,
+  monthEnd,
+  holidayDates,
+  paidTypeIds,
+  paidQuotaByTypeId = null,
+) {
   const dayMap = new Map();
+  const useQuota = paidQuotaByTypeId instanceof Map;
+  const remainingQuota = useQuota ? new Map(paidQuotaByTypeId) : null;
+  const monthStartKey = getISTDateInputValue(monthStart);
+  const monthEndKey = getISTDateInputValue(monthEnd);
 
-  for (const request of requests) {
-    if (!paidTypeIds.has(request.leaveTypeId.toString())) {
-      continue;
-    }
+  const ordered = useQuota
+    ? [...requests].sort(compareLeaveRequestsChronologically)
+    : requests;
 
-    const overlapStart = request.startDate > monthStart ? request.startDate : monthStart;
-    const overlapEnd = request.endDate < monthEnd ? request.endDate : monthEnd;
-    if (overlapEnd < overlapStart) {
+  for (const request of ordered) {
+    const typeId = request.leaveTypeId?.toString?.() ?? String(request.leaveTypeId);
+    if (!paidTypeIds.has(typeId)) {
       continue;
     }
 
@@ -154,6 +141,34 @@ export function buildPaidLeaveDayMap(requests, monthStart, monthEnd, holidayDate
       continue;
     }
 
+    const perDay = request.days / totalWorkingDays;
+    let quotaLeft = useQuota ? (remainingQuota.get(typeId) ?? 0) : null;
+
+    if (useQuota) {
+      const workingDayList = listWorkingDaysIST(
+        request.startDate,
+        request.endDate,
+        holidayDates,
+      );
+      for (const day of workingDayList) {
+        const key = typeof day === 'string' ? day : getISTDateInputValue(day);
+        const paidSlice = Math.min(perDay, quotaLeft);
+        quotaLeft -= paidSlice;
+
+        if (paidSlice > 0 && key >= monthStartKey && key <= monthEndKey) {
+          dayMap.set(key, (dayMap.get(key) ?? 0) + paidSlice);
+        }
+      }
+      remainingQuota.set(typeId, quotaLeft);
+      continue;
+    }
+
+    const overlapStart = request.startDate > monthStart ? request.startDate : monthStart;
+    const overlapEnd = request.endDate < monthEnd ? request.endDate : monthEnd;
+    if (overlapEnd < overlapStart) {
+      continue;
+    }
+
     const overlapWorkingDayList = listWorkingDaysIST(overlapStart, overlapEnd, holidayDates);
     if (overlapWorkingDayList.length === 0) {
       continue;
@@ -161,11 +176,11 @@ export function buildPaidLeaveDayMap(requests, monthStart, monthEnd, holidayDate
 
     const leaveInOverlap =
       (request.days * overlapWorkingDayList.length) / totalWorkingDays;
-    const perDay = leaveInOverlap / overlapWorkingDayList.length;
+    const overlapPerDay = leaveInOverlap / overlapWorkingDayList.length;
 
     for (const day of overlapWorkingDayList) {
       const key = typeof day === 'string' ? day : getISTDateInputValue(day);
-      dayMap.set(key, (dayMap.get(key) ?? 0) + perDay);
+      dayMap.set(key, (dayMap.get(key) ?? 0) + overlapPerDay);
     }
   }
 
@@ -191,9 +206,10 @@ export function computeDailyCappedPayableDays(workingDayList, attendanceCreditBy
  *
  * workingDaysInMonth = Mon–Fri in the IST month minus company holidays.
  * presentDays        = attendance credit: 1.0 for Present and 0.5 for Half Day.
- * paidLeaveDays      = approved paid leave working-days overlapping the month.
- * lopDays            = max(0, workingDaysInMonth − presentDays − paidLeaveDays).
- * payableDays        = presentDays + paidLeaveDays (capped at workingDaysInMonth).
+ * paidLeaveDays      = approved leave working-days overlapping the month that fall
+ *                      within the per-type yearly paid quota (overdrawn = LOP).
+ * lopDays            = max(0, workingDaysInMonth − payableDays).
+ * payableDays        = present + paid leave, capped at 1.0 per working day.
  * perDaySalary       = monthlySalary / workingDaysInMonth (handbook encashment basis).
  * payableEstimate    = monthlySalary × (payableDays / workingDaysInMonth).
  */
@@ -207,29 +223,41 @@ export async function computeMonthlySalarySummary(user, monthInput) {
   const holidayDates = await getHolidayDateSet(year);
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
+  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
   const paidTypeIds = await loadPaidLeaveTypeIds(year);
-  const paidLeaveRequests = await LeaveRequest.find({
-    userId: user._id,
-    status: 'approved',
-    startDate: { $lte: end },
-    endDate: { $gte: start },
-  }).select('leaveTypeId startDate endDate days halfDay');
 
-  const [attendanceCreditByDay, paidLeaveDays] = await Promise.all([
+  const [attendanceCreditByDay, balances, yearLeaveRequests] = await Promise.all([
     loadAttendanceCreditByDay(user._id, start, end),
-    sumPaidLeaveDays(user._id, start, end, holidayDates),
+    LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried encashed'),
+    LeaveRequest.find({
+      userId: user._id,
+      status: 'approved',
+      startDate: { $lte: end },
+      endDate: { $gte: yearStart },
+    }).select('leaveTypeId startDate endDate days halfDay'),
   ]);
+
+  const paidQuotaByTypeId = new Map(
+    balances.map((balance) => [
+      balance.leaveTypeId.toString(),
+      getPaidLeaveQuota(balance),
+    ]),
+  );
 
   const presentDays = roundMoney(
     workingDayList.reduce((total, day) => total + (attendanceCreditByDay.get(day) ?? 0), 0),
   );
   const paidLeaveByDay = buildPaidLeaveDayMap(
-    paidLeaveRequests,
+    yearLeaveRequests,
     start,
     end,
     holidayDates,
     paidTypeIds,
+    paidQuotaByTypeId,
+  );
+  const paidLeaveDays = roundMoney(
+    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
   );
   const payableDays = computeDailyCappedPayableDays(
     workingDayList,

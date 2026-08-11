@@ -194,14 +194,25 @@ export async function initBalancesForAllUsers(year = getISTYear()) {
   }
 }
 
+/**
+ * Remaining leave stock. May be negative when overdrawn leave is allowed
+ * (used/pending can exceed entitled + carried − encashed).
+ */
 export function getAvailableBalance(balance) {
+  return (
+    (balance.entitled ?? 0) +
+    (balance.carried ?? 0) -
+    (balance.used ?? 0) -
+    (balance.pending ?? 0) -
+    (balance.encashed ?? 0)
+  );
+}
+
+/** Paid leave days available for salary before overdraw (excludes used/pending). */
+export function getPaidLeaveQuota(balance) {
   return Math.max(
     0,
-    (balance.entitled ?? 0) +
-      (balance.carried ?? 0) -
-      (balance.used ?? 0) -
-      (balance.pending ?? 0) -
-      (balance.encashed ?? 0),
+    (balance.entitled ?? 0) + (balance.carried ?? 0) - (balance.encashed ?? 0),
   );
 }
 
@@ -304,11 +315,7 @@ export async function reservePendingDays(userId, leaveTypeId, days, year = getIS
     throwError('Leave balance not found for this year.');
   }
 
-  const available = getAvailableBalance(balance);
-  if (days > available) {
-    throwError(`Insufficient leave balance. Available: ${available} day(s).`);
-  }
-
+  // Overdrawn leave is allowed: pending may exceed remaining stock (negative available).
   balance.pending += days;
   await balance.save();
   return balance;
@@ -368,7 +375,7 @@ export async function recordEncashment(userId, payload, actorId) {
     );
   }
 
-  const available = getAvailableBalance(balance);
+  const available = Math.max(0, getAvailableBalance(balance));
   if (days > available) {
     throwError(`Insufficient balance for encashment. Available: ${available} day(s).`);
   }

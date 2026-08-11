@@ -225,6 +225,90 @@ export function statusCodeFromRecord(record) {
   return record?.attendanceTag ?? 'P';
 }
 
+/**
+ * True when an LV tag was produced by evaluateCheckInPolicy after quarterly warnings
+ * were exhausted (late check-in between grace and half-day). Does not match HD/P or
+ * weekend check-ins. Admin-set LV outside that window is left alone.
+ */
+export function isExhaustionRelatedLv(timestamp, policy, weekendDays = [0, 6]) {
+  if (!timestamp || !policy) return false;
+  if (isWeekendIST(timestamp, weekendDays)) return false;
+  const graceMinutes = parseTimeStringToMinutes(policy.graceThresholdTime);
+  const halfDayMinutes = parseTimeStringToMinutes(policy.halfDayThresholdTime);
+  if (graceMinutes == null || halfDayMinutes == null) return false;
+  const checkInMinutes = getCheckInMinutesIST(timestamp);
+  return checkInMinutes > graceMinutes && checkInMinutes < halfDayMinutes;
+}
+
+/**
+ * Clear current-IST-quarter warning streaks for the given users.
+ * - Sets warningIssued=false and quarterWarningIndex=null on warning check-ins.
+ * - Reclassifies exhaustion-related LV (late window) to P; leaves HD and other LV alone.
+ */
+export async function resetQuarterWarningsForUsers(userIds, referenceDate = new Date()) {
+  const quarterInfo = getCalendarQuarterInfo(referenceDate);
+  const uniqueIds = [...new Set((userIds ?? []).map((id) => String(id)).filter(Boolean))];
+
+  if (!uniqueIds.length) {
+    return {
+      quarter: quarterInfo,
+      clearedWarnings: 0,
+      reclassifiedLv: 0,
+      userIds: [],
+    };
+  }
+
+  const objectIds = uniqueIds.map((id) => new mongoose.Types.ObjectId(id));
+  const office = await getOfficeSettings();
+  const policy = resolveAttendancePolicy(office);
+  const weekendDays = office?.weekendDays ?? [0, 6];
+
+  const baseMatch = {
+    userId: { $in: objectIds },
+    type: 'check_in',
+    status: 'allowed',
+    timestamp: { $gte: quarterInfo.start, $lte: quarterInfo.end },
+  };
+
+  const warningResult = await AttendanceRecord.updateMany(
+    { ...baseMatch, warningIssued: true },
+    { $set: { warningIssued: false, quarterWarningIndex: null } },
+  );
+
+  const lvRecords = await AttendanceRecord.find({
+    ...baseMatch,
+    attendanceTag: 'LV',
+  })
+    .select('_id timestamp')
+    .lean();
+
+  const lvIdsToPresent = lvRecords
+    .filter((record) => isExhaustionRelatedLv(record.timestamp, policy, weekendDays))
+    .map((record) => record._id);
+
+  let reclassifiedLv = 0;
+  if (lvIdsToPresent.length) {
+    const lvResult = await AttendanceRecord.updateMany(
+      { _id: { $in: lvIdsToPresent } },
+      {
+        $set: {
+          attendanceTag: 'P',
+          warningIssued: false,
+          quarterWarningIndex: null,
+        },
+      },
+    );
+    reclassifiedLv = lvResult.modifiedCount ?? 0;
+  }
+
+  return {
+    quarter: quarterInfo,
+    clearedWarnings: warningResult.modifiedCount ?? 0,
+    reclassifiedLv,
+    userIds: uniqueIds,
+  };
+}
+
 /** Client-side fallback when legacy records lack stored policy tags. */
 export function derivePolicyFromSettings(checkInTimestamp, policy, warningsUsedBefore = 0) {
   const graceMinutes = parseTimeStringToMinutes(policy.graceThresholdTime);

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Department Head User Guide — Grubpac Attendance</title>
+  <style>
+    :root {
+      --bg: #f4f6f9; --surface: #ffffff; --text: #1e293b; --text-muted: #64748b;
+      --heading: #0f172a; --primary: #f26522; --primary-soft: rgba(242, 101, 34, 0.1);
+      --border: #e2e8f0; --code-bg: #f1f5f9; --max-width: 52rem;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size: 1rem; line-height: 1.65; color: var(--text); background: var(--bg); }
+    .guide-header { background: linear-gradient(135deg, #1a2332 0%, #2d3748 100%); color: #f8fafc; padding: 2rem 1.25rem 2.5rem; }
+    .guide-header__inner { max-width: var(--max-width); margin: 0 auto; }
+    .guide-badge { display: inline-block; background: var(--primary); color: #fff; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.25rem 0.65rem; border-radius: 4px; margin-bottom: 0.75rem; }
+    .guide-header h1 { margin: 0 0 0.5rem; font-size: 1.75rem; line-height: 1.25; }
+    .guide-meta { margin: 0; font-size: 0.875rem; color: #cbd5e1; }
+    .guide-meta a { color: #fdba74; }
+    main { max-width: var(--max-width); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 2rem; }
+    .toc h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--heading); }
+    .toc ol { margin: 0; padding-left: 1.25rem; }
+    .toc a { color: var(--primary); text-decoration: none; }
+    section { margin-bottom: 2.5rem; }
+    h2 { font-size: 1.35rem; color: var(--heading); border-bottom: 2px solid var(--primary-soft); padding-bottom: 0.4rem; margin: 0 0 1rem; }
+    h3 { font-size: 1.05rem; color: var(--heading); margin: 1.25rem 0 0.5rem; }
+    p { margin: 0 0 0.85rem; }
+    ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+    .callout { background: var(--primary-soft); border-left: 4px solid var(--primary); padding: 0.85rem 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; font-size: 0.95rem; }
+    .callout--warn { background: #fffbeb; border-left-color: #f59e0b; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--code-bg); font-weight: 600; }
+    code { font-family: ui-monospace, monospace; font-size: 0.88em; background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; }
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { counter-increment: step; position: relative; padding-left: 2.5rem; margin: 0.85rem 0; }
+    .steps li::before { content: counter(step); position: absolute; left: 0; top: 0.1rem; width: 1.65rem; height: 1.65rem; background: var(--primary); color: #fff; font-size: 0.8rem; font-weight: 700; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    footer { max-width: var(--max-width); margin: 0 auto; padding: 1.5rem 1.25rem 2rem; font-size: 0.8rem; color: var(--text-muted); border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header class="guide-header">
+    <div class="guide-header__inner">
+      <span class="guide-badge">Department Head</span>
+      <h1>Grubpac Attendance — Department Head User Guide</h1>
+      <p class="guide-meta">
+        Portal: <a href="https://d24p2zn8763d4h.cloudfront.net" target="_blank" rel="noopener">https://d24p2zn8763d4h.cloudfront.net</a>
+        &nbsp;·&nbsp; Last updated: 6 August 2026
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="Table of contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#getting-started">Getting started</a></li>
+        <li><a href="#scope">Your scope vs reporting manager</a></li>
+        <li><a href="#daily-tasks">Attendance rules for your department</a></li>
+        <li><a href="#leave-approvals">Leave &amp; WFH approvals</a></li>
+        <li><a href="#team-ops">Team attendance &amp; visibility</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ol>
+    </nav>
+
+    <section id="getting-started">
+      <h2>1. Getting started</h2>
+      <p>
+        A <strong>Department Head</strong> is a reporting manager assigned to one or more
+        <strong>managed departments</strong> in the system. You use the same Admin portal as other managers,
+        with <em>expanded visibility</em> across everyone in those departments — not only your direct reports.
+      </p>
+      <ol class="steps">
+        <li>Sign in on the <strong>Admin</strong> tab at <a href="https://d24p2zn8763d4h.cloudfront.net">d24p2zn8763d4h.cloudfront.net</a>.</li>
+        <li>Confirm your profile lists the correct <strong>managed departments</strong> (HR/Admin sets this).</li>
+        <li>Use <strong>Pending Requests</strong>, <strong>Attendance history</strong>, and <strong>Team issues</strong> for day-to-day oversight.</li>
+        <li>Also keep the <strong>Reporting Manager Guide</strong> handy for direct-report workflows.</li>
+      </ol>
+    </section>
+
+    <section id="scope">
+      <h2>2. Your scope vs reporting manager</h2>
+      <table>
+        <thead>
+          <tr><th>Capability</th><th>Reporting Manager</th><th>Department Head</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Leave approval queue</td><td>Direct reports</td><td>Broader department visibility*</td></tr>
+          <tr><td>Attendance history</td><td>Direct reports (team scope)</td><td>Department members in managed depts</td></tr>
+          <tr><td>Help tickets</td><td>Direct reports</td><td>Team issues for managed scope</td></tr>
+          <tr><td>Leave policies / holidays</td><td>View only</td><td>View only (HR/Admin configures)</td></tr>
+        </tbody>
+      </table>
+      <div class="callout callout--warn">
+        *Approval authority follows reporting lines: you approve requests where you are the assigned approver
+        or delegate. Visibility may show more employees than you can approve — coordinate with HR if routing is unclear.
+      </div>
+    </section>
+
+    <section id="daily-tasks">
+      <h2>3. Attendance rules for your department</h2>
+      <p>Ensure your team understands current policy:</p>
+      <ul>
+        <li><strong>Check in/out only</strong> — no manual Office/WFH selection; location + approved leave drive mode.</li>
+        <li><strong>WFH days</strong> need <strong>approved WFH leave</strong>; then home check-in/out works.</li>
+        <li><strong>CL, EL, SL, RH, etc.</strong> — approved days block check-in.</li>
+        <li><strong>SL</strong> — apply anytime; <strong>other types</strong> for tomorrow before <strong>11:59 PM IST</strong> today.</li>
+        <li>Dashboard <strong>calendar highlights approved leave</strong>.</li>
+        <li><strong>Permanent WFH</strong> is not a system mode — use long WFH approval or ask Admin/HR.</li>
+      </ul>
+      <h3>Outcome codes</h3>
+      <p>
+        <code>P</code>, <code>OFC</code>, <code>WFH</code>, <code>HD</code>, <code>W1</code>–<code>W3</code>, <code>LV</code>
+        — see the Employee or Reporting Manager guide for definitions.
+      </p>
+    </section>
+
+    <section id="leave-approvals">
+      <h2>4. Leave &amp; WFH approvals</h2>
+      <ol class="steps">
+        <li>Monitor <strong>Pending Requests</strong> daily — especially WFH for next-day planning.</li>
+        <li>Approve WFH only when policy allows; rejected WFH means the employee must be at office to check in.</li>
+        <li>Watch for multi-day WFH patterns that may need HR discussion (no permanent WFH flag exists).</li>
+        <li>After 11:59 PM IST, non-SL requests for tomorrow cannot be submitted by employees — escalate to HR if exceptions are needed.</li>
+      </ol>
+    </section>
+
+    <section id="team-ops">
+      <h2>5. Team attendance &amp; visibility</h2>
+      <h3>Attendance history</h3>
+      <p>Filter by employee to review check-in times, modes (OFC/WFH), and outcome codes across your department.</p>
+      <h3>Streaks</h3>
+      <p>Use streak reports to identify attendance consistency issues early.</p>
+      <h3>Onboarding</h3>
+      <p>When adding team members, ensure HR sets <strong>department</strong>, <strong>reporting manager</strong>, and your <strong>managed departments</strong> correctly.</p>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>6. Troubleshooting</h2>
+      <h3>Employee visible in queue but I cannot approve</h3>
+      <p>They may report to another manager. Visibility ≠ approval rights. Reassign reporting manager in HR if needed.</p>
+      <h3>Whole team blocked from WFH check-in</h3>
+      <p>Confirm WFH requests are <strong>approved</strong> for the date, not pending.</p>
+      <h3>Department not in my managed list</h3>
+      <p>Ask Admin/HR to update <strong>managed departments</strong> on your employee profile.</p>
+    </section>
+
+    <section id="faq">
+      <h2>7. FAQ</h2>
+      <h3>Am I also a Reporting Manager?</h3>
+      <p>Yes — department heads are reporting managers with extra department scope. Use both guides as needed.</p>
+      <h3>Can I change leave policies?</h3>
+      <p>No — that requires HR/Admin with <em>Leave policies</em> permission.</p>
+      <h3>Can I register new employees?</h3>
+      <p>Typically HR/Admin only. You can view the employee list if your role includes user read access.</p>
+    </section>
+  </main>
+
+  <footer>Grubpac Attendance · Department Head guide · Staging portal · © Grubpac</footer>
+</body>
+</html>

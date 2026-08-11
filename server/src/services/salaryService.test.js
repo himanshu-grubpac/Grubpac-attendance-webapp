@@ -110,6 +110,95 @@ test('buildPaidLeaveDayMap credits approved WFH when WFH type is in payable set 
   assert.equal(withoutWfh.size, 0);
 });
 
+test('buildPaidLeaveDayMap treats overdrawn approved days as unpaid when quota is 0', () => {
+  const typeId = 'cl-type';
+  const monthStart = parseDateInputAsISTDay('2026-03-02');
+  const monthEnd = parseDateInputAsISTDay('2026-03-02');
+  const requests = [
+    {
+      leaveTypeId: typeId,
+      startDate: monthStart,
+      endDate: monthEnd,
+      days: 1,
+    },
+  ];
+  const dayMap = buildPaidLeaveDayMap(
+    requests,
+    monthStart,
+    monthEnd,
+    new Set(),
+    new Set([typeId]),
+    new Map([[typeId, 0]]),
+  );
+
+  assert.equal(dayMap.get('2026-03-02'), undefined);
+  assert.equal(dayMap.size, 0);
+});
+
+test('buildPaidLeaveDayMap pays only the first quota days chronologically across the year', () => {
+  const typeId = 'cl-type';
+  const janDay = parseDateInputAsISTDay('2026-01-05');
+  const marDay = parseDateInputAsISTDay('2026-03-02');
+  const monthStart = parseDateInputAsISTDay('2026-03-02');
+  const monthEnd = parseDateInputAsISTDay('2026-03-02');
+  const requests = [
+    {
+      _id: 'r1',
+      leaveTypeId: typeId,
+      startDate: janDay,
+      endDate: janDay,
+      days: 1,
+    },
+    {
+      _id: 'r2',
+      leaveTypeId: typeId,
+      startDate: marDay,
+      endDate: marDay,
+      days: 1,
+    },
+  ];
+
+  const dayMap = buildPaidLeaveDayMap(
+    requests,
+    monthStart,
+    monthEnd,
+    new Set(),
+    new Set([typeId]),
+    new Map([[typeId, 1]]),
+  );
+
+  // January consumed the only paid day; March is overdrawn → LOP.
+  assert.equal(dayMap.size, 0);
+});
+
+test('buildPaidLeaveDayMap pays partial quota within a multi-day request', () => {
+  const typeId = 'cl-type';
+  // Mon–Wed 2026-03-02..04
+  const start = parseDateInputAsISTDay('2026-03-02');
+  const end = parseDateInputAsISTDay('2026-03-04');
+  const requests = [
+    {
+      leaveTypeId: typeId,
+      startDate: start,
+      endDate: end,
+      days: 3,
+    },
+  ];
+
+  const dayMap = buildPaidLeaveDayMap(
+    requests,
+    start,
+    end,
+    new Set(),
+    new Set([typeId]),
+    new Map([[typeId, 1]]),
+  );
+
+  assert.equal(dayMap.get('2026-03-02'), 1);
+  assert.equal(dayMap.get('2026-03-03'), undefined);
+  assert.equal(dayMap.get('2026-03-04'), undefined);
+});
+
 test('computeSalaryTransferStatsFromRows aggregates pending, paid, failed counts and amount', () => {
   const stats = computeSalaryTransferStatsFromRows([
     { status: 'pending', amount: 1000 },

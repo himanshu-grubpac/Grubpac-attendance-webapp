@@ -21,14 +21,13 @@ leaveBalanceSchema.methods.toSafeJSON = function toSafeJSON() {
   const typeDoc =
     this.leaveTypeId && typeof this.leaveTypeId === 'object' ? this.leaveTypeId : null;
 
-  const available = Math.max(
-    0,
+  // Remaining may be negative when overdrawn leave is allowed.
+  const available =
     (this.entitled ?? 0) +
-      (this.carried ?? 0) -
-      (this.used ?? 0) -
-      (this.pending ?? 0) -
-      (this.encashed ?? 0),
-  );
+    (this.carried ?? 0) -
+    (this.used ?? 0) -
+    (this.pending ?? 0) -
+    (this.encashed ?? 0);
 
   return {
     id: this._id.toString(),

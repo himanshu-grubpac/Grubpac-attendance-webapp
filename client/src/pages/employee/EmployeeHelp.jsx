@@ -12,6 +12,7 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import FieldError from '../../components/FieldError.jsx';
+import UserGuideLinks from '../../components/UserGuideLinks.jsx';
 
 const CATEGORIES = ['Login', 'Attendance', 'Leave', 'Salary', 'Other'];
 const PRIORITIES = ['low', 'medium', 'high'];
@@ -433,6 +434,8 @@ export default function EmployeeHelp() {
   return (
     <div className="page page--form">
       {error && <div className="alert alert--error">{error}</div>}
+
+      <UserGuideLinks />
 
       {showForm && (
         <div className="card card--form">

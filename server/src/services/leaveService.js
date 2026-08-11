@@ -69,14 +69,27 @@ async function notifyEmployeeLeaveApproved(request, userId) {
   });
 }
 
-export async function getHolidayDateSet(year) {
+export async function getHolidayMapForYear(year) {
   const start = parseDateInputAsISTDay(`${year}-01-01`);
   const end = parseDateInputAsISTDay(`${year}-12-31`);
   const holidays = await Holiday.find({
     isActive: true,
     date: { $gte: start, $lte: end },
-  });
-  return new Set(holidays.map((item) => getISTDateInputValue(item.date)));
+  }).select('date name type');
+  const map = new Map();
+  for (const item of holidays) {
+    const dayKey = getISTDateInputValue(item.date);
+    map.set(dayKey, {
+      name: item.name,
+      type: item.type ?? 'public',
+    });
+  }
+  return map;
+}
+
+export async function getHolidayDateSet(year) {
+  const map = await getHolidayMapForYear(year);
+  return new Set(map.keys());
 }
 
 export async function isSandwichLeaveEnabled() {
@@ -207,18 +220,14 @@ export async function validateLeaveRequestInput({
     throwError('Leave balance not found for this year.');
   }
 
+  // Overdrawn leave is allowed: available may be 0 or negative; used/pending can exceed entitled.
   const available = getAvailableBalance(balance);
-  if (days > available) {
-    throwError(`Insufficient leave balance. Available: ${available} day(s).`);
+
+  // Combined CL+EL accumulation only applies when this apply stays within remaining stock.
+  if (available >= days) {
+    await validateCombinedAccumulation(userId, year, policyMap, days, leaveTypeId);
   }
 
-  const stockAfter =
-    (balance.entitled ?? 0) + (balance.carried ?? 0) - (balance.used ?? 0) - (balance.pending ?? 0) - days;
-  if (stockAfter < 0 && policy.maxAccumulation > 0 && !policy.combinedCarryGroup) {
-    throwError(`Leave balance exceeds maximum accumulation of ${policy.maxAccumulation} days.`);
-  }
-
-  await validateCombinedAccumulation(userId, year, policyMap, days, leaveTypeId);
   await validateSelfOverlap(userId, startDate, endDate);
   await validateLeadDeputyConflict(userId, startDate, endDate, adminException);
 
@@ -293,6 +302,7 @@ export async function createLeaveRequest(userId, payload) {
   try {
     let createdRequest;
     let autoApproved = false;
+    let leaveTypeForNotify = null;
     await session.withTransaction(async () => {
       const validated = await validateLeaveRequestInput({
         userId,
@@ -304,6 +314,7 @@ export async function createLeaveRequest(userId, payload) {
         adminException,
       });
 
+      leaveTypeForNotify = validated.leaveType;
       await reserveValidatedLeaveBalance(validated.balance, validated.balancePendingDelta, session);
 
       const autoApprove = isAutoApproveLeaveType(validated.leaveType);
@@ -351,7 +362,7 @@ export async function createLeaveRequest(userId, payload) {
         endDate: payload.endDate,
       });
     } else {
-      await notifyApproversOnSubmit(user, createdRequest);
+      await notifyApproversOnSubmit(user, createdRequest, leaveTypeForNotify);
       auditLog('leave_request_created', {
         userId: userId.toString(),
         requestId: createdRequest._id.toString(),
@@ -368,15 +379,17 @@ export async function createLeaveRequest(userId, payload) {
   }
 }
 
-async function notifyApproversOnSubmit(requester, request) {
+async function notifyApproversOnSubmit(requester, request, leaveType = null) {
   const managerId =
     requester.reportingManagerId?._id?.toString() ??
     requester.reportingManagerId?.toString?.() ??
     null;
 
   const link = managerId ? '/admin/leave/approvals' : '/admin/leave/approvals';
-  const title = 'New leave request';
-  const body = `${requester.name} requested ${request.days} day(s) leave (${getISTDateInputValue(request.startDate)} – ${getISTDateInputValue(request.endDate)}).`;
+  const typeLabel = leaveType?.name || leaveType?.code || 'leave';
+  const isWfh = String(leaveType?.code ?? '').toUpperCase() === 'WFH';
+  const title = isWfh ? 'New WFH request' : 'New leave request';
+  const body = `${requester.name} requested ${typeLabel} for ${request.days} day(s) (${getISTDateInputValue(request.startDate)} – ${getISTDateInputValue(request.endDate)}).`;
 
   if (managerId) {
     await createNotification({
@@ -400,8 +413,8 @@ async function notifyApproversOnSubmit(requester, request) {
       createNotification({
         userId: admin._id,
         type: 'leave.pending_admin',
-        title: 'Leave request (no manager)',
-        body: `${requester.name} submitted leave without a reporting manager assigned.`,
+        title: isWfh ? 'WFH request (no manager)' : 'Leave request (no manager)',
+        body: `${requester.name} submitted ${typeLabel} without a reporting manager assigned.`,
         link,
         metadata: { requestId: request._id.toString() },
       }),
