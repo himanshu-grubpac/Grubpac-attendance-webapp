@@ -24,8 +24,8 @@ const STAT_CARDS = [
   {
     key: 'total',
     label: 'TOTAL EMPLOYEES',
-    hint: 'Registered across all teams',
     icon: '👤',
+    hint: 'Registered across all team',
     statKey: 'total',
   },
   {
@@ -229,7 +229,7 @@ export default function AdminUsers() {
     adminApi
       .listRoles()
       .then((data) => setRoles(data.roles ?? []))
-      .catch(() => {});
+      .catch(() => { });
     loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '', nextRole: '' });
   }, [loadEmployees, loadStats]);
 
@@ -316,6 +316,7 @@ export default function AdminUsers() {
 
   function handleStatusChange(value) {
     setStatusFilter(value);
+    console.log('value=', value);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -346,6 +347,41 @@ export default function AdminUsers() {
       nextDepartment: departmentFilter,
       nextNewThisMonth: next,
     });
+  }
+
+
+  function handleStatCardClick(key) {
+    switch (key) {
+      case 'total':
+        // clear all employee filters
+        setNewThisMonthFilter(false);
+        loadEmployees({
+          query: search,
+          nextPage: 1,
+          nextStatus: '',
+          nextDepartment: '',
+          nextNewThisMonth: false,
+        });
+        break;
+
+      case 'active':
+        // active employees
+        setNewThisMonthFilter(false);
+        handleStatusChange('true');
+        break;
+
+      case 'inactive':
+        setNewThisMonthFilter(false);
+        handleStatusChange('false');
+        break;
+
+      case 'newThisMonth':
+        handleNewThisMonthToggle();
+        break;
+
+      default:
+        break;
+    }
   }
 
   function goToEmployee(employee) {
@@ -438,65 +474,58 @@ export default function AdminUsers() {
         {statsError ? <div className="alert alert--error">{statsError}</div> : null}
         <div className="employees-stats__grid">
           {statsLoading
-            ? STAT_CARDS.map((card) => <StatCardSkeleton key={card.key} />)
+            ? STAT_CARDS.map((card) => (
+              <StatCardSkeleton key={card.key} />
+            ))
             : STAT_CARDS.map((card) => {
-                const hint =
-                  typeof card.hint === 'function' ? card.hint(stats) : card.hint;
-                const value = stats?.[card.statKey];
-                const isNewThisMonthCard = card.key === 'newThisMonth';
-                const isSelected = isNewThisMonthCard && newThisMonthFilter;
-                const cardClassName = [
-                  'employees-stat card',
-                  isNewThisMonthCard ? 'employees-stat--clickable surface--clickable' : '',
-                  isSelected ? 'employees-stat--selected' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ');
+              const hint =
+                typeof card.hint === 'function'
+                  ? card.hint(stats)
+                  : card.hint;
 
-                if (isNewThisMonthCard) {
-                  return (
-                    <button
-                      key={card.key}
-                      type="button"
-                      className={cardClassName}
-                      onClick={handleNewThisMonthToggle}
-                      disabled={statsLoading || !stats?.monthKey}
-                      aria-pressed={newThisMonthFilter}
-                      aria-label={`${card.label}: ${typeof value === 'number' ? value : 'unknown'}. ${hint}. ${
-                        newThisMonthFilter
-                          ? 'Showing new employees in the list below. Click to show all employees.'
-                          : 'Click to show new employees in the list below.'
-                      }`}
+              const value = stats?.[card.statKey];
+
+              const isSelected =
+                card.key === 'newThisMonth' && newThisMonthFilter;
+
+              const cardClassName = [
+                'employees-stat card employees-stat--clickable surface--clickable',
+                isSelected ? 'employees-stat--selected' : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+
+              return (
+                <button
+                  key={card.key}
+                  type="button"
+                  className={cardClassName}
+                  onClick={() => handleStatCardClick(card.key)}
+                  aria-pressed={isSelected}
+                >
+                  <div className="employees-stat__head">
+                    <span className="employees-stat__label">
+                      {card.label}
+                    </span>
+
+                    <span
+                      className="employees-stat__icon"
+                      aria-hidden="true"
                     >
-                      <div className="employees-stat__head">
-                        <span className="employees-stat__label">{card.label}</span>
-                        <span className="employees-stat__icon" aria-hidden="true">
-                          {card.icon}
-                        </span>
-                      </div>
-                      <strong className="employees-stat__value">
-                        {typeof value === 'number' ? value : '—'}
-                      </strong>
-                      <p className="employees-stat__hint muted small">{hint}</p>
-                    </button>
-                  );
-                }
+                      {card.icon}
+                    </span>
+                  </div>
 
-                return (
-                  <article key={card.key} className={cardClassName}>
-                    <div className="employees-stat__head">
-                      <span className="employees-stat__label">{card.label}</span>
-                      <span className="employees-stat__icon" aria-hidden="true">
-                        {card.icon}
-                      </span>
-                    </div>
-                    <strong className="employees-stat__value">
-                      {typeof value === 'number' ? value : '—'}
-                    </strong>
-                    <p className="employees-stat__hint muted small">{hint}</p>
-                  </article>
-                );
-              })}
+                  <strong className="employees-stat__value">
+                    {typeof value === 'number' ? value : '—'}
+                  </strong>
+
+                  <p className="employees-stat__hint muted small">
+                    {hint}
+                  </p>
+                </button>
+              );
+            })}
         </div>
       </section>
 

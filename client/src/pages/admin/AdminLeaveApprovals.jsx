@@ -288,6 +288,8 @@ export default function AdminLeaveApprovals() {
     nextYear = yearFilterRef.current,
     nextMonthPart = monthPartFilterRef.current,
     nextQueueStatus = queueStatusRef.current,
+
+
   } = {}) => {
     const nextMonth = toMonthFilterValue(nextYear, nextMonthPart);
     setLoading(true);
@@ -299,9 +301,16 @@ export default function AdminLeaveApprovals() {
         page: nextPage,
         limit: 20,
       };
-      if (nextEmployee) params.userId = nextEmployee;
-      if (nextMonth) params.month = nextMonth;
 
+      if (nextEmployee) params.userId = nextEmployee;
+      if (nextYear) params.year = nextYear;
+      if (nextMonthPart) params.month = `${nextYear}-${nextMonthPart}`;
+      console.log('FILTER:', {
+        nextYear,
+        nextMonthPart,
+        nextMonth,
+        params,
+      });
       const data = await leaveApi.listRequests(params);
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);
@@ -445,22 +454,22 @@ export default function AdminLeaveApprovals() {
           {loading && !pagination
             ? statCards.map((card) => <StatCardSkeleton key={card.key} />)
             : statCards.map((card) => (
-                <article
-                  key={card.key}
-                  className={`approvals-stat card approvals-stat--${card.tone}`}
-                >
-                  <div className="approvals-stat__head">
-                    <span className="approvals-stat__label">{card.label}</span>
-                    <span className="approvals-stat__icon" aria-hidden="true">
-                      {card.icon}
-                    </span>
-                  </div>
-                  <strong className="approvals-stat__value">
-                    {statValues[card.key] == null ? '—' : statValues[card.key]}
-                  </strong>
-                  <p className="approvals-stat__hint muted small">{card.hint}</p>
-                </article>
-              ))}
+              <article
+                key={card.key}
+                className={`approvals-stat card approvals-stat--${card.tone}`}
+              >
+                <div className="approvals-stat__head">
+                  <span className="approvals-stat__label">{card.label}</span>
+                  <span className="approvals-stat__icon" aria-hidden="true">
+                    {card.icon}
+                  </span>
+                </div>
+                <strong className="approvals-stat__value">
+                  {statValues[card.key] == null ? '—' : statValues[card.key]}
+                </strong>
+                <p className="approvals-stat__hint muted small">{card.hint}</p>
+              </article>
+            ))}
         </div>
       </section>
 
@@ -579,9 +588,8 @@ export default function AdminLeaveApprovals() {
                     return (
                       <Fragment key={item.id}>
                         <tr
-                          className={`approval-row approval-row--summary${
-                            isExpanded ? ' approval-row--expanded' : ''
-                          }`}
+                          className={`approval-row approval-row--summary${isExpanded ? ' approval-row--expanded' : ''
+                            }`}
                           role="button"
                           tabIndex={0}
                           aria-expanded={isExpanded}

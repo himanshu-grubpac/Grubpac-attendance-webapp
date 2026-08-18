@@ -19,6 +19,9 @@ import {
 import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import { getLocalTimeZone, today } from '@internationalized/date';
+const minDate = today(getLocalTimeZone());
+
 
 const emptyForm = {
   leaveTypeId: '',
@@ -207,6 +210,7 @@ export default function EmployeeApplyLeave() {
           <span className="label">Start date (IST)</span>
           <DateField
             value={form.startDate}
+            min={minDate}
             onChange={(value) =>
               setForm((current) => ({
                 ...current,

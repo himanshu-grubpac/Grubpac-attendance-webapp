@@ -21,6 +21,7 @@
     "@aws-sdk/client-s3": "^3.1102.0",
     "@aws-sdk/s3-request-presigner": "^3.1102.0",
     "@codegenie/serverless-express": "^5.0.0",
+    "@internationalized/date": "^3.12.3",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
