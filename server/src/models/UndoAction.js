@@ -18,7 +18,7 @@ const undoActionSchema = new mongoose.Schema(
     targetId: { type: mongoose.Schema.Types.ObjectId, required: true },
     status: {
       type: String,
-      enum: ['active', 'used', 'expired'],
+      enum: ['active', 'undone', 'expired'],
       default: 'active',
       index: true,
     },
