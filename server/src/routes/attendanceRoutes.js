@@ -10,6 +10,7 @@ import {
   getMonthSummary,
   getMyQuarterWarnings,
   getToday,
+  undoAttendanceAction,
 } from '../controllers/attendanceController.js';
 
 const router = Router();
@@ -23,5 +24,5 @@ router.post('/check-in', attendanceLimiter, idempotencyMiddleware, asyncHandler(
 router.post('/check-out', attendanceLimiter, asyncHandler(checkOut));
 router.get('/history', asyncHandler(getHistory));
 router.get('/quarter-warnings', asyncHandler(getMyQuarterWarnings));
-
+router.get('/undo/:actionId', asyncHandler(undoAttendanceAction));
 export default router;
