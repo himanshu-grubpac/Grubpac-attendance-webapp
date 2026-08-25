@@ -79,7 +79,7 @@ const OFFICE_GEO_REJECTION_FALLBACK =
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const { showError } = useToast();
+  const { showSuccess, showError } = useToast();
   const [today, setToday] = useState(null);
   const [office, setOffice] = useState(null);
   const [result, setResult] = useState(null);
