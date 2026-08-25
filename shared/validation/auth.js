@@ -19,12 +19,19 @@ export const setPinSchema = z
   .object({
     pin: fourDigitPinSchema,
     confirmPin: z.string().min(1, 'Please confirm the PIN.'),
+    // Supplied so the server can re-verify identity when saving the PIN.
     currentPin: fourDigitPinSchema.optional(),
+    currentPassword: z.string().min(1).max(128).optional(),
   })
   .refine((data) => data.pin === data.confirmPin, {
     message: 'PINs do not match.',
     path: ['confirmPin'],
   });
+
+/** Verify the signed-in user's current password or PIN before a sensitive action. */
+export const verifyCredentialSchema = z.object({
+  secret: z.string().min(1, 'Current password or PIN is required.').max(128),
+});
 
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
