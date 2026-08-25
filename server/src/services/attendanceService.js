@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { UndoAction } from '../models/UndoAction.js';
+
+const UNDO_WINDOW_MS = 5 * 60 * 1000;
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
@@ -158,7 +160,13 @@ async function getUndoAvailability(userId) {
     status: 'active',
   }).lean();
   if (!action) return null;
-  return { available: true, token: action._id.toString(), type: lastRecord.type };
+  if (Date.now() - new Date(action.createdAt).getTime() > UNDO_WINDOW_MS) return null;
+  return {
+    available: true,
+    token: action._id.toString(),
+    type: lastRecord.type,
+    expiresAt: new Date(action.createdAt).getTime() + UNDO_WINDOW_MS,
+  };
 }
 
 export async function getTodayStatus(userId) {
@@ -308,6 +316,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           available: true,
           token: undoAction._id.toString(),
           type,
+          expiresAt: undoAction.createdAt.getTime() + UNDO_WINDOW_MS,
         };
       }
     });
@@ -1187,6 +1196,12 @@ export async function undoAttendance(
 
       if (!undoAction) {
         throw new Error('Undo action is invalid or already used');
+      }
+
+      if (Date.now() - new Date(undoAction.createdAt).getTime() > UNDO_WINDOW_MS) {
+        undoAction.status = 'expired';
+        await undoAction.save({ session });
+        throw new Error('Undo is only available within 5 minutes of the action.');
       }
 
       // 2. Find the target attendance
