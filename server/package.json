@@ -16,7 +16,8 @@
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
     "test": "node --test src/**/*.test.js",
-    "test:e2e": "node scripts/e2e-password-reset.mjs"
+    "test:e2e": "node scripts/e2e-password-reset.mjs",
+    "jobs:auto-checkout": "node scripts/autoCheckoutJob.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1102.0",

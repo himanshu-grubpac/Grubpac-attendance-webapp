@@ -17,7 +17,7 @@ import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
 } from '../services/attendancePolicyService.js';
-import { officeSchema } from '../../../shared/validation/office.js';
+import { officeSchema, officeUpdateSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
@@ -576,7 +576,7 @@ export async function getOfficeSettingsHandler(req, res) {
 }
 
 export async function updateOfficeSettings(req, res) {
-  const parsed = officeSchema.parse(req.body);
+  const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
   // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
   if (parsed.autoCheckout) {

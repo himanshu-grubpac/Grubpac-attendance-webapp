@@ -11,7 +11,13 @@ function timeToMinutes(value) {
   return hour * 60 + minute;
 }
 
-export const officeSchema = z.object({
+export const autoCheckoutSchema = z.object({
+  enabled: z.boolean().optional(),
+  officeTime: timeStringSchema.optional(),
+  wfhTime: timeStringSchema.optional(),
+});
+
+export const officeObjectSchema = z.object({
   name: z
     .string()
     .trim()
@@ -38,7 +44,10 @@ export const officeSchema = z.object({
     .min(1, 'Select at least one weekend day.')
     .max(7)
     .optional(),
-}).superRefine((value, ctx) => {
+  autoCheckout: autoCheckoutSchema.optional(),
+});
+
+export const officeSchema = officeObjectSchema.superRefine((value, ctx) => {
   const start = value.officeStartTime ? timeToMinutes(value.officeStartTime) : null;
   const end = value.officeEndTime ? timeToMinutes(value.officeEndTime) : null;
   const warning = value.graceThresholdTime ? timeToMinutes(value.graceThresholdTime) : null;
@@ -57,3 +66,4 @@ export const officeSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['halfDayThresholdTime'], message: 'Half-day threshold cannot be after office end.' });
   }
 });
+export const officeUpdateSchema = officeObjectSchema.partial();

@@ -40,7 +40,7 @@ export async function requestPasswordReset(body, auditContext = {}) {
       name: user.firstName || user.name,
       resetLink,
     });
-    await sendEmail({ to: user.email, subject, html, text });
+    await sendEmail({ to: user.email, subject, html, text, tag: 'password-reset' });
     auditLog('password_reset_requested', {
       userId: user._id.toString(),
       email: user.email,

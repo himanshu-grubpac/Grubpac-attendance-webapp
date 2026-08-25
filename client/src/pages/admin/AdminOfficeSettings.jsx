@@ -6,6 +6,7 @@ import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { validateForm } from '../../utils/validation.js';
 import FieldError from '../../components/FieldError.jsx';
 import TimeField from '../../components/TimeField.jsx';
+import AutoCheckoutModal from '../../components/AutoCheckoutModal.jsx';
 
 const WEEKDAY_OPTIONS = [
   { value: 0, label: 'Sunday' },
@@ -30,6 +31,7 @@ const emptyOffice = {
   halfDayThresholdTime: '10:00',
   warningsPerQuarter: 3,
   weekendDays: [0, 6],
+  autoCheckout: { enabled: true, officeTime: '23:59', wfhTime: '06:00' },
 };
 
 export default function AdminOfficeSettings() {
@@ -39,6 +41,7 @@ export default function AdminOfficeSettings() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
   const { getPosition, loading: geoLoading, error: geoError } = useGeolocation();
 
   useEffect(() => {
@@ -59,6 +62,7 @@ export default function AdminOfficeSettings() {
             halfDayThresholdTime: settings.halfDayThresholdTime ?? '10:00',
             warningsPerQuarter: settings.warningsPerQuarter ?? 3,
             weekendDays: Array.isArray(settings.weekendDays) ? settings.weekendDays : [0, 6],
+            autoCheckout: settings.autoCheckout ? { enabled: settings.autoCheckout.enabled ?? true, officeTime: settings.autoCheckout.officeTime ?? '23:59', wfhTime: settings.autoCheckout.wfhTime ?? '06:00' } : { enabled: true, officeTime: '23:59', wfhTime: '06:00' },
           });
         }
       })
@@ -136,6 +140,12 @@ export default function AdminOfficeSettings() {
     }
   }
 
+  function handleAutoClose(updated) {
+    if (updated) {
+      setForm((prev) => ({ ...prev, autoCheckout: updated }));
+    }
+    setAutoOpen(false);
+  }
   if (loading) {
     return (
       <div className="page page--form">
@@ -283,6 +293,22 @@ export default function AdminOfficeSettings() {
             />
             <FieldError message={fieldErrors.warningsPerQuarter} />
           </label>
+          <div className="form-grid__full">
+            <p className="card__section-title">Auto-checkout (auto logout)</p>
+            <p className="muted small">
+              Employees still checked in are automatically checked out by a background job. Office
+              check-ins close the same day; WFH check-ins close the next day (IST).
+            </p>
+            <div className="auto-checkout-summary">
+              <span>Enabled: {form.autoCheckout?.enabled ? 'Yes' : 'No'}</span>
+              <span>Office: {form.autoCheckout?.officeTime ?? '23:59'}</span>
+              <span>WFH: {form.autoCheckout?.wfhTime ?? '06:00'}</span>
+            </div>
+            <button type="button" className="btn" onClick={() => setAutoOpen(true)}>
+              Set auto logout timings
+            </button>
+            <AutoCheckoutModal open={autoOpen} initial={form.autoCheckout} onClose={handleAutoClose} />
+          </div>
           <div className="form-actions form-actions--sticky">
             <button
               type="button"

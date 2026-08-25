@@ -47,7 +47,7 @@ function buildFrom() {
  * Returns `{ delivered }` so callers can decide whether a dev link must be
  * surfaced for local testing.
  */
-export async function sendEmail({ to, subject, html, text }) {
+export async function sendEmail({ to, subject, html, text, tag }) {
   const transport = getTransport();
   const from = buildFrom();
 
@@ -60,8 +60,10 @@ export async function sendEmail({ to, subject, html, text }) {
     return { delivered: false };
   }
 
+  const headers = { 'X-Mailin-tag': tag || 'transactional' };
+
   try {
-    const info = await transport.sendMail({ from, to, subject, html, text });
+    const info = await transport.sendMail({ from, to, subject, html, text, headers });
     logInfo('email:sent', { to, subject, messageId: info?.messageId });
     return { delivered: true, messageId: info?.messageId };
   } catch (error) {

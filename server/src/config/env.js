@@ -59,5 +59,10 @@ export const env = {
     graceThresholdTime: process.env.DEFAULT_WARNING_THRESHOLD_TIME ?? '09:00',
     halfDayThresholdTime: process.env.DEFAULT_HALF_DAY_THRESHOLD_TIME ?? '10:00',
     warningsPerQuarter: Number(process.env.DEFAULT_WARNINGS_PER_QUARTER ?? 3),
+    autoCheckout: {
+      enabled: bool(process.env.AUTO_CHECKOUT_ENABLED ?? 'true'),
+      officeTime: process.env.AUTO_CHECKOUT_OFFICE_TIME ?? '23:59',
+      wfhTime: process.env.AUTO_CHECKOUT_WFH_TIME ?? '06:00',
+    },
   },
 };
