@@ -8,7 +8,6 @@ import {
   updateProfile,
   changePassword,
   setPin,
-  verifyCredential,
   applyAuthSession,
   clearAuthCookie,
 } from '../controllers/authController.js';
@@ -89,16 +88,6 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await setPin(req.user._id, req.body, getRequestAuditContext(req));
-    res.json(result);
-  }),
-);
-
-// Verify the current password/PIN before revealing the PIN setup form.
-router.post(
-  '/verify-credential',
-  authenticate,
-  asyncHandler(async (req, res) => {
-    const result = await verifyCredential(req.user._id, req.body);
     res.json(result);
   }),
 );

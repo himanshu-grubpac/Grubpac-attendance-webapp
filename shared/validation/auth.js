@@ -28,11 +28,6 @@ export const setPinSchema = z
     path: ['confirmPin'],
   });
 
-/** Verify the signed-in user's current password or PIN before a sensitive action. */
-export const verifyCredentialSchema = z.object({
-  secret: z.string().min(1, 'Current password or PIN is required.').max(128),
-});
-
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
  * mobile number, or an employee code. Detection order: email (contains @) →

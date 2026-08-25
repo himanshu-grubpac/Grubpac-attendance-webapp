@@ -13,6 +13,12 @@ const emptyPasswordForm = {
   confirmPassword: '',
 };
 
+const emptyPinForm = {
+  auth: '',
+  pin: '',
+  confirmPin: '',
+};
+
 export default function ChangePassword() {
   const { user, refreshUser } = useAuth();
   const { showSuccess } = useToast();
@@ -22,11 +28,7 @@ export default function ChangePassword() {
   const [passwordError, setPasswordError] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
-  // PIN flow is a two-step process: verify the current credential (password when
-  // setting for the first time, PIN when changing), then enter the new PIN.
-  const [pinStep, setPinStep] = useState('auth'); // 'auth' | 'set'
-  const [pinAuth, setPinAuth] = useState('');
-  const [pinForm, setPinForm] = useState({ pin: '', confirmPin: '' });
+  const [pinForm, setPinForm] = useState(emptyPinForm);
   const [pinErrors, setPinErrors] = useState({});
   const [pinError, setPinError] = useState('');
   const [savingPin, setSavingPin] = useState(false);
@@ -60,30 +62,19 @@ export default function ChangePassword() {
     }
   }
 
-  async function handlePinAuthSubmit(event) {
+  async function handlePinSubmit(event) {
     event.preventDefault();
     setSavingPin(true);
     setPinError('');
-    try {
-      await authApi.verifyCredential({ secret: pinAuth });
-      setPinStep('set');
-    } catch (err) {
-      setPinError(getErrorMessage(err));
-    } finally {
-      setSavingPin(false);
-    }
-  }
+    setPinErrors({});
 
-  async function handlePinSetSubmit(event) {
-    event.preventDefault();
-    setSavingPin(true);
-    setPinError('');
-
+    // Map the single "current credential" field to what the server expects:
+    // current password when setting a PIN for the first time, current PIN when changing.
     const payload = { pin: pinForm.pin, confirmPin: pinForm.confirmPin };
     if (hasPin) {
-      payload.currentPin = pinAuth;
+      payload.currentPin = pinForm.auth;
     } else {
-      payload.currentPassword = pinAuth;
+      payload.currentPassword = pinForm.auth;
     }
 
     const validation = validateForm(setPinSchema, payload);
@@ -92,13 +83,10 @@ export default function ChangePassword() {
       setSavingPin(false);
       return;
     }
-    setPinErrors({});
 
     try {
       const result = await authApi.setPin(validation.data);
-      setPinAuth('');
-      setPinForm({ pin: '', confirmPin: '' });
-      setPinStep('auth');
+      setPinForm(emptyPinForm);
       // Refresh the session user so the UI reflects the new PIN state.
       await refreshUser();
       showSuccess(result.message || 'PIN updated successfully.');
@@ -110,7 +98,8 @@ export default function ChangePassword() {
   }
 
   const pinAuthLabel = hasPin ? 'Current PIN' : 'Current password';
-  const pinLabel = hasPin ? 'New PIN' : 'PIN';
+  const pinLabel = hasPin ? 'New PIN' : 'Security PIN';
+  const pinButtonLabel = hasPin ? 'Change PIN' : 'Set PIN';
 
   return (
     <div className="page page--form">
@@ -166,79 +155,58 @@ export default function ChangePassword() {
             {hasPin ? 'Change security PIN' : 'Set security PIN'}
           </p>
           <p className="card__section-hint">
-            A 4-digit PIN lets you sign in with your email or employee ID instead of a password.
+            Enter your current password, then choose a 4-digit PIN to sign in with your email or employee ID.
           </p>
           {canSetPin ? (
-            pinStep === 'auth' ? (
-              <form className="form-grid" onSubmit={handlePinAuthSubmit}>
-                <label>
-                  {pinAuthLabel}
-                  <input
-                    className="input"
-                    type="password"
-                    inputMode={hasPin ? 'numeric' : 'text'}
-                    autoComplete="current-password"
-                    value={pinAuth}
-                    onChange={(e) => setPinAuth(e.target.value)}
-                    maxLength={hasPin ? 4 : 128}
-                    placeholder={hasPin ? '••••' : ''}
-                  />
-                </label>
-                <div className="form-actions form-actions--sticky">
-                  <button type="submit" className="btn btn-primary" disabled={savingPin}>
-                    {savingPin ? 'Verifying…' : 'Continue'}
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <form className="form-grid" onSubmit={handlePinSetSubmit}>
-                <label>
-                  {pinLabel}
-                  <input
-                    className="input"
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="new-password"
-                    value={pinForm.pin}
-                    onChange={(e) => setPinForm({ ...pinForm, pin: e.target.value })}
-                    maxLength={4}
-                    placeholder="••••"
-                  />
-                  <FieldError message={pinErrors.pin} />
-                </label>
-                <label>
-                  Confirm PIN
-                  <input
-                    className="input"
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="new-password"
-                    value={pinForm.confirmPin}
-                    onChange={(e) => setPinForm({ ...pinForm, confirmPin: e.target.value })}
-                    maxLength={4}
-                    placeholder="••••"
-                  />
-                  <FieldError message={pinErrors.confirmPin} />
-                </label>
-                <div className="form-actions form-actions--sticky">
-                  <button type="submit" className="btn btn-primary" disabled={savingPin}>
-                    {savingPin ? 'Saving…' : hasPin ? 'Change PIN' : 'Set PIN'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    disabled={savingPin}
-                    onClick={() => {
-                      setPinStep('auth');
-                      setPinAuth('');
-                      setPinError('');
-                    }}
-                  >
-                    Back
-                  </button>
-                </div>
-              </form>
-            )
+            <form className="form-grid" onSubmit={handlePinSubmit}>
+              <label>
+                {pinAuthLabel}
+                <input
+                  className="input"
+                  type="password"
+                  inputMode={hasPin ? 'numeric' : 'text'}
+                  autoComplete="current-password"
+                  value={pinForm.auth}
+                  onChange={(e) => setPinForm({ ...pinForm, auth: e.target.value })}
+                  maxLength={hasPin ? 4 : 128}
+                  placeholder={hasPin ? '••••' : ''}
+                />
+                <FieldError message={pinErrors.auth || pinErrors.currentPassword || pinErrors.currentPin} />
+              </label>
+              <label>
+                {pinLabel}
+                <input
+                  className="input"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={pinForm.pin}
+                  onChange={(e) => setPinForm({ ...pinForm, pin: e.target.value })}
+                  maxLength={4}
+                  placeholder="••••"
+                />
+                <FieldError message={pinErrors.pin} />
+              </label>
+              <label>
+                Re-enter security PIN
+                <input
+                  className="input"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  value={pinForm.confirmPin}
+                  onChange={(e) => setPinForm({ ...pinForm, confirmPin: e.target.value })}
+                  maxLength={4}
+                  placeholder="••••"
+                />
+                <FieldError message={pinErrors.confirmPin} />
+              </label>
+              <div className="form-actions form-actions--sticky">
+                <button type="submit" className="btn btn-primary" disabled={savingPin}>
+                  {savingPin ? 'Saving…' : pinButtonLabel}
+                </button>
+              </div>
+            </form>
           ) : (
             <p className="card__section-hint">
               Set a password before adding a security PIN.

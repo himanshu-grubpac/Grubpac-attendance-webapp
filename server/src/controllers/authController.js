@@ -22,7 +22,6 @@ import {
   detectIdentifierType,
   loginSchema,
   setPinSchema,
-  verifyCredentialSchema,
   updateProfileSchema,
 } from '../../../shared/validation/auth.js';
 import { normalizeMobile } from '../../../shared/validation/common.js';
@@ -341,47 +340,4 @@ export async function setPin(userId, body, auditContext = {}) {
   return {
     message: hasPin ? 'PIN changed successfully.' : 'PIN set successfully.',
   };
-}
-
-/**
- * Verify the signed-in user's current password or PIN. Used to gate sensitive
- * self-service actions (e.g. revealing the PIN setup form) before the change is
- * submitted. Accepts either credential so the same step works for setting
- * (password) and changing (PIN).
- */
-export async function verifyCredential(userId, body) {
-  const parsed = verifyCredentialSchema.parse(body);
-  const user = await User.findById(userId);
-
-  if (!user || !user.isActive) {
-    const error = new Error('User not found.');
-    error.statusCode = 404;
-    throw error;
-  }
-
-  const passwordValid = await bcrypt.compare(parsed.secret, user.passwordHash);
-  if (passwordValid) {
-    return { verified: true };
-  }
-
-  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
-  if (hasPin) {
-    const secret = parsed.secret;
-    const isFourDigit = /^\d{4}$/.test(secret);
-    const isSixDigit = /^\d{6}$/.test(secret);
-    let pinValid = false;
-    if (isFourDigit && user.pin4Hash) {
-      pinValid = await bcrypt.compare(secret, user.pin4Hash);
-    }
-    if (!pinValid && isSixDigit && user.pin6Hash) {
-      pinValid = await bcrypt.compare(secret, user.pin6Hash);
-    }
-    if (pinValid) {
-      return { verified: true };
-    }
-  }
-
-  const error = new Error('The password or PIN you entered is incorrect.');
-  error.statusCode = 401;
-  throw error;
 }
