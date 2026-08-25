@@ -134,6 +134,10 @@ export async function resetPassword(body, auditContext = {}) {
   }
 
   user.passwordHash = await bcrypt.hash(newPassword, 12);
+  // A password reset revokes the alternative PIN credential too — the PIN is a
+  // stand-in for the password, so it must not outlive a reset.
+  user.pin4Hash = null;
+  user.pin6Hash = null;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 

@@ -7,6 +7,7 @@ import {
   getCurrentUser,
   updateProfile,
   changePassword,
+  setPin,
   applyAuthSession,
   clearAuthCookie,
 } from '../controllers/authController.js';
@@ -77,6 +78,16 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await changePassword(req.user._id, req.body);
+    res.json(result);
+  }),
+);
+
+// Employee self-service PIN setup/change (employee only — enforced in controller).
+router.post(
+  '/set-pin',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await setPin(req.user._id, req.body, getRequestAuditContext(req));
     res.json(result);
   }),
 );

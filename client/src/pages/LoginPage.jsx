@@ -155,6 +155,9 @@ export default function LoginPage() {
               </p>
               <FieldError message={fieldErrors.password} />
             </label>
+            <p className="field-hint">
+              Employees can also sign in with their 4-digit PIN instead of a password.
+            </p>
             {error && (
               <div className="alert alert--error" role="alert">
                 {error}

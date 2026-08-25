@@ -6,6 +6,26 @@ export const pinSchema = z
   .string()
   .regex(pinRegex, 'PIN must be 4 or 6 digits.');
 
+export const fourDigitPinSchema = z
+  .string()
+  .regex(/^\d{4}$/, 'PIN must be exactly 4 digits.');
+
+/**
+ * Employee self-service PIN setup/change.
+ * `currentPin` is required only when the user already has a PIN (change flow);
+ * the server also enforces that rule.
+ */
+export const setPinSchema = z
+  .object({
+    pin: fourDigitPinSchema,
+    confirmPin: z.string().min(1, 'Please confirm the PIN.'),
+    currentPin: fourDigitPinSchema.optional(),
+  })
+  .refine((data) => data.pin === data.confirmPin, {
+    message: 'PINs do not match.',
+    path: ['confirmPin'],
+  });
+
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
  * mobile number, or an employee code. Detection order: email (contains @) →

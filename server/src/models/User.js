@@ -125,6 +125,8 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     monthlySalary: this.monthlySalary ?? null,
     salaryEffectiveFrom: this.salaryEffectiveFrom ?? null,
     salaryCurrency: 'INR',
+    hasPassword: Boolean(this.passwordHash),
+    hasPin: Boolean(this.pin4Hash || this.pin6Hash),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
