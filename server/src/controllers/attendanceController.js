@@ -96,3 +96,17 @@ export async function getMyQuarterWarnings(req, res) {
     remaining: row.remaining,
   });
 }
+
+export async function undoAttendanceAction(req, res){
+  const { actionId } = req.params;
+
+  const result = await undoAttendance(
+    req.user._id,
+  );
+
+  res.status(200).json({
+    success: true,
+    ...result,
+  });
+}
+

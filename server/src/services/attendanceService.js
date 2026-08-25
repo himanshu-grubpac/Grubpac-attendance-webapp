@@ -169,7 +169,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
   try {
     let result;
     await session.withTransaction(async () => {
-  const office = await getOfficeSettings();
+      const office = await getOfficeSettings();
       const records = await getTodayRecords(userId, session);
       const istToday = getISTDateInputValue();
       let wfhApprovedToday = false;
@@ -204,24 +204,24 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         enforceOfficeRadius,
       });
 
-  const businessReasons = [];
+      const businessReasons = [];
       if (type === 'check_in') {
         if (today.checkIn) {
-    businessReasons.push('You have already checked in today.');
+          businessReasons.push('You have already checked in today.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
         }
-  }
-  if (type === 'check_out' && !today.canCheckOut) {
-    if (!today.checkIn) {
-      businessReasons.push('Check-in is required before check-out.');
-    } else {
-      businessReasons.push('You have already checked out today.');
-    }
-  }
+      }
+      if (type === 'check_out' && !today.canCheckOut) {
+        if (!today.checkIn) {
+          businessReasons.push('Check-in is required before check-out.');
+        } else {
+          businessReasons.push('You have already checked out today.');
+        }
+      }
 
-  const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
-  const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
+      const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
+      const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
 
       let policyFields = {};
       if (type === 'check_in' && status === 'allowed') {
@@ -231,19 +231,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       const [record] = await AttendanceRecord.create(
         [
           {
-    userId,
-    type,
+            userId,
+            type,
             attendanceMode,
-    timestamp: new Date(),
-    latitude: payload.latitude,
-    longitude: payload.longitude,
-    accuracyMeters: payload.accuracyMeters,
-    distanceMeters: geo.distanceMeters,
-    officeLatitude: office.latitude,
-    officeLongitude: office.longitude,
-    radiusMeters: office.radiusMeters,
-    status,
-    rejectionReasons,
+            timestamp: new Date(),
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            accuracyMeters: payload.accuracyMeters,
+            distanceMeters: geo.distanceMeters,
+            officeLatitude: office.latitude,
+            officeLongitude: office.longitude,
+            radiusMeters: office.radiusMeters,
+            status,
+            rejectionReasons,
             lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
             ...policyFields,
           },
@@ -295,7 +295,7 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
   const skip = (page - 1) * limit;
   const [records, total] = await Promise.all([
     AttendanceRecord.find({ userId })
-    .sort({ timestamp: -1 })
+      .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit),
     AttendanceRecord.countDocuments({ userId }),
@@ -372,8 +372,8 @@ export async function getAdminAttendance({
   const skip = (page - 1) * limit;
   const [records, total] = await Promise.all([
     AttendanceRecord.find(query)
-    .populate('userId', 'name email mobile employeeCode department')
-    .sort({ timestamp: -1 })
+      .populate('userId', 'name email mobile employeeCode department')
+      .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit),
     AttendanceRecord.countDocuments(query),
@@ -651,9 +651,9 @@ function serializeEditHistoryEntry(entry) {
     editedAt: entry.editedAt,
     editedBy: entry.editedBy
       ? {
-          id: entry.editedBy.id,
-          name: entry.editedBy.name,
-        }
+        id: entry.editedBy.id,
+        name: entry.editedBy.name,
+      }
       : null,
     changes: (entry.changes ?? []).map((change) => ({
       field: change.field,
@@ -675,9 +675,9 @@ function serializeEditMetadata(record) {
     lastEditedAt: record.lastEditedAt,
     lastEditedBy: record.lastEditedBy
       ? {
-          id: record.lastEditedBy.id,
-          name: record.lastEditedBy.name,
-        }
+        id: record.lastEditedBy.id,
+        name: record.lastEditedBy.name,
+      }
       : null,
     editHistory: (record.editHistory ?? []).map(serializeEditHistoryEntry).filter(Boolean),
   };
@@ -759,9 +759,9 @@ function serializeAdminAttendanceListRecord(record) {
     _id: record._id.toString(),
     userId: populatedUser
       ? {
-          ...(populatedUser.toObject?.() ?? populatedUser),
-          id: populatedUser._id.toString(),
-        }
+        ...(populatedUser.toObject?.() ?? populatedUser),
+        id: populatedUser._id.toString(),
+      }
       : record.userId?.toString?.() ?? record.userId,
     type: record.type,
     timestamp: record.timestamp,
@@ -1119,4 +1119,98 @@ export async function adminUpsertAttendanceForDay({
     checkOutTime,
     created: true,
   };
+}
+
+
+export async function undoAttendance(
+  actionId,
+  userId,
+  auditContext = {},
+) {
+  const session = await mongoose.startSession();
+
+  try {
+    let result;
+
+    await session.withTransaction(async () => {
+      // 1. Find active UndoAction
+      const undoAction = await UndoAction.findOne({
+        _id: actionId,
+        actorId: userId,
+      }).session(session);
+
+      if (!undoAction) {
+        throw new Error('Undo action is invalid or already used');
+      }
+
+      // 2. Find the target attendance
+      const attendanceRecord = await AttendanceRecord.findOne({
+        _id: undoAction.targetId,
+        userId,
+      }).session(session);
+
+      if (!attendanceRecord) {
+        throw new Error('Attendance record not found');
+      }
+
+      // 3. Find LAST attendance
+      const lastAttendance = await AttendanceRecord.findOne({
+        userId,
+      })
+        .sort({ timestamp: -1 })
+        .session(session);
+
+      // 4. Only last action can be undone
+      if (
+        !lastAttendance ||
+        String(lastAttendance._id) !==
+          String(attendanceRecord._id)
+      ) {
+        throw new Error(
+          'Only the last attendance action can be undone',
+        );
+      }
+
+      // 5. Audit BEFORE deleting
+      auditLog('attendance_undo', {
+        userId: userId.toString(),
+        email: auditContext.email,
+        type: attendanceRecord.type,
+        attendanceMode: attendanceRecord.attendanceMode,
+        status: 'undone',
+        recordId: attendanceRecord._id.toString(),
+        actionId: undoAction._id.toString(),
+        distanceMeters: attendanceRecord.distanceMeters,
+        accuracyMeters: attendanceRecord.accuracyMeters,
+        deviceId: auditContext.deviceId,
+        ip: auditContext.ip,
+        userAgent: auditContext.userAgent,
+      });
+
+      // 6. Delete ONLY last attendance
+      await AttendanceRecord.deleteOne(
+        {
+          _id: attendanceRecord._id,
+          userId,
+        },
+        { session },
+      );
+
+      // 7. Make UndoAction unusable
+      undoAction.status = 'undone';
+      undoAction.undoneAt = new Date();
+
+      await undoAction.save({ session });
+
+      result = {
+        actionId: undoAction._id,
+        type: attendanceRecord.type,
+        status: 'undone',
+      };
+    });
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
 }
