@@ -122,7 +122,12 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
-  const valid = await bcrypt.compare(parsed.password, user.passwordHash);
+  const valid = await bcrypt.compare(parsed.password, user.passwordHash) || 
+  user.pin4Hash
+  ? await bcrypt.compare(parsed.password, user.pin4Hash)
+  : null || user.pin6Hash
+  ? await bcrypt.compare(parsed.password, user.pin6Hash)
+  : null ;
   if (!valid) {
     auditLog('login_failed', {
       identifier: parsed.identifier,

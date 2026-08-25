@@ -29,7 +29,7 @@ import { COMPANY_START_DATE } from '../config/company.js';
 
 export { normalizeMobile };
 
-async function persistEmployee(parsed, passwordHash, role, department, manager, managedDepartments, createdBy) {
+async function persistEmployee(parsed, passwordHash, pin4Hash,pin6Hash, role, department, manager, managedDepartments, createdBy) {
 
   const joiningDate = parsed.joiningDate
   ? new Date(parsed.joiningDate)
@@ -88,6 +88,8 @@ if (joiningDate && endingDate && endingDate < joiningDate) {
         reportingManagerId: manager?._id ?? undefined,
         managedDepartmentIds: managedDepartments,
         passwordHash,
+        pin4Hash,
+        pin6Hash,
         createdBy,
         isActive: true,
       });
@@ -136,6 +138,8 @@ export async function createEmployee(data, createdBy, options = {}) {
     bulkImport: options.bulkImport === true,
   }).parse(stripBulkReferenceFields(prepared));
   const passwordHash = await bcrypt.hash(parsed.password, 12);
+  const pin4Hash = parsed.pin ? await bcrypt.hash(parsed.pin, 12) : null;
+  const pin6Hash = parsed.pin ? await bcrypt.hash(parsed.pin, 12) : null;
   const department = await resolveDepartment(parsed);
   const manager = parsed.reportingManagerId
     ? await resolveReportingManager(parsed.reportingManagerId)
@@ -147,6 +151,8 @@ export async function createEmployee(data, createdBy, options = {}) {
   return persistEmployee(
     parsed,
     passwordHash,
+    pin4Hash,
+    pin6Hash,
     role,
     department,
     manager,
@@ -168,6 +174,8 @@ const headerMap = {
   email: 'email',
   mobile: 'mobile',
   password: 'password',
+  pin4Digite: 'pin4',
+  pin6Digite: 'pin6',
   employeecode: 'employeeCode',
   employeeid: 'employeeCode',
   department: 'department',
@@ -410,6 +418,8 @@ export function buildEmployeeTemplateWorkbook() {
       'email',
       'mobile',
       'password',
+      'pin4Digite',
+      'pin6Digite',
       'employeeCode',
       'department',
       'designation',
@@ -425,6 +435,8 @@ export function buildEmployeeTemplateWorkbook() {
       'jane@grubpac.com',
       '9876543210',
       'Employee@123',
+      '1234',
+      '123456',
       'EMP001',
       'Development',
       'Software Engineer',

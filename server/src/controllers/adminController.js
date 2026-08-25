@@ -19,7 +19,7 @@ import {
 } from '../services/attendancePolicyService.js';
 import { officeSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
-import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
+import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
   adminAttendanceEditSchema,
   adminAttendanceUpsertSchema,
@@ -505,6 +505,32 @@ export async function resetEmployeePassword(req, res) {
   });
 
   res.json({ message: 'Employee password reset successfully.' });
+}
+
+export async function resetEmployeePin(req, res) {
+  const parsed = adminResetPinSchema.parse(req.body);
+  const employee = await User.findById(req.params.id);
+
+  if (!employee) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
+  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+    return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
+  }
+
+  employee.pinHash = await bcrypt.hash(parsed.newPin, 12);
+  employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
+  await employee.save();
+
+  auditLog('pin_reset_by_admin', {
+    adminId: req.user._id.toString(),
+    employeeId: employee._id.toString(),
+    email: employee.email,
+  });
+
+  res.json({ message: 'Employee PIN reset successfully.' });
 }
 
 export async function downloadEmployeeTemplate(req, res) {

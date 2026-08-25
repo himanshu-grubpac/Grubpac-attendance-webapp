@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { deviceIdSchema, indianMobileSchema, passwordSchema } from './common.js';
 
+const pinRegex = /^(\d{4}|\d{6})$/;
+export const pinSchema = z
+  .string()
+  .regex(pinRegex, 'PIN must be 4 or 6 digits.');
+
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
  * mobile number, or an employee code. Detection order: email (contains @) →
@@ -60,6 +65,16 @@ export const adminResetPasswordSchema = z
   .refine((data) => data.newPassword === data.confirmPassword, {
     message: 'Passwords do not match.',
     path: ['confirmPassword'],
+  });
+
+export const adminResetPinSchema = z
+  .object({
+    newPin: pinSchema,
+    confirmPin: z.string(),
+  })
+  .refine((data) => data.newPin === data.confirmPin, {
+    message: 'PINs do not match.',
+    path: ['confirmPin'],
   });
 
 /** Self-service profile edits — never accepts role, permissions, email, or org fields. */

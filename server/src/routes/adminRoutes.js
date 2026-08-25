@@ -22,6 +22,7 @@ import {
   listManagers,
   registerEmployee,
   resetEmployeePassword,
+  resetEmployeePin,
   updateEmployee,
   updateOfficeSettings,
 } from '../controllers/adminController.js';
@@ -112,6 +113,11 @@ router.patch(
   '/users/:id/password',
   requirePermission(PERMISSIONS.USERS_WRITE),
   asyncHandler(resetEmployeePassword),
+);
+router.patch(
+  '/users/:id/pin',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  asyncHandler(resetEmployeePin),
 );
 router.patch('/users/:id', requirePermission(PERMISSIONS.USERS_WRITE), asyncHandler(updateEmployee));
 router.post(

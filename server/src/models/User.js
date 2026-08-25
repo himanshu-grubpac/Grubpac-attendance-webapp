@@ -52,6 +52,9 @@ const userSchema = new mongoose.Schema(
     /** Null while employed; set when the employee separates. */
     endingDate: { type: Date, default: null },
     passwordHash: { type: String, required: true },
+    /** 4–6 digit PIN hash (bcrypt). Example: "$2a$12$AbCdEfGhIjKlMnOpQrStUv" */
+    pin4Hash: { type: String, default: null },
+    pin6Hash: { type: String, default: null },
     /** Monthly gross salary in INR — admin/HR only. */
     monthlySalary: { type: Number, default: null, min: 0 },
     salaryEffectiveFrom: { type: Date, default: null },

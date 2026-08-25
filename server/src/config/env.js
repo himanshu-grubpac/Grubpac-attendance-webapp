@@ -20,6 +20,7 @@ export const env = {
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
+  adminPin: process.env.ADMIN_PIN ?? '123456',
   adminName: process.env.ADMIN_NAME ?? 'System Admin',
   /** Window for login/check-in device or IP conflict detection (default 24h). */
   deviceConflictWindowMs: Number(
