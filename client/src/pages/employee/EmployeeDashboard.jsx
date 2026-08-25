@@ -210,6 +210,26 @@ export default function EmployeeDashboard() {
     }
   }
 
+  async function handleUndo() {
+    const token = today?.undo?.token;
+    if (!token) return;
+    setActionLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      await attendanceApi.undo(token);
+      await refreshToday();
+      await loadCalendar(calendarMonth);
+      showSuccess('Action undone.');
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      showError(message);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   function requestCheckIn() {
     const graceTime = today?.office?.graceThresholdTime ?? office?.graceThresholdTime;
     if (isLateCheckIn(graceTime)) {
@@ -329,6 +349,20 @@ export default function EmployeeDashboard() {
               'Check out'
             )}
           </button>
+
+          {today?.undo?.available ? (
+            <button
+              type="button"
+              className="btn btn-ghost dash-hero__undo"
+              onClick={handleUndo}
+              disabled={actionLoading || geoLoading}
+              aria-label={
+                today.undo.type === 'check_in' ? 'Undo check-in' : 'Undo check-out'
+              }
+            >
+              {actionLoading ? 'Undoing…' : `Undo ${today.undo.type === 'check_in' ? 'check-in' : 'check-out'}`}
+            </button>
+          ) : null}
         </div>
 
         {primaryAction === 'check_in' && !today?.canCheckIn && !actionLoading && !geoLoading ? (

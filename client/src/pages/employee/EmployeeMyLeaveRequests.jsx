@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { formatISTDate } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
-import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
-import { useToast } from '../../context/ToastContext.jsx';
 
 export default function EmployeeMyLeaveRequests() {
-  const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
-  const { showSuccess, showError } = useToast();
+  const navigate = useNavigate();
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -35,18 +32,8 @@ export default function EmployeeMyLeaveRequests() {
     loadRequests(page);
   }, [page]);
 
-  async function handleCancel(id) {
-    await requestConfirm({
-      title: 'Cancel leave request?',
-      message: 'Cancel this pending leave request? Your manager will no longer see it as pending.',
-      confirmLabel: 'Cancel request',
-      variant: 'danger',
-      onConfirm: async () => {
-        await leaveApi.cancelRequest(id);
-        showSuccess('Leave request cancelled.');
-        await loadRequests(page);
-      },
-    });
+  function handleUndo(id) {
+    navigate(`/employee/leave/apply?edit=${id}`);
   }
 
   return (
@@ -97,8 +84,8 @@ export default function EmployeeMyLeaveRequests() {
                       </td>
                       <td data-label="Action" className="cell-actions">
                         {item.status === 'pending' && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item.id)}>
-                            Cancel
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleUndo(item.id)}>
+                            Undo
                           </button>
                         )}
                       </td>
@@ -110,8 +97,6 @@ export default function EmployeeMyLeaveRequests() {
         )}
         <PaginationBar pagination={pagination} onPageChange={setPage} />
       </div>
-
-      {confirmDialog}
     </div>
   );
 }

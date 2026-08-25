@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createLeaveRequestSchema } from '@shared/validation/leave.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
@@ -48,6 +49,11 @@ export default function EmployeeApplyLeave() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const editId = searchParams.get('edit');
+  const isEditing = Boolean(editId);
+  const [loadingRequest, setLoadingRequest] = useState(isEditing);
 
   useEffect(() => {
     const year = new Date().getFullYear();
@@ -72,6 +78,27 @@ export default function EmployeeApplyLeave() {
       .then((data) => setBalances(data.balances ?? []))
       .catch(() => setBalances([]));
   }, []);
+
+  useEffect(() => {
+    if (!editId) return;
+    setLoadingRequest(true);
+    setError('');
+    leaveApi
+      .getRequest(editId)
+      .then((data) => {
+        const req = data.request ?? data;
+        setForm({
+          leaveTypeId: req.leaveTypeId ?? '',
+          startDate: getISTDateInputValue(new Date(req.startDate)),
+          endDate: getISTDateInputValue(new Date(req.endDate)),
+          halfDay: req.halfDay ?? '',
+          reason: req.reason ?? '',
+          documentUrl: req.documentUrl ?? '',
+        });
+      })
+      .catch((err) => setError(getErrorMessage(err)))
+      .finally(() => setLoadingRequest(false));
+  }, [editId]);
 
   useEffect(() => {
     if (!form.startDate || !form.endDate || form.endDate < form.startDate) {
@@ -128,13 +155,21 @@ export default function EmployeeApplyLeave() {
 
     setFieldErrors({});
     try {
-      const response = await leaveApi.createRequest(validation.data);
+      const response = isEditing
+        ? await leaveApi.updateRequest(editId, validation.data)
+        : await leaveApi.createRequest(validation.data);
       const approvedImmediately = response?.request?.status === 'approved';
       showSuccess(
-        approvedImmediately
-          ? 'Sick leave approved.'
-          : 'Leave request submitted. Your manager will be notified.',
+        isEditing
+          ? 'Leave request updated.'
+          : approvedImmediately
+            ? 'Sick leave approved.'
+            : 'Leave request submitted. Your manager will be notified.',
       );
+      if (isEditing) {
+        navigate('/employee/leave/requests');
+        return;
+      }
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
       const year = new Date().getFullYear();
@@ -191,7 +226,7 @@ export default function EmployeeApplyLeave() {
       ) : null}
 
       <form className="card card--form form-grid form-grid--stacked" onSubmit={handleSubmit}>
-        <p className="card__section-title form-grid__full">Leave details</p>
+        <p className="card__section-title form-grid__full">{isEditing ? 'Edit leave request' : 'Leave details'}</p>
 
         <label className="form-grid__full">
           <span className="label">Leave type</span>
@@ -324,8 +359,8 @@ export default function EmployeeApplyLeave() {
         )}
 
         <div className="form-actions form-actions--sticky">
-          <button type="submit" className="btn btn-primary" disabled={submitting || Boolean(applyDeadlineError)}>
-            {submitting ? 'Submitting…' : 'Submit request'}
+          <button type="submit" className="btn btn-primary" disabled={submitting || loadingRequest || Boolean(applyDeadlineError)}>
+            {submitting ? 'Saving…' : isEditing ? 'Save changes' : 'Submit request'}
           </button>
         </div>
       </form>

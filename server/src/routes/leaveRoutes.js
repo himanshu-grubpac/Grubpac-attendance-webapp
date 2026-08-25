@@ -15,6 +15,7 @@ import {
   createLeaveType,
   deleteHoliday,
   deleteHolidayCategory,
+  editLeaveRequestHandler,
   encashLeaveBalanceHandler,
   getLeaveBalances,
   getLeaveRequestHandler,
@@ -129,6 +130,11 @@ router.get(
   '/requests/:id',
   requirePermission(PERMISSIONS.LEAVE_READ),
   asyncHandler(getLeaveRequestHandler),
+);
+router.put(
+  '/requests/:id',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(editLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/cancel',

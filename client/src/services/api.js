@@ -235,6 +235,7 @@ export const attendanceApi = {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
       })
       .then((r) => r.data),
+  undo: (token) => api.post('/attendance/undo', { token }).then((r) => r.data),
 };
 
 export const notificationsApi = {
@@ -296,6 +297,8 @@ export const leaveApi = {
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
   createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
+  getRequest: (id) => api.get(`/leave/requests/${id}`).then((r) => r.data),
+  updateRequest: (id, payload) => api.put(`/leave/requests/${id}`, payload).then((r) => r.data),
   cancelRequest: (id) => api.post(`/leave/requests/${id}/cancel`).then((r) => r.data),
   approveRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/approve`, payload).then((r) => r.data),

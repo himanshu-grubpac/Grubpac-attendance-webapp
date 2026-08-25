@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { UndoAction } from '../models/UndoAction.js';
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
@@ -145,6 +146,21 @@ function buildTodayStatus(
   };
 }
 
+async function getUndoAvailability(userId) {
+  const lastRecord = await AttendanceRecord.findOne({ userId })
+    .sort({ timestamp: -1 })
+    .lean();
+  if (!lastRecord || lastRecord.status !== 'allowed') return null;
+  const action = await UndoAction.findOne({
+    actorId: userId,
+    targetType: 'attendance',
+    targetId: lastRecord._id,
+    status: 'active',
+  }).lean();
+  if (!action) return null;
+  return { available: true, token: action._id.toString(), type: lastRecord.type };
+}
+
 export async function getTodayStatus(userId) {
   const istToday = getISTDateInputValue();
   const [records, office, pendingLeaveToday, wfhApprovedToday, approvedLeaveToday] = await Promise.all([
@@ -154,13 +170,15 @@ export async function getTodayStatus(userId) {
     hasApprovedWfhForIstDate(userId, istToday),
     loadApprovedLeaveForToday(userId),
   ]);
-  return buildTodayStatus(
+  const status = buildTodayStatus(
     records,
     office,
     pendingLeaveToday,
     wfhApprovedToday,
     approvedLeaveToday,
   );
+  status.undo = await getUndoAvailability(userId);
+  return status;
 }
 
 export async function markAttendance(userId, type, payload, auditContext = {}) {
@@ -265,6 +283,33 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       });
 
       result = { record, office, status, rejectionReasons };
+
+      // Only effective (allowed) actions can be undone. Mint a fresh, single-use
+      // token for this action and expire any prior token so only the latest
+      // attendance action is undoable ("one chance at a time").
+      if (status === 'allowed') {
+        await UndoAction.updateMany(
+          { actorId: userId, targetType: 'attendance', status: 'active' },
+          { $set: { status: 'expired' } },
+          { session },
+        );
+        const [undoAction] = await UndoAction.create(
+          [
+            {
+              actorId: userId,
+              targetType: 'attendance',
+              targetId: record._id,
+            },
+          ],
+          { session },
+        );
+        result.undoToken = undoAction._id.toString();
+        result.undo = {
+          available: true,
+          token: undoAction._id.toString(),
+          type,
+        };
+      }
     });
 
     if (type === 'check_in' && result?.status === 'allowed') {
@@ -1137,6 +1182,7 @@ export async function undoAttendance(
       const undoAction = await UndoAction.findOne({
         _id: actionId,
         actorId: userId,
+        status: 'active',
       }).session(session);
 
       if (!undoAction) {
