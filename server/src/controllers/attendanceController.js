@@ -5,6 +5,7 @@ import {
   getTodayStatus,
   markAttendance,
   resolveMonthSummaryTargetUserId,
+  undoAttendance,
 } from '../services/attendanceService.js';
 import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
 import { attendancePayloadSchema } from '../../../shared/validation/attendance.js';
