@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { deviceIdSchema, indianMobileSchema, passwordSchema } from './common.js';
+import { deviceIdSchema, emailSchema, indianMobileSchema, passwordSchema } from './common.js';
 
 const pinRegex = /^(\d{4}|\d{6})$/;
 export const pinSchema = z
@@ -96,4 +96,26 @@ export const updateProfileSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
     message: 'At least one field is required.',
+  });
+
+/** Employee self-service password reset — step 1: request a magic link. */
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+});
+
+/** Employee self-service password reset — step 2: validate a magic-link token. */
+export const resetPasswordVerifySchema = z.object({
+  token: z.string().min(1, 'Reset token is required.'),
+});
+
+/** Employee self-service password reset — step 3: set a new password. */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().min(1, 'Reset token is required.'),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, 'Please confirm the new password.').max(128),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
   });

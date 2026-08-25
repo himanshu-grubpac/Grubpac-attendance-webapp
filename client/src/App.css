@@ -2326,6 +2326,32 @@ textarea:disabled {
   border-radius: var(--radius);
 }
 
+.login-card__forgot {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.login-card__forgot:hover:not(:disabled),
+.login-card__forgot:focus-visible {
+  color: var(--primary-dark, var(--primary));
+  opacity: 0.85;
+}
+
+.login-card__forgot:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .login-panel__topbar {
   display: none;
 }

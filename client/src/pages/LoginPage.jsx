@@ -10,6 +10,7 @@ import CompanyLogo from '../components/CompanyLogo.jsx';
 import FieldError from '../components/FieldError.jsx';
 import PasswordInput from '../components/PasswordInput.jsx';
 import ThemeToggle from '../components/ThemeToggle.jsx';
+import ForgotPasswordModal from '../components/ForgotPasswordModal.jsx';
 
 const HERO_FEATURES = [
   'GPS-verified check-in and check-out',
@@ -26,6 +27,7 @@ export default function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
 
   if (user) {
     return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
@@ -142,7 +144,15 @@ export default function LoginPage() {
                 placeholder="Enter your password"
                 maxLength={128}
               />
-              <p className="field-hint">Contact admin to reset your password.</p>
+              <p className="field-hint">
+                <button
+                  type="button"
+                  className="login-card__forgot"
+                  onClick={() => setForgotOpen(true)}
+                >
+                  Forgot password?
+                </button>
+              </p>
               <FieldError message={fieldErrors.password} />
             </label>
             {error && (
@@ -171,6 +181,8 @@ export default function LoginPage() {
           © {new Date().getFullYear()} {BRANDING.companyName}
         </p>
       </section>
+
+      <ForgotPasswordModal open={forgotOpen} onClose={() => setForgotOpen(false)} />
     </div>
   );
 }

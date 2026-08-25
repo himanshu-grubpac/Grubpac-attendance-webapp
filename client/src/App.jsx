@@ -6,6 +6,7 @@ import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
+import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import AdminAttendance from './pages/admin/AdminAttendance.jsx';
@@ -52,6 +53,7 @@ export default function App() {
           <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route element={<AuthenticatedShell />}>
               <Route
                 path="admin/dashboard"

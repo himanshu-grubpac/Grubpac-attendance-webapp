@@ -122,6 +122,12 @@ export const authApi = {
     api.patch('/auth/me', payload).then((r) => r.data),
   changePassword: (payload) =>
     api.post('/auth/change-password', payload).then((r) => r.data),
+  forgotPassword: (email) =>
+    api.post('/auth/forgot-password', { email }).then((r) => r.data),
+  verifyResetToken: (token) =>
+    api.post('/auth/reset-password/verify', { token }).then((r) => r.data),
+  resetPassword: (payload) =>
+    api.post('/auth/reset-password', payload).then((r) => r.data),
 };
 
 export const adminApi = {

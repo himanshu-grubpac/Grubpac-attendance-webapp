@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { authenticate, invalidateUserSessions } from '../middleware/auth.js';
-import { authLimiter } from '../middleware/rateLimiters.js';
+import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiters.js';
 import {
   loginUser,
   getCurrentUser,
@@ -10,6 +10,11 @@ import {
   applyAuthSession,
   clearAuthCookie,
 } from '../controllers/authController.js';
+import {
+  requestPasswordReset,
+  verifyPasswordReset,
+  resetPassword,
+} from '../controllers/passwordResetController.js';
 import { clearCsrfCookie } from '../middleware/csrf.js';
 import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
 
@@ -72,6 +77,35 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await changePassword(req.user._id, req.body);
+    res.json(result);
+  }),
+);
+
+// Employee self-service password reset (public — no session required).
+router.post(
+  '/forgot-password',
+  passwordResetLimiter,
+  asyncHandler(async (req, res) => {
+    const auditContext = getRequestAuditContext(req);
+    const result = await requestPasswordReset(req.body, auditContext);
+    res.json(result);
+  }),
+);
+
+router.post(
+  '/reset-password/verify',
+  asyncHandler(async (req, res) => {
+    const result = await verifyPasswordReset(req.body);
+    res.json(result);
+  }),
+);
+
+router.post(
+  '/reset-password',
+  passwordResetLimiter,
+  asyncHandler(async (req, res) => {
+    const auditContext = getRequestAuditContext(req);
+    const result = await resetPassword(req.body, auditContext);
     res.json(result);
   }),
 );
