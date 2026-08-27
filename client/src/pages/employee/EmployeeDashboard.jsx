@@ -79,8 +79,7 @@ const OFFICE_GEO_REJECTION_FALLBACK =
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const { showSuccess, showError } = useToast();
-  const [nowTick, setNowTick] = useState(Date.now());
+  const { showToast, showSuccess, showError } = useToast();
   const [today, setToday] = useState(null);
   const [office, setOffice] = useState(null);
   const [result, setResult] = useState(null);
@@ -160,21 +159,11 @@ export default function EmployeeDashboard() {
     getPosition({ fresh: false }).catch(() => {});
   }, [getPosition]);
 
-  useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 15000);
-    return () => clearInterval(id);
-  }, []);
-
   const effectiveAttendanceMode = today?.checkIn
     ? today.checkIn.attendanceMode ?? 'office'
     : today?.wfhApprovedToday
       ? 'wfh'
       : 'office';
-
-  const canUndo =
-    Boolean(today?.undo?.available) &&
-    today?.undo?.expiresAt != null &&
-    nowTick < today.undo.expiresAt;
 
   async function handleAttendance(type, lateNote) {
     setActionLoading(true);
@@ -208,6 +197,23 @@ export default function EmployeeDashboard() {
       await loadCalendar(calendarMonth);
       setLateNoteOpen(false);
       setLateNoteText('');
+      if (data.undoToken) {
+        showToast(
+          type === 'check_in'
+            ? 'Checked in. If done by mistake, click Undo below to revert it.'
+            : 'Checked out. If done by mistake, click Undo below to revert it.',
+          {
+            variant: 'success',
+            durationMs: 15000,
+            action: {
+              label: 'Undo',
+              onClick: () => performUndo(data.undoToken),
+            },
+          },
+        );
+      } else {
+        showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
+      }
     } catch (err) {
       const response = err?.response?.data;
       if (response?.record) {
@@ -221,8 +227,7 @@ export default function EmployeeDashboard() {
     }
   }
 
-  async function handleUndo() {
-    const token = today?.undo?.token;
+  async function performUndo(token) {
     if (!token) return;
     setActionLoading(true);
     setError('');
@@ -360,20 +365,6 @@ export default function EmployeeDashboard() {
               'Check out'
             )}
           </button>
-
-          {canUndo ? (
-            <button
-              type="button"
-              className="btn btn-ghost dash-hero__undo"
-              onClick={handleUndo}
-              disabled={actionLoading || geoLoading}
-              aria-label={
-                today.undo.type === 'check_in' ? 'Undo check-in' : 'Undo check-out'
-              }
-            >
-              {actionLoading ? 'Undoing…' : `Undo ${today.undo.type === 'check_in' ? 'check-in' : 'check-out'}`}
-            </button>
-          ) : null}
         </div>
 
         {primaryAction === 'check_in' && !today?.canCheckIn && !actionLoading && !geoLoading ? (

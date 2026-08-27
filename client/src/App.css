@@ -6435,7 +6435,9 @@ body::-webkit-scrollbar-thumb {
 
   .toast-stack {
     top: calc(var(--header-height) + 0.625rem);
-    right: 0.75rem;
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
     max-width: min(20rem, calc(100vw - 1.5rem));
   }
 }
@@ -7012,11 +7014,13 @@ body::-webkit-scrollbar-thumb {
 .toast-stack {
   position: fixed;
   top: calc(var(--header-height) + 0.75rem);
-  right: 1rem;
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 100;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 0.625rem;
   max-width: min(22rem, calc(100vw - 2rem));
   pointer-events: none;
@@ -7077,6 +7081,22 @@ body::-webkit-scrollbar-thumb {
 
 .toast__close:hover {
   opacity: 1;
+}
+
+.toast__action {
+  flex-shrink: 0;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-sm);
+}
+
+.toast__action:hover {
+  background: var(--primary-soft, rgba(0, 0, 0, 0.06));
 }
 
 /* ── Operations page shells ─────────────────────────────────────── */
