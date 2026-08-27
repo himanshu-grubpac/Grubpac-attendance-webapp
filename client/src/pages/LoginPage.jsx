@@ -129,7 +129,7 @@ export default function LoginPage() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 autoComplete="username"
-                placeholder="you@company.com"
+                placeholder="Enter your email, employee id or mobile"
                 maxLength={254}
                 enterKeyHint="next"
               />
@@ -141,7 +141,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
-                placeholder="Enter your password"
+                placeholder="Enter your password or PIN"
                 maxLength={128}
               />
               <p className="field-hint">
