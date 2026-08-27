@@ -101,6 +101,7 @@ export async function undoAttendanceAction(req, res){
   const { actionId } = req.params;
 
   const result = await undoAttendance(
+    actionId,
     req.user._id,
   );
 
