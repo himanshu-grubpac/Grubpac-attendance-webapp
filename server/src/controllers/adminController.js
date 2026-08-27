@@ -17,7 +17,7 @@ import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
 } from '../services/attendancePolicyService.js';
-import { officeSchema } from '../../../shared/validation/office.js';
+import { officeSchema, officeUpdateSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
@@ -495,6 +495,9 @@ export async function resetEmployeePassword(req, res) {
   }
 
   employee.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  // Resetting the password also revokes the employee's PIN credential.
+  employee.pin4Hash = null;
+  employee.pin6Hash = null;
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
@@ -520,7 +523,8 @@ export async function resetEmployeePin(req, res) {
     return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
   }
 
-  employee.pinHash = await bcrypt.hash(parsed.newPin, 12);
+  employee.pin4Hash = await bcrypt.hash(parsed.newPin, 12);
+  employee.pin6Hash = await bcrypt.hash(parsed.newPin, 12);
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
@@ -572,8 +576,21 @@ export async function getOfficeSettingsHandler(req, res) {
 }
 
 export async function updateOfficeSettings(req, res) {
-  const parsed = officeSchema.parse(req.body);
+  const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
+  if (parsed.autoCheckout) {
+    const existing = (settings && settings.autoCheckout) || {
+      enabled: true,
+      officeTime: '23:59',
+      wfhTime: '06:00',
+    };
+    parsed.autoCheckout = {
+      enabled: parsed.autoCheckout.enabled ?? existing.enabled ?? true,
+      officeTime: parsed.autoCheckout.officeTime ?? existing.officeTime ?? '23:59',
+      wfhTime: parsed.autoCheckout.wfhTime ?? existing.wfhTime ?? '06:00',
+    };
+  }
 
   if (!settings) {
     settings = await OfficeSettings.create({

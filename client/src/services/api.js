@@ -122,6 +122,14 @@ export const authApi = {
     api.patch('/auth/me', payload).then((r) => r.data),
   changePassword: (payload) =>
     api.post('/auth/change-password', payload).then((r) => r.data),
+  setPin: (payload) =>
+    api.post('/auth/set-pin', payload).then((r) => r.data),
+  forgotPassword: (email) =>
+    api.post('/auth/forgot-password', { email }).then((r) => r.data),
+  verifyResetToken: (token) =>
+    api.post('/auth/reset-password/verify', { token }).then((r) => r.data),
+  resetPassword: (payload) =>
+    api.post('/auth/reset-password', payload).then((r) => r.data),
 };
 
 export const adminApi = {
@@ -227,6 +235,7 @@ export const attendanceApi = {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
       })
       .then((r) => r.data),
+  undo: (token) => api.post('/attendance/undo', { token }).then((r) => r.data),
 };
 
 export const notificationsApi = {
@@ -288,6 +297,8 @@ export const leaveApi = {
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
   createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
+  getRequest: (id) => api.get(`/leave/requests/${id}`).then((r) => r.data),
+  updateRequest: (id, payload) => api.put(`/leave/requests/${id}`, payload).then((r) => r.data),
   cancelRequest: (id) => api.post(`/leave/requests/${id}/cancel`).then((r) => r.data),
   approveRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/approve`, payload).then((r) => r.data),

@@ -150,6 +150,7 @@ export async function validateLeaveRequestInput({
   halfDay = null,
   documentUrl,
   adminException = false,
+  excludeRequestId = null,
 }) {
   const leaveType = await LeaveType.findById(leaveTypeId);
   if (!leaveType || !leaveType.isActive) {
@@ -228,7 +229,7 @@ export async function validateLeaveRequestInput({
     await validateCombinedAccumulation(userId, year, policyMap, days, leaveTypeId);
   }
 
-  await validateSelfOverlap(userId, startDate, endDate);
+  await validateSelfOverlap(userId, startDate, endDate, excludeRequestId);
   await validateLeadDeputyConflict(userId, startDate, endDate, adminException);
 
   return {
@@ -249,12 +250,13 @@ async function reserveValidatedLeaveBalance(balance, days, session = null) {
   await balance.save(session ? { session } : undefined);
 }
 
-async function validateSelfOverlap(userId, startDate, endDate) {
+async function validateSelfOverlap(userId, startDate, endDate, excludeRequestId = null) {
   const overlap = await LeaveRequest.findOne({
     userId,
     status: { $in: ['pending', 'approved'] },
     startDate: { $lte: endDate },
     endDate: { $gte: startDate },
+    ...(excludeRequestId ? { _id: { $ne: excludeRequestId } } : {}),
   });
 
   if (overlap) {
@@ -455,6 +457,61 @@ export async function cancelLeaveRequest(requestId, actor) {
   });
 
   return request.toSafeJSON();
+}
+
+export async function editLeaveRequest(requestId, actor, payload) {
+  const request = await loadLeaveRequest(requestId);
+  const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
+  if (requesterId !== actor._id.toString()) {
+    throwError('You can only edit your own leave requests.', 403);
+  }
+  if (request.status !== 'pending') {
+    throwError('Only pending leave requests can be edited.');
+  }
+
+  const userId = request.userId?._id ?? request.userId;
+  const oldLeaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  const oldYear = getISTYear(request.startDate);
+  const adminException = false;
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Release the previously reserved pending days before reserving the new ones.
+      await releasePendingDays(userId, oldLeaveTypeId, request.days, oldYear, session);
+
+      const validated = await validateLeaveRequestInput({
+        userId,
+        leaveTypeId: payload.leaveTypeId,
+        startDateInput: payload.startDate,
+        endDateInput: payload.endDate,
+        halfDay: payload.halfDay ?? null,
+        documentUrl: payload.documentUrl,
+        adminException,
+        excludeRequestId: request._id,
+      });
+
+      request.leaveTypeId = payload.leaveTypeId;
+      request.startDate = validated.startDate;
+      request.endDate = validated.endDate;
+      request.days = validated.days;
+      request.halfDay = payload.halfDay ?? null;
+      request.reason = payload.reason;
+      request.documentUrl = payload.documentUrl ?? null;
+      request.adminException = adminException;
+      request.status = 'pending';
+      await request.save({ session });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  auditLog('leave_request_edited', {
+    userId: actor._id.toString(),
+    requestId: request._id.toString(),
+  });
+
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 export async function decideLeaveRequest(requestId, actor, permissions, decision, payload = {}) {

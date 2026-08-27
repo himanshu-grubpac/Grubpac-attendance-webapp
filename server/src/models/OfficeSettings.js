@@ -28,6 +28,17 @@ const officeSettingsSchema = new mongoose.Schema(
       type: { type: String, default: 'public', trim: true },
       name: { type: String, required: true, trim: true, maxlength: 200 },
     }],
+    /**
+     * Auto-checkout (auto logout): when enabled, employees still checked in past the
+     * configured IST time are checked out automatically by the background job.
+     * - officeTime: same-day IST HH:mm (default 23:59).
+     * - wfhTime: next-day IST HH:mm (default 06:00).
+     */
+    autoCheckout: {
+      enabled: { type: Boolean, default: true },
+      officeTime: { type: String, default: '23:59', trim: true },
+      wfhTime: { type: String, default: '06:00', trim: true },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true },

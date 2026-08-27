@@ -38,7 +38,7 @@ export function ToastProvider({ children }) {
       options.durationMs ??
       (variant === 'error' ? ERROR_TOAST_DURATION_MS : SUCCESS_TOAST_DURATION_MS);
 
-    setToasts((items) => [...items, { id, message, variant }]);
+    setToasts((items) => [...items, { id, message, variant, action: options.action ?? null }]);
 
     if (durationMs > 0) {
       const timeoutId = window.setTimeout(() => dismissToast(id), durationMs);
@@ -69,6 +69,18 @@ export function ToastProvider({ children }) {
               role={toast.variant === 'error' ? 'alert' : 'status'}
             >
               <span>{toast.message}</span>
+              {toast.action ? (
+                <button
+                  type="button"
+                  className="toast__action"
+                  onClick={() => {
+                    toast.action.onClick?.();
+                    dismissToast(toast.id);
+                  }}
+                >
+                  {toast.action.label}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="toast__close"

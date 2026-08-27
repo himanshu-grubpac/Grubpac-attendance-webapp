@@ -49,6 +49,7 @@ import {
   cancelLeaveRequest,
   createLeaveRequest,
   decideLeaveRequest,
+  editLeaveRequest,
   getTeamCalendar,
   listLeaveRequests,
   loadLeaveRequest,
@@ -222,6 +223,11 @@ export async function previewLeaveRequestDays(req, res) {
 
 export async function cancelLeaveRequestHandler(req, res) {
   const request = await cancelLeaveRequest(req.params.id, req.user);
+  res.json({ request });
+}
+
+export async function editLeaveRequestHandler(req, res) {
+  const request = await editLeaveRequest(req.params.id, req.user, req.body);
   res.json({ request });
 }
 

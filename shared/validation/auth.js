@@ -1,10 +1,32 @@
 import { z } from 'zod';
-import { deviceIdSchema, indianMobileSchema, passwordSchema } from './common.js';
+import { deviceIdSchema, emailSchema, indianMobileSchema, passwordSchema } from './common.js';
 
 const pinRegex = /^(\d{4}|\d{6})$/;
 export const pinSchema = z
   .string()
   .regex(pinRegex, 'PIN must be 4 or 6 digits.');
+
+export const fourDigitPinSchema = z
+  .string()
+  .regex(/^\d{4}$/, 'PIN must be exactly 4 digits.');
+
+/**
+ * Employee self-service PIN setup/change.
+ * `currentPin` is required only when the user already has a PIN (change flow);
+ * the server also enforces that rule.
+ */
+export const setPinSchema = z
+  .object({
+    pin: fourDigitPinSchema,
+    confirmPin: z.string().min(1, 'Please confirm the PIN.'),
+    // Supplied so the server can re-verify identity when saving the PIN.
+    currentPin: fourDigitPinSchema.optional(),
+    currentPassword: z.string().min(1).max(128).optional(),
+  })
+  .refine((data) => data.pin === data.confirmPin, {
+    message: 'PINs do not match.',
+    path: ['confirmPin'],
+  });
 
 /**
  * Login accepts a single identifier that may be an email, a 10-digit Indian
@@ -96,4 +118,26 @@ export const updateProfileSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
     message: 'At least one field is required.',
+  });
+
+/** Employee self-service password reset — step 1: request a magic link. */
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+});
+
+/** Employee self-service password reset — step 2: validate a magic-link token. */
+export const resetPasswordVerifySchema = z.object({
+  token: z.string().min(1, 'Reset token is required.'),
+});
+
+/** Employee self-service password reset — step 3: set a new password. */
+export const resetPasswordSchema = z
+  .object({
+    token: z.string().min(1, 'Reset token is required.'),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1, 'Please confirm the new password.').max(128),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
   });

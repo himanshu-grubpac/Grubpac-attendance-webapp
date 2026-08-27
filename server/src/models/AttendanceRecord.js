@@ -41,6 +41,8 @@ const attendanceRecordSchema = new mongoose.Schema(
     warningIssued: { type: Boolean, default: false },
     /** 1-based warning index within the calendar quarter (W1, W2, …). */
     quarterWarningIndex: { type: Number, min: 1, max: 10, default: null },
+    /** True when the check-out was created by the auto-checkout background job. */
+    autoCheckout: { type: Boolean, default: false },
     /** Set when an admin or team lead edits this check-in record. */
     lastEditedAt: { type: Date, default: null },
     lastEditedBy: {

@@ -17,6 +17,7 @@ import leaveRoutes from './routes/leaveRoutes.js';
 import helpRoutes from './routes/helpRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
+import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
 
 export const app = express();
 
@@ -105,6 +106,7 @@ export async function startServer() {
   return new Promise((resolve) => {
     const server = app.listen(env.port, () => {
       console.log(`Server listening on http://localhost:${env.port}`);
+      startAutoCheckoutScheduler();
       resolve(server);
     });
   });

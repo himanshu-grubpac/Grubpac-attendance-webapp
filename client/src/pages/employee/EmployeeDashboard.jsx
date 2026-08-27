@@ -79,7 +79,7 @@ const OFFICE_GEO_REJECTION_FALLBACK =
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const { showError } = useToast();
+  const { showToast, showSuccess, showError } = useToast();
   const [today, setToday] = useState(null);
   const [office, setOffice] = useState(null);
   const [result, setResult] = useState(null);
@@ -197,11 +197,47 @@ export default function EmployeeDashboard() {
       await loadCalendar(calendarMonth);
       setLateNoteOpen(false);
       setLateNoteText('');
+      if (data.undoToken) {
+        showToast(
+          type === 'check_in'
+            ? 'Checked in. If done by mistake, click Undo below to revert it.'
+            : 'Checked out. If done by mistake, click Undo below to revert it.',
+          {
+            variant: 'success',
+            durationMs: 15000,
+            action: {
+              label: 'Undo',
+              onClick: () => performUndo(data.undoToken),
+            },
+          },
+        );
+      } else {
+        showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
+      }
     } catch (err) {
       const response = err?.response?.data;
       if (response?.record) {
         setResult(response);
       }
+      const message = getErrorMessage(err);
+      setError(message);
+      showError(message);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function performUndo(token) {
+    if (!token) return;
+    setActionLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      await attendanceApi.undo(token);
+      await refreshToday();
+      await loadCalendar(calendarMonth);
+      showSuccess('Action undone.');
+    } catch (err) {
       const message = getErrorMessage(err);
       setError(message);
       showError(message);
@@ -226,6 +262,9 @@ export default function EmployeeDashboard() {
   }
 
   const displayName = user?.name?.split(' ')[0] || 'there';
+
+  const isCheckedIn = Boolean(today?.checkIn) && !today?.checkOut;
+  const primaryAction = isCheckedIn ? 'check_out' : 'check_in';
   const todayModeLabel = buildTodayAttendanceModeLabel({
     wfhApprovedToday: today?.wfhApprovedToday,
     approvedLeaveToday: today?.approvedLeaveToday,
@@ -298,28 +337,43 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__actions">
           <button
             type="button"
-            className="btn btn-primary btn-lg dash-hero__cta"
-            disabled={!today?.canCheckIn || actionLoading || geoLoading}
-            onClick={requestCheckIn}
+            className={`btn btn-lg dash-hero__cta ${
+              primaryAction === 'check_out' ? 'btn-secondary' : 'btn-primary'
+            }`}
+            disabled={
+              (primaryAction === 'check_in'
+                ? !today?.canCheckIn
+                : !today?.canCheckOut) ||
+              actionLoading ||
+              geoLoading
+            }
+            onClick={
+              primaryAction === 'check_in'
+                ? requestCheckIn
+                : () => handleAttendance('check_out')
+            }
+            aria-label={primaryAction === 'check_in' ? 'Check in' : 'Check out'}
           >
             {actionLoading ? (
               <>
                 <span className="spinner spinner--sm" aria-hidden="true" />
                 Capturing…
               </>
-            ) : (
+            ) : primaryAction === 'check_in' ? (
               'Check in'
+            ) : (
+              'Check out'
             )}
           </button>
-          <button
-            type="button"
-            className="btn btn-lg dash-hero__cta"
-            disabled={!today?.canCheckOut || actionLoading || geoLoading}
-            onClick={() => handleAttendance('check_out')}
-          >
-            Check out
-          </button>
         </div>
+
+        {primaryAction === 'check_in' && !today?.canCheckIn && !actionLoading && !geoLoading ? (
+          <p className="dash-action-hint muted small" role="status">
+            {today?.checkOut
+              ? 'You have completed your attendance for today. Check in will be available tomorrow.'
+              : 'Check-in is not available right now (approved leave covers today).'}
+          </p>
+        ) : null}
 
         {error ? <div className="alert alert--error">{error}</div> : null}
 
