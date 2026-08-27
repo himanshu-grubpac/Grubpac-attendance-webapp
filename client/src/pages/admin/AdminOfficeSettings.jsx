@@ -5,7 +5,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { validateForm } from '../../utils/validation.js';
 import FieldError from '../../components/FieldError.jsx';
-import TimeField from '../../components/TimeField.jsx';
+import TimeField, { formatTimeDisplay } from '../../components/TimeField.jsx';
 import AutoCheckoutModal from '../../components/AutoCheckoutModal.jsx';
 
 const WEEKDAY_OPTIONS = [
@@ -31,7 +31,11 @@ const emptyOffice = {
   halfDayThresholdTime: '10:00',
   warningsPerQuarter: 3,
   weekendDays: [0, 6],
-  autoCheckout: { enabled: true, officeTime: '23:59', wfhTime: '06:00' },
+  autoCheckout: {
+    enabled: true,
+    office: { day: 'same', time: '23:59' },
+    wfh: { day: 'next', time: '06:00' },
+  },
 };
 
 export default function AdminOfficeSettings() {
@@ -62,7 +66,13 @@ export default function AdminOfficeSettings() {
             halfDayThresholdTime: settings.halfDayThresholdTime ?? '10:00',
             warningsPerQuarter: settings.warningsPerQuarter ?? 3,
             weekendDays: Array.isArray(settings.weekendDays) ? settings.weekendDays : [0, 6],
-            autoCheckout: settings.autoCheckout ? { enabled: settings.autoCheckout.enabled ?? true, officeTime: settings.autoCheckout.officeTime ?? '23:59', wfhTime: settings.autoCheckout.wfhTime ?? '06:00' } : { enabled: true, officeTime: '23:59', wfhTime: '06:00' },
+            autoCheckout: settings.autoCheckout
+              ? {
+                  enabled: settings.autoCheckout.enabled ?? true,
+                  office: settings.autoCheckout.office ?? { day: 'same', time: '23:59' },
+                  wfh: settings.autoCheckout.wfh ?? { day: 'next', time: '06:00' },
+                }
+              : { enabled: true, office: { day: 'same', time: '23:59' }, wfh: { day: 'next', time: '06:00' } },
           });
         }
       })
@@ -301,8 +311,8 @@ export default function AdminOfficeSettings() {
             </p>
             <div className="auto-checkout-summary">
               <span>Enabled: {form.autoCheckout?.enabled ? 'Yes' : 'No'}</span>
-              <span>Office: {form.autoCheckout?.officeTime ?? '23:59'}</span>
-              <span>WFH: {form.autoCheckout?.wfhTime ?? '06:00'}</span>
+              <span>Office: {form.autoCheckout?.office ? `${form.autoCheckout.office.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.office.time) ?? form.autoCheckout.office.time}` : 'Same day at 11:59 PM'}</span>
+              <span>WFH: {form.autoCheckout?.wfh ? `${form.autoCheckout.wfh.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.wfh.time) ?? form.autoCheckout.wfh.time}` : 'Next day at 6:00 AM'}</span>
             </div>
             <button type="button" className="btn" onClick={() => setAutoOpen(true)}>
               Set auto logout timings

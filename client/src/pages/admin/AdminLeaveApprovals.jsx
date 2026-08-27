@@ -8,6 +8,7 @@ import SelectField from '../../components/SelectField.jsx';
 import { getTodayMonthIst } from '../../components/MonthField.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 
 const APPROVALS_PAGE_SIZE = 20;
 
@@ -230,6 +231,7 @@ async function fetchActiveEmployees() {
 export default function AdminLeaveApprovals() {
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
 
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -402,7 +404,20 @@ export default function AdminLeaveApprovals() {
           setError('');
           try {
             await leaveApi.rejectRequest(id, payload);
-            showSuccess('Leave request declined. The employee has been notified.');
+            showActionPopup({
+              message: 'Leave request declined. If done by mistake, click Undo to revert it.',
+              undoLabel: 'Undo',
+              onUndo: async () => {
+                try {
+                  await leaveApi.undoDecision(id);
+                  showSuccess('Leave decision undone.');
+                  await loadRequests({ nextPage: page });
+                } catch (err) {
+                  showError(getErrorMessage(err));
+                }
+              },
+              durationMs: 5 * 60 * 1000,
+            });
             setComments((prev) => {
               const next = { ...prev };
               delete next[id];
@@ -423,7 +438,20 @@ export default function AdminLeaveApprovals() {
     setError('');
     try {
       await leaveApi.approveRequest(id, payload);
-      showSuccess('Leave request approved. The employee has been notified.');
+      showActionPopup({
+        message: 'Leave request approved. If done by mistake, click Undo to revert it.',
+        undoLabel: 'Undo',
+        onUndo: async () => {
+          try {
+            await leaveApi.undoDecision(id);
+            showSuccess('Leave decision undone.');
+            await loadRequests({ nextPage: page });
+          } catch (err) {
+            showError(getErrorMessage(err));
+          }
+        },
+        durationMs: 5 * 60 * 1000,
+      });
       setComments((prev) => {
         const next = { ...prev };
         delete next[id];

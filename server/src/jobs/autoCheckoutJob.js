@@ -24,13 +24,16 @@ function nextISTDayKey(dayKey) {
   return getISTDateInputValue(next);
 }
 
-export function computeAutoCheckoutDeadline(attendanceMode, dayKey, officeTime, wfhTime) {
-  if (attendanceMode === 'wfh') {
+export function computeAutoCheckoutDeadline(attendanceMode, dayKey, cfg) {
+  const config = cfg || {};
+  const day = config.day ?? (attendanceMode === 'wfh' ? 'next' : 'same');
+  const time = config.time ?? (attendanceMode === 'wfh' ? DEFAULT_WFH_TIME : DEFAULT_OFFICE_TIME);
+  if (day === 'next') {
     const nextKey = nextISTDayKey(dayKey);
     if (!nextKey) return null;
-    return buildISTTimestampFromDayAndTime(nextKey, wfhTime ?? DEFAULT_WFH_TIME);
+    return buildISTTimestampFromDayAndTime(nextKey, time);
   }
-  return buildISTTimestampFromDayAndTime(dayKey, officeTime ?? DEFAULT_OFFICE_TIME);
+  return buildISTTimestampFromDayAndTime(dayKey, time);
 }
 
 export async function runAutoCheckoutJob(now = new Date()) {
@@ -45,8 +48,8 @@ export async function runAutoCheckoutJob(now = new Date()) {
     if (!enabled) {
       return { processed: 0, skipped: true, reason: 'disabled' };
     }
-    const officeTime = autoCheckout.officeTime ?? DEFAULT_OFFICE_TIME;
-    const wfhTime = autoCheckout.wfhTime ?? DEFAULT_WFH_TIME;
+    const officeCfg = autoCheckout.office;
+    const wfhCfg = autoCheckout.wfh;
 
     const scanStart = startOfDayIST(new Date(now.getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000));
     const scanEnd = endOfDayIST(now);
@@ -85,7 +88,7 @@ export async function runAutoCheckoutJob(now = new Date()) {
       if (checkedOutKeys.has(key) || seenKeys.has(key)) continue;
       seenKeys.add(key);
       const mode = checkIn.attendanceMode === 'wfh' ? 'wfh' : 'office';
-      const deadline = computeAutoCheckoutDeadline(mode, dayKey, officeTime, wfhTime);
+      const deadline = computeAutoCheckoutDeadline(mode, dayKey, mode === 'wfh' ? wfhCfg : officeCfg);
       if (!deadline) continue;
       if (now >= deadline) {
         pending.push({ checkIn, mode, deadline });

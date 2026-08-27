@@ -1,7 +1,6 @@
 # Dependencies
 node_modules/
 **/node_modules/
-
 # Environment / secrets
 .env
 .env.*
@@ -10,7 +9,6 @@ node_modules/
 server/.env
 client/.env
 client/.env.*
-
 # Build outputs
 dist/
 dist-ssr/
@@ -19,7 +17,6 @@ coverage/
 .aws-sam/
 lambda-package/
 samconfig.staging.toml
-
 # Logs & OS
 *.log
 npm-debug.log*
@@ -28,7 +25,6 @@ yarn-error.log*
 pnpm-debug.log*
 .DS_Store
 Thumbs.db
-
 # Editors / local tooling
 .cursor/
 .vscode/*
@@ -40,11 +36,15 @@ Thumbs.db
 *.sln
 *.sw?
 *.local
-
 # Local Lambda / debug dumps (not source)
 lambda-event.json
 lambda-invoke-out.json
 lambda-logs.json
-
 # Optional local plan scratch
 web_attendance_app_mvp.plan.md
+
+# managed
+**.data.json
+**.node-persist**
+**_IGNORE_**
+# end managed

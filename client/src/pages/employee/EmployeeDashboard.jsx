@@ -6,6 +6,7 @@ import LocationPanel from '../../components/LocationPanel.jsx';
 import MonthCalendar from '../../components/MonthCalendar.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { attendanceApi, getErrorMessage } from '../../services/api.js';
@@ -79,7 +80,8 @@ const OFFICE_GEO_REJECTION_FALLBACK =
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const { showToast, showSuccess, showError } = useToast();
+  const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
   const [today, setToday] = useState(null);
   const [office, setOffice] = useState(null);
   const [result, setResult] = useState(null);
@@ -198,19 +200,15 @@ export default function EmployeeDashboard() {
       setLateNoteOpen(false);
       setLateNoteText('');
       if (data.undoToken) {
-        showToast(
-          type === 'check_in'
-            ? 'Checked in. If done by mistake, click Undo below to revert it.'
-            : 'Checked out. If done by mistake, click Undo below to revert it.',
-          {
-            variant: 'success',
-            durationMs: 15000,
-            action: {
-              label: 'Undo',
-              onClick: () => performUndo(data.undoToken),
-            },
-          },
-        );
+        showActionPopup({
+          message:
+            type === 'check_in'
+              ? 'Checked in. If done by mistake, click Undo to revert it.'
+              : 'Checked out. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: () => performUndo(data.undoToken),
+          durationMs: 15000,
+        });
       } else {
         showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
       }

@@ -124,6 +124,8 @@ export const authApi = {
     api.post('/auth/change-password', payload).then((r) => r.data),
   setPin: (payload) =>
     api.post('/auth/set-pin', payload).then((r) => r.data),
+  deletePin: (payload) =>
+    api.post('/auth/delete-pin', payload).then((r) => r.data),
   forgotPassword: (email) =>
     api.post('/auth/forgot-password', { email }).then((r) => r.data),
   verifyResetToken: (token) =>
@@ -300,10 +302,14 @@ export const leaveApi = {
   getRequest: (id) => api.get(`/leave/requests/${id}`).then((r) => r.data),
   updateRequest: (id, payload) => api.put(`/leave/requests/${id}`, payload).then((r) => r.data),
   cancelRequest: (id) => api.post(`/leave/requests/${id}/cancel`).then((r) => r.data),
+  notify: (id) => api.post(`/leave/requests/${id}/notify`).then((r) => r.data),
+  withdrawSubmitted: (id) => api.post(`/leave/requests/${id}/withdraw`).then((r) => r.data),
   approveRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/approve`, payload).then((r) => r.data),
   rejectRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/reject`, payload).then((r) => r.data),
+  undoDecision: (id) =>
+    api.post(`/leave/requests/${id}/undo`).then((r) => r.data),
   getTeamCalendar: (params = {}) => api.get('/leave/team-calendar', { params }).then((r) => r.data),
   listHolidays: (params = {}) => api.get('/leave/holidays', { params }).then((r) => r.data),
   listHolidayCategories: () => api.get('/leave/holiday-categories').then((r) => r.data),

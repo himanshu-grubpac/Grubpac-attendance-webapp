@@ -55,6 +55,12 @@ export function csrfProtection(req, res, next) {
     return next();
   }
 
+  // Email one-click leave approve/reject: the single-use token in the link is the
+  // authorization (and the CSRF defense), so no session CSRF token is expected.
+  if (path === '/leave/decision-link') {
+    return next();
+  }
+
   const hasSession = Boolean(req.cookies?.attendance_token);
   if (!hasSession) {
     return next();

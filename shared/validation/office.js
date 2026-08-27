@@ -11,10 +11,15 @@ function timeToMinutes(value) {
   return hour * 60 + minute;
 }
 
+const autoCheckoutConfigSchema = z.object({
+  day: z.enum(['same', 'next']),
+  time: timeStringSchema,
+});
+
 export const autoCheckoutSchema = z.object({
   enabled: z.boolean().optional(),
-  officeTime: timeStringSchema.optional(),
-  wfhTime: timeStringSchema.optional(),
+  office: autoCheckoutConfigSchema.optional(),
+  wfh: autoCheckoutConfigSchema.optional(),
 });
 
 export const officeObjectSchema = z.object({

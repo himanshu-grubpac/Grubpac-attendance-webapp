@@ -580,15 +580,11 @@ export async function updateOfficeSettings(req, res) {
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
   // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
   if (parsed.autoCheckout) {
-    const existing = (settings && settings.autoCheckout) || {
-      enabled: true,
-      officeTime: '23:59',
-      wfhTime: '06:00',
-    };
+    const existing = (settings && settings.autoCheckout) || {};
     parsed.autoCheckout = {
       enabled: parsed.autoCheckout.enabled ?? existing.enabled ?? true,
-      officeTime: parsed.autoCheckout.officeTime ?? existing.officeTime ?? '23:59',
-      wfhTime: parsed.autoCheckout.wfhTime ?? existing.wfhTime ?? '06:00',
+      office: parsed.autoCheckout.office ?? existing.office ?? { day: 'same', time: '23:59' },
+      wfh: parsed.autoCheckout.wfh ?? existing.wfh ?? { day: 'next', time: '06:00' },
     };
   }
 

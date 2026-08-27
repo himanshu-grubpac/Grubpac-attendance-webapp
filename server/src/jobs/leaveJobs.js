@@ -1,4 +1,5 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
+import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob } from '../services/leaveService.js';
 import { User } from '../models/User.js';
 import { getISTYear } from '../utils/istDate.js';
 
@@ -24,3 +25,32 @@ export async function runMonthlyAccrualJob(asOfDate = new Date()) {
 }
 
 export { applyYearEndCarryForward as runYearEndCarryForwardJob } from '../services/leaveBalanceService.js';
+
+/**
+ * Sweeps leave decisions whose undo window has elapsed and sends the deferred
+ * email/SMS to the applicant. Decisions that are undone before the window
+ * expires never reach this stage, so no mail/SMS is sent for them.
+ */
+let leaveDecisionNotifyRunning = false;
+
+export async function runLeaveDecisionNotifyJob(now = new Date()) {
+  if (leaveDecisionNotifyRunning) {
+    return { skipped: true, reason: 'already_running' };
+  }
+  leaveDecisionNotifyRunning = true;
+  try {
+    return await leaveServiceRunLeaveDecisionNotifyJob(now);
+  } finally {
+    leaveDecisionNotifyRunning = false;
+  }
+}
+
+export function startLeaveDecisionNotifyScheduler(intervalMs = 30 * 1000) {
+  const run = () => {
+    runLeaveDecisionNotifyJob().catch((err) => {
+      console.error('[leave] deferred decision notify job failed', err?.message);
+    });
+  };
+  run();
+  return setInterval(run, intervalMs);
+}

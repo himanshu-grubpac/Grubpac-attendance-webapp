@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { formatISTDate } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 
 export default function EmployeeMyLeaveRequests() {
   const navigate = useNavigate();
+  const { showSuccess } = useToast();
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -32,8 +34,17 @@ export default function EmployeeMyLeaveRequests() {
     loadRequests(page);
   }, [page]);
 
-  function handleUndo(id) {
-    navigate(`/employee/leave/apply?edit=${id}`);
+  async function handleCancel(id) {
+    if (!window.confirm('Cancel this leave request? It will be removed.')) {
+      return;
+    }
+    try {
+      await leaveApi.cancelRequest(id);
+      showSuccess('Leave request cancelled.');
+      loadRequests(page);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   }
 
   return (
@@ -84,8 +95,8 @@ export default function EmployeeMyLeaveRequests() {
                       </td>
                       <td data-label="Action" className="cell-actions">
                         {item.status === 'pending' && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleUndo(item.id)}>
-                            Undo
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item.id)}>
+                            Cancel
                           </button>
                         )}
                       </td>

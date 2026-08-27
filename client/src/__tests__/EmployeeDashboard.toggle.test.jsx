@@ -94,14 +94,17 @@ vi.mock('../services/api.js', () => {
 import EmployeeDashboard from '../pages/employee/EmployeeDashboard.jsx';
 import { AuthProvider } from '../context/AuthContext.jsx';
 import { ToastProvider } from '../context/ToastContext.jsx';
+import { ActionPopupProvider } from '../context/ActionPopupContext.jsx';
 
 function renderDashboard() {
   return render(
     <MemoryRouter>
       <ToastProvider>
+        <ActionPopupProvider>
         <AuthProvider>
           <EmployeeDashboard />
         </AuthProvider>
+        </ActionPopupProvider>
       </ToastProvider>
     </MemoryRouter>,
   );

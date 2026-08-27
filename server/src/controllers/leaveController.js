@@ -49,7 +49,12 @@ import {
   cancelLeaveRequest,
   createLeaveRequest,
   decideLeaveRequest,
+  decideLeaveRequestByToken,
+  undoLeaveDecision,
   editLeaveRequest,
+  dispatchSubmitNotifications,
+  undoSubmittedLeaveRequest,
+  peekLeaveDecisionToken,
   getTeamCalendar,
   listLeaveRequests,
   loadLeaveRequest,
@@ -231,6 +236,16 @@ export async function editLeaveRequestHandler(req, res) {
   res.json({ request });
 }
 
+export async function notifyLeaveRequestHandler(req, res) {
+  await dispatchSubmitNotifications(req.params.id);
+  res.json({ ok: true });
+}
+
+export async function undoSubmittedLeaveRequestHandler(req, res) {
+  const request = await undoSubmittedLeaveRequest(req.params.id, req.user);
+  res.json({ request });
+}
+
 export async function approveLeaveRequestHandler(req, res) {
   const parsed = leaveDecisionSchema.parse(req.body ?? {});
   const request = await decideLeaveRequest(
@@ -254,7 +269,96 @@ export async function rejectLeaveRequestHandler(req, res) {
   );
   res.json({ request });
 }
+export async function undoLeaveDecisionHandler(req, res) {
+  const request = await undoLeaveDecision(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
 
+function decisionLinkHtml(success, message) {
+  const color = success ? '#16a34a' : '#dc2626';
+  const title = success ? 'Action complete' : 'Unable to process';
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:40px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:32px 24px;">
+            <h1 style="margin:0 0 12px;font-size:20px;color:${color};">${title}</h1>
+            <p style="margin:0;font-size:15px;line-height:1.5;">${message}</p>
+            <p style="margin:20px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">You can close this tab. If the request was approved or rejected, the employee has been notified by email and SMS.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function decisionConfirmHtml(action, token, requestId) {
+  const verb = action === 'approve' ? 'APPROVE' : 'REJECT';
+  const color = action === 'approve' ? '#16a34a' : '#dc2626';
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:40px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:32px 24px;">
+            <h1 style="margin:0 0 12px;font-size:20px;color:${color};">Confirm: ${verb} leave request</h1>
+            <p style="margin:0 0 20px;font-size:15px;line-height:1.5;">You opened this link from your email. Confirm to ${action} the leave request. This action cannot be undone from this page.</p>
+            <form method="POST" action="/api/leave/decision-link">
+              <input type="hidden" name="request" value="${requestId}" />
+              <input type="hidden" name="action" value="${action}" />
+              <input type="hidden" name="token" value="${token}" />
+              <button type="submit" style="display:inline-block;background:${color};color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border:0;border-radius:8px;cursor:pointer;">Confirm ${verb}</button>
+            </form>
+            <p style="margin:20px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">If you did not expect this, simply close the tab. Nothing has been changed yet.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export async function leaveDecisionLinkPageHandler(req, res) {
+  const { request, action, token } = req.query;
+  if (!request || !action || !token || (action !== 'approve' && action !== 'reject')) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
+  }
+  const peek = await peekLeaveDecisionToken(request, action, token);
+  if (!peek) {
+    return res.status(410).type('html').send(decisionLinkHtml(false, 'This link is invalid, has already been used, or has expired.'));
+  }
+  if (peek.status !== 'pending') {
+    return res.status(409).type('html').send(decisionLinkHtml(false, 'This leave request has already been decided.'));
+  }
+  return res.status(200).type('html').send(decisionConfirmHtml(action, token, request));
+}
+
+export async function leaveDecisionLinkHandler(req, res) {
+  const { request, action, token } = req.body ?? {};
+  if (!request || !action || !token || (action !== 'approve' && action !== 'reject')) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
+  }
+  try {
+    const { manager } = await decideLeaveRequestByToken(request, action, token);
+    const verb = action === 'approve' ? 'approved' : 'rejected';
+    const by = manager && manager.name ? ` by ${manager.name}` : '';
+    return res.status(200).type('html').send(decisionLinkHtml(true, `Leave request ${verb} successfully${by}.`));
+  } catch (e) {
+    return res.status(e.statusCode || 500).type('html').send(decisionLinkHtml(false, e.message || 'Something went wrong.'));
+  }
+}
 export async function getTeamCalendarHandler(req, res) {
   const parsed = teamCalendarQuerySchema.parse(req.query);
   const result = await getTeamCalendar(req.user, req.userPermissions, parsed);

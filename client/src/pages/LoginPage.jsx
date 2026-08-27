@@ -129,14 +129,14 @@ export default function LoginPage() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 autoComplete="username"
-                placeholder="Enter your email, employee id or mobile"
+                placeholder="e.g. employee@example.com, EMP01234, +919812345678"
                 maxLength={254}
                 enterKeyHint="next"
               />
               <FieldError message={fieldErrors.identifier} />
             </label>
             <label>
-              Password
+              Password or PIN
               <PasswordInput
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

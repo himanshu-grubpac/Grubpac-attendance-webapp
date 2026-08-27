@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
     mobile: { type: String, required: true, unique: true, trim: true },
+    /** Whether the user has opted in to receive WhatsApp notifications. */
+    whatsappOptIn: { type: Boolean, default: false },
+    /** When the user opted in to WhatsApp notifications (null if not opted in). */
+    whatsappOptInAt: { type: Date, default: null },
     employeeCode: { type: String, trim: true, sparse: true, unique: true },
     /** @deprecated Use departmentId — kept for migration and bulk import compat. */
     department: { type: String, trim: true },

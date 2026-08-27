@@ -40,7 +40,7 @@ const DURATION_OPTIONS = [
 ];
 
 export default function EmployeeApplyLeave() {
-  const { showSuccess } = useToast();
+  const { showToast, showSuccess } = useToast();
   const [types, setTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [balances, setBalances] = useState([]);
@@ -49,6 +49,8 @@ export default function EmployeeApplyLeave() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [lastSubmit, setLastSubmit] = useState(null);
+  const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const editId = searchParams.get('edit');
@@ -158,20 +160,22 @@ export default function EmployeeApplyLeave() {
       const response = isEditing
         ? await leaveApi.updateRequest(editId, validation.data)
         : await leaveApi.createRequest(validation.data);
-      const approvedImmediately = response?.request?.status === 'approved';
-      showSuccess(
-        isEditing
-          ? 'Leave request updated.'
-          : approvedImmediately
-            ? 'Sick leave approved.'
-            : 'Leave request submitted. Your manager will be notified.',
-      );
+      const req = response?.request ?? {};
+
       if (isEditing) {
+        showSuccess('Leave request updated.');
         navigate('/employee/leave/requests');
         return;
       }
+
+      setLastSubmit({ id: req.id, snapshot: { ...form } });
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
+      showToast('Leave request submitted.', {
+        variant: 'success',
+        durationMs: UNDO_WINDOW_MS,
+        action: { label: 'Undo', onClick: () => handleUndo(req.id) },
+      });
       const year = new Date().getFullYear();
       leaveApi
         .getMyBalances({ year })
@@ -181,6 +185,22 @@ export default function EmployeeApplyLeave() {
       setError(getErrorMessage(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleUndo(id) {
+    if (!id) return;
+    try {
+      await leaveApi.withdrawSubmitted(id);
+      if (lastSubmit) {
+        setForm(lastSubmit.snapshot);
+        setLastSubmit(null);
+      }
+      showToast('Request reverted. Edit and submit again when ready.', { variant: 'info' });
+    } catch (err) {
+      if (lastSubmit) setForm(lastSubmit.snapshot);
+      setLastSubmit(null);
+      showToast(getErrorMessage(err) || 'Could not undo the request.', { variant: 'error' });
     }
   }
 
@@ -364,6 +384,7 @@ export default function EmployeeApplyLeave() {
           </button>
         </div>
       </form>
+
     </div>
   );
 }

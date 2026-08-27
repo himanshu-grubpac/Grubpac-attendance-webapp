@@ -23,6 +23,7 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '2h',
   jwtCookieMaxAgeMs: Number(process.env.JWT_COOKIE_MAX_AGE_MS ?? 2 * 60 * 60 * 1000),
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
+  apiOrigin: process.env.API_ORIGIN ?? process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
   adminPin: process.env.ADMIN_PIN ?? '123456',
@@ -47,6 +48,27 @@ export const env = {
   },
   /** Lifetime of a password-reset magic link (default 5 minutes). */
   passwordResetExpiresMs: Number(process.env.PASSWORD_RESET_EXPIRES_MS ?? 5 * 60 * 1000),
+  /** Brevo API key - used for transactional SMS via Brevo. Distinct from the SMTP password. */
+  brevoApiKey: process.env.BREVO_API_KEY ?? '',
+  /** Sender ID for outgoing SMS (Brevo). Alphanumeric up to 11 chars, or a verified sender. */
+  smsSender: process.env.SMS_SENDER ?? 'GRUBPAC',
+  /** Country code prepended to local phone numbers lacking one (e.g. '91' for India). */
+  smsDefaultCountryCode: process.env.SMS_DEFAULT_COUNTRY_CODE ?? '91',
+  /**
+   * WhatsApp (open-wa / WhatsApp Web) integration. Sends from the app's own
+   * WhatsApp number via WhatsApp Web. OFF by default; only used when enabled AND
+   * the @open-wa/wa-automate package is installed AND the user has opted in.
+   */
+  whatsapp: {
+    enabled: bool(process.env.WHATSAPP_ENABLED ?? 'false'),
+    /** Persistent session name (folder) so the QR need only be scanned once. */
+    sessionName: process.env.WHATSAPP_SESSION_NAME ?? 'grubpac-wa',
+    /** Optional custom Chromium executable path (leave empty to use bundled). */
+    executablePath: process.env.WHATSAPP_CHROME_PATH ?? '',
+  },
+  /** TTL (ms) for single-use email action tokens used to approve/reject leave from email links. */
+  leaveDecisionTokenTtlMs: Number(process.env.LEAVE_DECISION_TOKEN_TTL_MS ?? 48 * 60 * 60 * 1000),
+
   defaultOffice: {
     name: process.env.DEFAULT_OFFICE_NAME ?? 'Grubpac Technologies - Jhandewalan Office',
     /** Jhandewalan, New Delhi — not Bangalore (legacy placeholder caused ~1740 km geofence misses). */
@@ -61,8 +83,14 @@ export const env = {
     warningsPerQuarter: Number(process.env.DEFAULT_WARNINGS_PER_QUARTER ?? 3),
     autoCheckout: {
       enabled: bool(process.env.AUTO_CHECKOUT_ENABLED ?? 'true'),
-      officeTime: process.env.AUTO_CHECKOUT_OFFICE_TIME ?? '23:59',
-      wfhTime: process.env.AUTO_CHECKOUT_WFH_TIME ?? '06:00',
+      office: {
+        day: process.env.AUTO_CHECKOUT_OFFICE_DAY ?? 'same',
+        time: process.env.AUTO_CHECKOUT_OFFICE_TIME ?? '23:59',
+      },
+      wfh: {
+        day: process.env.AUTO_CHECKOUT_WFH_DAY ?? 'next',
+        time: process.env.AUTO_CHECKOUT_WFH_TIME ?? '06:00',
+      },
     },
   },
 };

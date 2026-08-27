@@ -8,6 +8,7 @@ import {
   updateProfile,
   changePassword,
   setPin,
+  deletePin,
   applyAuthSession,
   clearAuthCookie,
 } from '../controllers/authController.js';
@@ -88,6 +89,16 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await setPin(req.user._id, req.body, getRequestAuditContext(req));
+    res.json(result);
+  }),
+);
+
+// Employee self-service PIN removal (employee only — enforced in controller).
+router.post(
+  '/delete-pin',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await deletePin(req.user._id, req.body, getRequestAuditContext(req));
     res.json(result);
   }),
 );

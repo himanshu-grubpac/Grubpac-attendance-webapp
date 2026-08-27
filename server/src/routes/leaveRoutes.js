@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, urlencoded } from 'express';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -7,6 +7,7 @@ import {
   adjustLeaveBalances,
   approveLeaveRequestHandler,
   cancelLeaveRequestHandler,
+  notifyLeaveRequestHandler,
   carryForwardHandler,
   createHoliday,
   createHolidayCategory,
@@ -14,6 +15,8 @@ import {
   createLeaveRequestHandler,
   createLeaveType,
   deleteHoliday,
+  leaveDecisionLinkHandler,
+  leaveDecisionLinkPageHandler,
   deleteHolidayCategory,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
@@ -32,6 +35,8 @@ import {
   previewCarryForwardHandler,
   previewLeaveRequestDays,
   rejectLeaveRequestHandler,
+  undoLeaveDecisionHandler,
+  undoSubmittedLeaveRequestHandler,
   runLeaveAccrualJobHandler,
   updateHoliday,
   updateHolidayCategory,
@@ -46,6 +51,12 @@ import {
 } from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
+
+// Public, token-protected approve/reject from email (no login required).
+// GET shows a confirmation page (safe against email scanners auto-clicking links).
+// POST performs the action.
+router.get('/decision-link', asyncHandler(leaveDecisionLinkPageHandler));
+router.post('/decision-link', urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
 
 router.use(authenticate);
 
@@ -142,6 +153,16 @@ router.post(
   asyncHandler(cancelLeaveRequestHandler),
 );
 router.post(
+  '/requests/:id/notify',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(notifyLeaveRequestHandler),
+);
+router.post(
+  '/requests/:id/withdraw',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(undoSubmittedLeaveRequestHandler),
+);
+router.post(
   '/requests/:id/approve',
   requirePermission(PERMISSIONS.LEAVE_APPROVE),
   asyncHandler(approveLeaveRequestHandler),
@@ -150,6 +171,11 @@ router.post(
   '/requests/:id/reject',
   requirePermission(PERMISSIONS.LEAVE_APPROVE),
   asyncHandler(rejectLeaveRequestHandler),
+);
+router.post(
+  '/requests/:id/undo',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(undoLeaveDecisionHandler),
 );
 
 router.get(

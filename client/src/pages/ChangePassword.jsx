@@ -32,6 +32,10 @@ export default function ChangePassword() {
   const [pinErrors, setPinErrors] = useState({});
   const [pinError, setPinError] = useState('');
   const [savingPin, setSavingPin] = useState(false);
+  const [deletingPin, setDeletingPin] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removeAuth, setRemoveAuth] = useState('');
+  const [removeError, setRemoveError] = useState('');
 
   // PIN setup is employee-only (admins manage PINs via the admin panel).
   const isEmployee = user?.role === 'employee';
@@ -94,6 +98,36 @@ export default function ChangePassword() {
       setPinError(getErrorMessage(err));
     } finally {
       setSavingPin(false);
+    }
+  }
+
+  function openRemovePin() {
+    setRemoveError('');
+    setRemoveAuth('');
+    setRemoveOpen(true);
+  }
+
+  function cancelRemovePin() {
+    setRemoveOpen(false);
+    setRemoveAuth('');
+    setRemoveError('');
+  }
+
+  async function handleRemovePin(event) {
+    event.preventDefault();
+    setDeletingPin(true);
+    setRemoveError('');
+    try {
+      const result = await authApi.deletePin({ currentPin: removeAuth });
+      setRemoveOpen(false);
+      setRemoveAuth('');
+      // Refresh the session user so the UI reflects the removed PIN state.
+      await refreshUser();
+      showSuccess(result.message || 'PIN removed successfully.');
+    } catch (err) {
+      setRemoveError(getErrorMessage(err));
+    } finally {
+      setDeletingPin(false);
     }
   }
 
@@ -161,13 +195,11 @@ export default function ChangePassword() {
             <form className="form-grid" onSubmit={handlePinSubmit}>
               <label>
                 {pinAuthLabel}
-                <input
-                  className="input"
-                  type="password"
-                  inputMode={hasPin ? 'numeric' : 'text'}
-                  autoComplete="current-password"
+                <PasswordInput
                   value={pinForm.auth}
                   onChange={(e) => setPinForm({ ...pinForm, auth: e.target.value })}
+                  autoComplete="current-password"
+                  inputMode={hasPin ? 'numeric' : 'text'}
                   maxLength={hasPin ? 4 : 128}
                   placeholder={hasPin ? '••••' : ''}
                 />
@@ -175,13 +207,11 @@ export default function ChangePassword() {
               </label>
               <label>
                 {pinLabel}
-                <input
-                  className="input"
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="new-password"
+                <PasswordInput
                   value={pinForm.pin}
                   onChange={(e) => setPinForm({ ...pinForm, pin: e.target.value })}
+                  autoComplete="new-password"
+                  inputMode="numeric"
                   maxLength={4}
                   placeholder="••••"
                 />
@@ -189,13 +219,11 @@ export default function ChangePassword() {
               </label>
               <label>
                 Re-enter security PIN
-                <input
-                  className="input"
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="new-password"
+                <PasswordInput
                   value={pinForm.confirmPin}
                   onChange={(e) => setPinForm({ ...pinForm, confirmPin: e.target.value })}
+                  autoComplete="new-password"
+                  inputMode="numeric"
                   maxLength={4}
                   placeholder="••••"
                 />
@@ -205,6 +233,16 @@ export default function ChangePassword() {
                 <button type="submit" className="btn btn-primary" disabled={savingPin}>
                   {savingPin ? 'Saving…' : pinButtonLabel}
                 </button>
+                {hasPin && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={openRemovePin}
+                    disabled={savingPin || deletingPin}
+                  >
+                    Remove saved PIN
+                  </button>
+                )}
               </div>
             </form>
           ) : (
@@ -215,6 +253,40 @@ export default function ChangePassword() {
           {pinError && (
             <div className="page-alerts alert--inset">
               <div className="alert alert--error">{pinError}</div>
+            </div>
+          )}
+          {removeOpen && (
+            <div className="pin-remove">
+              <p className="card__section-hint">
+                Enter your current PIN to confirm removal. This will disable PIN sign-in.
+              </p>
+              <form className="form-grid" onSubmit={handleRemovePin}>
+                <label>
+                  Current PIN
+                  <PasswordInput
+                    value={removeAuth}
+                    onChange={(e) => setRemoveAuth(e.target.value)}
+                    autoComplete="current-password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="••••"
+                  />
+                  <FieldError message={removeError} />
+                </label>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-danger" disabled={deletingPin}>
+                    {deletingPin ? 'Removing…' : 'Confirm remove'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={cancelRemovePin}
+                    disabled={deletingPin}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
             </div>
           )}
         </div>
