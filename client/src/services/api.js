@@ -201,10 +201,12 @@ export const adminApi = {
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
+  getTeamTodayStatus: () => api.get('/admin/attendance/team-today').then((r) => r.data),
 };
 
 export const attendanceApi = {
   getToday: () => api.get('/attendance/today').then((r) => r.data),
+  getTeamToday: () => api.get('/attendance/team-today').then((r) => r.data),
   checkIn: (payload, lateNote) => {
     const { deviceId } = getDeviceFingerprint();
     return api

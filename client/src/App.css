@@ -5586,6 +5586,316 @@ body::-webkit-scrollbar-thumb {
   padding-left: 1.1rem;
 }
 
+/* ── Team status (dashboard) ─────────────────────────────────────────── */
+
+.dash-team-status__title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.dash-team-status__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.dash-team-status__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--interaction), box-shadow var(--interaction);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dash-team-status__item:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.dash-team-status__item--checked_in {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.dash-team-status__item--on_leave {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+}
+
+.dash-team-status__item--wfh {
+  border-color: color-mix(in srgb, #06b6d4 35%, var(--border));
+}
+
+.dash-team-status__item--not_checked_in {
+  border-color: var(--border);
+  opacity: 0.85;
+}
+
+.dash-team-status__avatar {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.dash-team-status__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-team-status__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-team-status__code {
+  margin-left: 0.35rem;
+}
+
+.dash-team-status__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  margin-top: 0.1rem;
+}
+
+.dash-team-status__status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dash-team-status__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.dash-team-status__badge--checked_in {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.dash-team-status__badge--on_leave {
+  background: var(--info-bg);
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+  color: var(--info);
+}
+
+.dash-team-status__badge--wfh {
+  background: color-mix(in srgb, #06b6d4 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #06b6d4 35%, var(--border));
+  color: #0891b2;
+}
+
+.dash-team-status__badge--not_checked_in {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.status-icon {
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+.dash-team-status__time {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.dash-team-status__leave-type {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.dash-team-status__pending-leave {
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+}
+
+/* Admin team status */
+.admin-home__team-status {
+  margin-top: var(--space-3);
+}
+
+.admin-home__team-status-title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.admin-home__team-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-2);
+}
+
+.admin-home__team-status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--interaction), box-shadow var(--interaction);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .admin-home__team-status-item:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.admin-home__team-status-item--checked_in {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.admin-home__team-status-item--on_leave {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+}
+
+.admin-home__team-status-item--wfh {
+  border-color: color-mix(in srgb, #06b6d4 35%, var(--border));
+}
+
+.admin-home__team-status-item--not_checked_in {
+  border-color: var(--border);
+  opacity: 0.85;
+}
+
+.admin-home__team-status-avatar {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.admin-home__team-status-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-home__team-status-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-home__team-status-code {
+  margin-left: 0.35rem;
+}
+
+.admin-home__team-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  margin-top: 0.1rem;
+}
+
+.admin-home__team-status-badge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.admin-home__team-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.admin-home__team-status-badge--checked_in {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.admin-home__team-status-badge--on_leave {
+  background: var(--info-bg);
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+  color: var(--info);
+}
+
+.admin-home__team-status-badge--wfh {
+  background: color-mix(in srgb, #06b6d4 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #06b6d4 35%, var(--border));
+  color: #0891b2;
+}
+
+.admin-home__team-status-badge--not_checked_in {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.admin-home__team-status-time {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.admin-home__team-status-leave-type {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.admin-home__team-status-pending-leave {
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+}
+
 .check-in-map {
   position: relative;
   z-index: 0;

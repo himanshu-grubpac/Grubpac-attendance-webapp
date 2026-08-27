@@ -99,6 +99,10 @@ export default function EmployeeDashboard() {
   const { getPosition, loading: geoLoading, error: geoError, position, sampleInfo } =
     useGeolocation();
 
+  const [teamStatus, setTeamStatus] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(true);
+  const [teamError, setTeamError] = useState('');
+
   useEscapeKey(lateNoteOpen && !actionLoading, () => setLateNoteOpen(false));
 
   useEffect(() => {
@@ -144,12 +148,26 @@ export default function EmployeeDashboard() {
     }
   }, []);
 
+  const loadTeamStatus = useCallback(async () => {
+    setTeamLoading(true);
+    setTeamError('');
+    try {
+      const data = await attendanceApi.getTeamToday();
+      setTeamStatus(data.teamStatus ?? []);
+    } catch (err) {
+      setTeamError(getErrorMessage(err));
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     refreshToday().catch((err) => setError(getErrorMessage(err)));
     loadQuarterWarnings();
+    loadTeamStatus();
     const timer = setInterval(() => setClock(getCurrentISTClock()), 1000);
     return () => clearInterval(timer);
-  }, [refreshToday, loadQuarterWarnings]);
+  }, [refreshToday, loadQuarterWarnings, loadTeamStatus]);
 
   useEffect(() => {
     loadCalendar(calendarMonth);
@@ -408,6 +426,84 @@ export default function EmployeeDashboard() {
               </Link>
             </div>
           </section>
+
+          {teamStatus.length > 0 && (
+            <section className="card dash-team-status" aria-label="Team status today">
+              <h3 className="dash-team-status__title">Team Status Today</h3>
+              {teamLoading && <p className="muted small">Loading team status…</p>}
+              {teamError && <div className="alert alert--error">{teamError}</div>}
+              {!teamLoading && !teamError && (
+                <div className="dash-team-status__grid">
+                  {teamStatus
+                    .filter((member) => member.userId !== (user?.id ?? user?._id))
+                    .map((member) => (
+                      <div
+                        key={member.userId}
+                        className={`dash-team-status__item dash-team-status__item--${member.status}`}
+                      >
+                        <div className="dash-team-status__avatar">
+                          {member.name?.charAt(0)?.toUpperCase() ?? '?'}
+                        </div>
+                        <div className="dash-team-status__info">
+                          <div className="dash-team-status__name">
+                            {member.firstName || member.name?.split(' ')[0] || 'Team Member'}
+                            {member.employeeCode && (
+                              <span className="dash-team-status__code muted small">({member.employeeCode})</span>
+                            )}
+                          </div>
+                          <div className="dash-team-status__meta muted small">
+                            {member.department && <span>{member.department}</span>}
+                            {member.department && member.role && <span>·</span>}
+                            {member.role && <span>{member.role}</span>}
+                          </div>
+                        </div>
+                        <div className="dash-team-status__status">
+                          <span
+                            className={`dash-team-status__badge dash-team-status__badge--${member.status}`}
+                          >
+                            {member.status === 'checked_in' && (
+                              <>
+                                <span className="status-icon" aria-hidden="true">●</span>
+                                {member.attendanceMode === 'wfh' ? 'WFH' : 'In Office'}
+                                {member.checkInTime && <span className="dash-team-status__time">since {member.checkInTime}</span>}
+                              </>
+                            )}
+                            {member.status === 'on_leave' && (
+                              <>
+                                <span className="status-icon" aria-hidden="true">○</span>
+                                On Leave
+                                {member.approvedLeave && (
+                                  <span className="dash-team-status__leave-type">
+                                    ({member.approvedLeave.leaveTypeCode})
+                                  </span>
+                                )}
+                              </>
+                            )}
+                            {member.status === 'wfh' && (
+                              <>
+                                <span className="status-icon" aria-hidden="true">⌂</span>
+                                WFH
+                              </>
+                            )}
+                            {member.status === 'not_checked_in' && (
+                              <>
+                                <span className="status-icon" aria-hidden="true">○</span>
+                                Not Checked In
+                              </>
+                            )}
+                          </span>
+                          {member.pendingLeave && (
+                            <span className="dash-team-status__pending-leave muted small">
+                              Pending: {member.pendingLeave.leaveTypeCode}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </section>
+          )}
 
           <AttendanceResultCard
             result={result}

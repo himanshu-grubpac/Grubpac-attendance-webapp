@@ -58,6 +58,9 @@ export default function AdminDashboard() {
   const [reports, setReports] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reportsError, setReportsError] = useState('');
+  const [teamStatus, setTeamStatus] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(true);
+  const [teamError, setTeamError] = useState('');
 
   useEffect(() => {
     setLoading(true);
@@ -70,6 +73,18 @@ export default function AdminDashboard() {
         setReportsError(getErrorMessage(err));
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    setTeamLoading(true);
+    setTeamError('');
+    adminApi
+      .getTeamTodayStatus()
+      .then((data) => setTeamStatus(data.teamStatus ?? []))
+      .catch((err) => {
+        setTeamError(getErrorMessage(err));
+      })
+      .finally(() => setTeamLoading(false));
   }, []);
 
   return (
@@ -113,6 +128,82 @@ export default function AdminDashboard() {
           })}
         </div>
       ) : null}
+
+      {teamStatus.length > 0 && (
+        <section className="card admin-home__team-status" aria-label="All employees status today">
+          <h3 className="admin-home__team-status-title">All Employees Status Today</h3>
+          {teamLoading && <p className="muted small">Loading team status…</p>}
+          {teamError && <div className="alert alert--error">{teamError}</div>}
+          {!teamLoading && !teamError && (
+            <div className="admin-home__team-status-grid">
+              {teamStatus.map((member) => (
+                <div
+                  key={member.userId}
+                  className={`admin-home__team-status-item admin-home__team-status-item--${member.status}`}
+                >
+                  <div className="admin-home__team-status-avatar">
+                    {member.name?.charAt(0)?.toUpperCase() ?? '?'}
+                  </div>
+                  <div className="admin-home__team-status-info">
+                    <div className="admin-home__team-status-name">
+                      {member.firstName || member.name?.split(' ')[0] || 'Employee'}
+                      {member.employeeCode && (
+                        <span className="admin-home__team-status-code muted small">({member.employeeCode})</span>
+                      )}
+                    </div>
+                    <div className="admin-home__team-status-meta muted small">
+                      {member.department && <span>{member.department}</span>}
+                      {member.department && member.role && <span>·</span>}
+                      {member.role && <span>{member.role}</span>}
+                    </div>
+                  </div>
+                  <div className="admin-home__team-status-badge-wrap">
+                    <span
+                      className={`admin-home__team-status-badge admin-home__team-status-badge--${member.status}`}
+                    >
+                      {member.status === 'checked_in' && (
+                        <>
+                          <span className="status-icon" aria-hidden="true">●</span>
+                          {member.attendanceMode === 'wfh' ? 'WFH' : 'In Office'}
+                          {member.checkInTime && <span className="admin-home__team-status-time">since {member.checkInTime}</span>}
+                        </>
+                      )}
+                      {member.status === 'on_leave' && (
+                        <>
+                          <span className="status-icon" aria-hidden="true">○</span>
+                          On Leave
+                          {member.approvedLeave && (
+                            <span className="admin-home__team-status-leave-type">
+                              ({member.approvedLeave.leaveTypeCode})
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {member.status === 'wfh' && (
+                        <>
+                          <span className="status-icon" aria-hidden="true">⌂</span>
+                          WFH
+                        </>
+                      )}
+                      {member.status === 'not_checked_in' && (
+                        <>
+                          <span className="status-icon" aria-hidden="true">○</span>
+                          Not Checked In
+                        </>
+                      )}
+                    </span>
+                    {member.pendingLeave && (
+                      <span className="admin-home__team-status-pending-leave muted small">
+                        Pending: {member.pendingLeave.leaveTypeCode}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

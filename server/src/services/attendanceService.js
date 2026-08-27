@@ -189,6 +189,160 @@ export async function getTodayStatus(userId) {
   return status;
 }
 
+export async function getTeamTodayStatusService(actor, permissions) {
+  const todayStart = startOfDayIST();
+  const todayEnd = endOfDayIST();
+  const todayKey = getISTDateInputValue();
+  const istToday = todayKey;
+
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+
+  let userIds = [];
+  if (canReadAll) {
+    const employees = await User.find({ isActive: true, role: { $ne: 'admin' } }).select('_id').lean();
+    userIds = employees.map((e) => e._id);
+  } else if (canReadTeam && actor?._id) {
+    const scopedIds = await resolveTeamScopedUserIds(
+      actor,
+      permissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
+    if (scopedIds === null) {
+      const employees = await User.find({ isActive: true, role: { $ne: 'admin' } }).select('_id').lean();
+      userIds = employees.map((e) => e._id);
+    } else {
+      userIds = scopedIds;
+    }
+  } else {
+    userIds = [actor._id];
+  }
+
+  if (userIds.length === 0) {
+    return [];
+  }
+
+  const office = await getOfficeSettings();
+
+  const [checkInRecords, pendingLeaveRequests, approvedLeaveRequests, wfhApprovedUsers] = await Promise.all([
+    AttendanceRecord.find({
+      userId: { $in: userIds },
+      type: 'check_in',
+      status: 'allowed',
+      timestamp: { $gte: todayStart, $lte: todayEnd },
+    }).select('userId attendanceMode attendanceTag timestamp').lean(),
+    LeaveRequest.find({
+      userId: { $in: userIds },
+      status: 'pending',
+      startDate: { $lte: parseDateInputAsISTDay(todayKey) },
+      endDate: { $gte: parseDateInputAsISTDay(todayKey) },
+    }).select('userId leaveTypeCode leaveTypeName startDate endDate halfDay').populate({ path: 'leaveTypeId', select: 'code name' }).lean(),
+    LeaveRequest.find({
+      userId: { $in: userIds },
+      status: 'approved',
+      startDate: { $lte: parseDateInputAsISTDay(todayKey) },
+      endDate: { $gte: parseDateInputAsISTDay(todayKey) },
+    }).select('userId leaveTypeCode leaveTypeName startDate endDate halfDay').populate({ path: 'leaveTypeId', select: 'code name' }).lean(),
+    Promise.all(
+      userIds.map(async (userId) => {
+        const approved = await hasApprovedWfhForIstDate(userId, istToday);
+        return { userId: userId.toString(), wfhApproved: approved };
+      })
+    ),
+  ]);
+
+  const checkInByUser = new Map();
+  for (const record of checkInRecords) {
+    if (!checkInByUser.has(record.userId.toString())) {
+      checkInByUser.set(record.userId.toString(), record);
+    }
+  }
+
+  const pendingLeaveByUser = new Map();
+  for (const req of pendingLeaveRequests) {
+    pendingLeaveByUser.set(req.userId.toString(), {
+      id: req._id.toString(),
+      leaveTypeCode: req.leaveTypeCode,
+      leaveTypeName: req.leaveTypeName,
+      startDate: req.startDate,
+      endDate: req.endDate,
+      halfDay: req.halfDay,
+    });
+  }
+
+  const approvedLeaveByUser = new Map();
+  for (const req of approvedLeaveRequests) {
+    approvedLeaveByUser.set(req.userId.toString(), {
+      id: req._id.toString(),
+      leaveTypeCode: req.leaveTypeCode,
+      leaveTypeName: req.leaveTypeName,
+      startDate: req.startDate,
+      endDate: req.endDate,
+      halfDay: req.halfDay,
+    });
+  }
+
+  const wfhApprovedMap = new Map();
+  for (const w of wfhApprovedUsers) {
+    wfhApprovedMap.set(w.userId, w.wfhApproved);
+  }
+
+  const users = await User.find({ _id: { $in: userIds }, isActive: true })
+    .select('firstName lastName name email employeeCode departmentId roleId')
+    .populate('departmentId', 'name code')
+    .populate('roleId', 'name slug')
+    .lean();
+
+  const teamStatus = users.map((user) => {
+    const userIdStr = user._id.toString();
+    const checkIn = checkInByUser.get(userIdStr) ?? null;
+    const pendingLeave = pendingLeaveByUser.get(userIdStr) ?? null;
+    const approvedLeave = approvedLeaveByUser.get(userIdStr) ?? null;
+    const wfhApproved = wfhApprovedMap.get(userIdStr) ?? false;
+
+    let status = 'not_checked_in';
+    let attendanceMode = 'office';
+    if (checkIn) {
+      status = 'checked_in';
+      attendanceMode = checkIn.attendanceMode ?? 'office';
+    } else if (wfhApproved) {
+      status = 'wfh';
+    } else if (approvedLeave) {
+      status = 'on_leave';
+    }
+
+    return {
+      userId: userIdStr,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      name: user.name,
+      email: user.email,
+      employeeCode: user.employeeCode,
+      department: user.departmentId?.name ?? null,
+      role: user.roleId?.slug ?? null,
+      status,
+      attendanceMode,
+      checkInTime: checkIn ? formatISTDateTime(checkIn.timestamp) : null,
+      attendanceTag: checkIn?.attendanceTag ?? null,
+      pendingLeave: pendingLeave ? {
+        id: pendingLeave.id,
+        leaveTypeCode: pendingLeave.leaveTypeCode,
+        leaveTypeName: pendingLeave.leaveTypeName,
+        halfDay: pendingLeave.halfDay,
+      } : null,
+      approvedLeave: approvedLeave ? {
+        id: approvedLeave.id,
+        leaveTypeCode: approvedLeave.leaveTypeCode,
+        leaveTypeName: approvedLeave.leaveTypeName,
+        halfDay: approvedLeave.halfDay,
+      } : null,
+    };
+  });
+
+  return teamStatus;
+}
+
 export async function markAttendance(userId, type, payload, auditContext = {}) {
   const session = await mongoose.startSession();
 

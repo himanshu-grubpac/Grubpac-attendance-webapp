@@ -7,6 +7,7 @@ import {
   bulkUploadEmployees,
   downloadEmployeeTemplate,
   getOfficeSettingsHandler,
+  getTeamTodayStatusAdmin,
   listAttendance,
   editAttendanceRecord,
   upsertAttendanceRecord,
@@ -187,6 +188,11 @@ router.get(
   '/reports/summary',
   requirePermission(PERMISSIONS.USERS_READ),
   asyncHandler(getReportsSummaryHandler),
+);
+router.get(
+  '/attendance/team-today',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(getTeamTodayStatusAdmin),
 );
 
 export default router;
