@@ -80,6 +80,14 @@ export const NAV_ITEMS = [
     anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
   },
   {
+    to: '/admin/attendance/today-present',
+    label: 'Today present',
+    icon: '●',
+    section: 'Employees',
+    portal: 'admin',
+    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+  },
+  {
     to: '/admin/audit-logs',
     label: 'Login Logs',
     icon: '⎈',

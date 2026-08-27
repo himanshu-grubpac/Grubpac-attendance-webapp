@@ -427,84 +427,6 @@ export default function EmployeeDashboard() {
             </div>
           </section>
 
-          {teamStatus.length > 0 && (
-            <section className="card dash-team-status" aria-label="Team status today">
-              <h3 className="dash-team-status__title">Team Status Today</h3>
-              {teamLoading && <p className="muted small">Loading team status…</p>}
-              {teamError && <div className="alert alert--error">{teamError}</div>}
-              {!teamLoading && !teamError && (
-                <div className="dash-team-status__grid">
-                  {teamStatus
-                    .filter((member) => member.userId !== (user?.id ?? user?._id))
-                    .map((member) => (
-                      <div
-                        key={member.userId}
-                        className={`dash-team-status__item dash-team-status__item--${member.status}`}
-                      >
-                        <div className="dash-team-status__avatar">
-                          {member.name?.charAt(0)?.toUpperCase() ?? '?'}
-                        </div>
-                        <div className="dash-team-status__info">
-                          <div className="dash-team-status__name">
-                            {member.firstName || member.name?.split(' ')[0] || 'Team Member'}
-                            {member.employeeCode && (
-                              <span className="dash-team-status__code muted small">({member.employeeCode})</span>
-                            )}
-                          </div>
-                          <div className="dash-team-status__meta muted small">
-                            {member.department && <span>{member.department}</span>}
-                            {member.department && member.role && <span>·</span>}
-                            {member.role && <span>{member.role}</span>}
-                          </div>
-                        </div>
-                        <div className="dash-team-status__status">
-                          <span
-                            className={`dash-team-status__badge dash-team-status__badge--${member.status}`}
-                          >
-                            {member.status === 'checked_in' && (
-                              <>
-                                <span className="status-icon" aria-hidden="true">●</span>
-                                {member.attendanceMode === 'wfh' ? 'WFH' : 'In Office'}
-                                {member.checkInTime && <span className="dash-team-status__time">since {member.checkInTime}</span>}
-                              </>
-                            )}
-                            {member.status === 'on_leave' && (
-                              <>
-                                <span className="status-icon" aria-hidden="true">○</span>
-                                On Leave
-                                {member.approvedLeave && (
-                                  <span className="dash-team-status__leave-type">
-                                    ({member.approvedLeave.leaveTypeCode})
-                                  </span>
-                                )}
-                              </>
-                            )}
-                            {member.status === 'wfh' && (
-                              <>
-                                <span className="status-icon" aria-hidden="true">⌂</span>
-                                WFH
-                              </>
-                            )}
-                            {member.status === 'not_checked_in' && (
-                              <>
-                                <span className="status-icon" aria-hidden="true">○</span>
-                                Not Checked In
-                              </>
-                            )}
-                          </span>
-                          {member.pendingLeave && (
-                            <span className="dash-team-status__pending-leave muted small">
-                              Pending: {member.pendingLeave.leaveTypeCode}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </section>
-          )}
-
           <AttendanceResultCard
             result={result}
             quarterAllowance={quarterWarnings?.allowance ?? 3}
@@ -530,6 +452,77 @@ export default function EmployeeDashboard() {
             onNext={() => setCalendarMonth((value) => nextISTMonthInput(value))}
             onToday={() => setCalendarMonth(getISTMonthInputValue())}
           />
+
+          <div className="dash-calendar-team" aria-label="Team attendance today">
+            <h3 className="dash-calendar-team__title">Team Attendance Today</h3>
+            {teamLoading && <p className="muted small">Loading team…</p>}
+            {teamError && <div className="alert alert--error">{teamError}</div>}
+            {!teamLoading && !teamError && (
+              <div className="dash-calendar-team__scroll">
+                <table className="dash-team-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Employee</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamStatus.length === 0 ? (
+                      <tr>
+                        <td colSpan={2} className="muted small dash-team-table__empty">
+                          No team members found.
+                        </td>
+                      </tr>
+                    ) : (
+                      teamStatus.map((member) => {
+                        const present =
+                          member.status === 'checked_in' || member.status === 'wfh';
+                        const statusDetail =
+                          member.status === 'checked_in'
+                            ? member.attendanceMode === 'wfh'
+                              ? 'WFH'
+                              : 'In Office'
+                            : member.status === 'wfh'
+                              ? 'WFH'
+                              : member.status === 'on_leave'
+                                ? 'On Leave'
+                                : 'Not Checked In';
+                        return (
+                          <tr key={member.userId}>
+                            <td className="dash-team-table__name">
+                              <span>
+                                {member.firstName ||
+                                  member.name?.split(' ')[0] ||
+                                  'Team Member'}
+                              </span>
+                              {member.roleName && (
+                                <span className="dash-team-table__code muted small">
+                                  {' '}
+                                  ({member.roleName})
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span
+                                className={`dash-team-table__badge dash-team-table__badge--${
+                                  present ? 'present' : 'absent'
+                                }`}
+                              >
+                                {present ? 'Present' : 'Absent'}
+                              </span>
+                              <span className="dash-team-table__detail muted small">
+                                {statusDetail}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 

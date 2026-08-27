@@ -5153,6 +5153,84 @@ body::-webkit-scrollbar-thumb {
   align-self: start;
 }
 
+.dash-calendar-team {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.dash-calendar-team__title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.dash-calendar-team__scroll {
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.dash-team-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.dash-team-table th,
+.dash-team-table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.dash-team-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground, var(--text-muted, #6b7280));
+  z-index: 1;
+}
+
+.dash-team-table__name {
+  font-weight: 500;
+}
+
+.dash-team-table__code {
+  font-weight: 400;
+}
+
+.dash-team-table__badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.dash-team-table__badge--present {
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+  color: var(--success, #15803d);
+}
+
+.dash-team-table__badge--absent {
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #b91c1c);
+}
+
+.dash-team-table__detail {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.dash-team-table__empty {
+  text-align: center;
+}
+
 .employee-history__quarter {
   margin: 0;
   padding: var(--space-3) var(--space-4) 0;
@@ -12954,3 +13032,109 @@ body::-webkit-scrollbar-thumb {
 
 .auto-checkout-summary { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
 .auto-checkout-summary span { background: #f1f5f9; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; }
+
+/* ── Admin: Today Present ── */
+.today-present-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.today-present-summary__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 12px);
+}
+
+.today-present-summary__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.today-present-summary__label {
+  font-size: 0.8rem;
+  color: var(--muted-foreground, #6b7280);
+}
+
+.today-present-summary__card--present .today-present-summary__value {
+  color: var(--success, #16a34a);
+}
+
+.today-present-summary__card--absent .today-present-summary__value {
+  color: var(--danger, #dc2626);
+}
+
+.today-present-summary__card--leave .today-present-summary__value {
+  color: var(--info, #2563eb);
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.today-present-search {
+  max-width: 18rem;
+}
+
+.today-present-table__col-num {
+  width: 2.5rem;
+}
+
+.today-present-table__employee {
+  font-weight: 500;
+}
+
+.today-present-table__code {
+  font-weight: 400;
+}
+
+.today-present-table__badge {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.today-present-table__badge--present {
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+  color: var(--success, #15803d);
+}
+
+.today-present-table__badge--absent {
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #b91c1c);
+}
+
+.today-present-table__time {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.today-present-table__empty {
+  text-align: center;
+}
+
+.employees-table-skeleton {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}

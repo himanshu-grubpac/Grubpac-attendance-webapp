@@ -1,11 +1,12 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { UndoAction } from '../models/UndoAction.js';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
+import { Role } from '../models/Role.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
 import {
   evaluateCheckInPolicy,
@@ -200,7 +201,7 @@ export async function getTeamTodayStatusService(actor, permissions) {
 
   let userIds = [];
   if (canReadAll) {
-    const employees = await User.find({ isActive: true, role: { $ne: 'admin' } }).select('_id').lean();
+    const employees = await User.find({ isActive: true }).select('_id').lean();
     userIds = employees.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
     const scopedIds = await resolveTeamScopedUserIds(
@@ -209,14 +210,49 @@ export async function getTeamTodayStatusService(actor, permissions) {
       PERMISSIONS.ATTENDANCE_READ_ALL,
       PERMISSIONS.ATTENDANCE_READ_TEAM,
     );
+    let baseIds;
     if (scopedIds === null) {
-      const employees = await User.find({ isActive: true, role: { $ne: 'admin' } }).select('_id').lean();
-      userIds = employees.map((e) => e._id);
+      baseIds = (await User.find({ isActive: true }).select('_id').lean()).map((e) => e._id);
     } else {
-      userIds = scopedIds;
+      baseIds = scopedIds;
     }
+    // Reporting managers also see the status of every reporting manager in the company
+    // (their own team is already covered above; this adds the other teams' managers only).
+    const managerIds = [];
+    const rmRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER })
+      .select('_id')
+      .lean();
+    if (rmRole) {
+      const rmUsers = await User.find({ isActive: true, roleId: rmRole._id })
+        .select('_id')
+        .lean();
+      managerIds.push(...rmUsers.map((u) => u._id));
+    }
+    const combined = new Set([
+      ...baseIds.map((id) => id.toString()),
+      ...managerIds.map((id) => id.toString()),
+    ]);
+    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id));
   } else {
-    userIds = [actor._id];
+    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
+    const managerId = actorDoc?.reportingManagerId ?? null;
+    let teamIds = [];
+    if (managerId) {
+      const teamMembers = await User.find({
+        reportingManagerId: managerId,
+        isActive: true,
+      })
+        .select('_id')
+        .lean();
+      teamIds = teamMembers.map((member) => member._id);
+    }
+    if (managerId && !teamIds.some((id) => id.toString() === String(managerId))) {
+      teamIds.push(managerId);
+    }
+    if (!teamIds.some((id) => id.toString() === String(actor._id))) {
+      teamIds.push(actor._id);
+    }
+    userIds = teamIds;
   }
 
   if (userIds.length === 0) {
@@ -321,6 +357,7 @@ export async function getTeamTodayStatusService(actor, permissions) {
       employeeCode: user.employeeCode,
       department: user.departmentId?.name ?? null,
       role: user.roleId?.slug ?? null,
+      roleName: user.roleId?.name ?? null,
       status,
       attendanceMode,
       checkInTime: checkIn ? formatISTDateTime(checkIn.timestamp) : null,
