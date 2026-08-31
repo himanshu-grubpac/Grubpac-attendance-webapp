@@ -21,7 +21,7 @@ router.use(authenticate, requireEmployeePortalAccess);
 
 router.get('/today', asyncHandler(getToday));
 router.post('/check-in', attendanceLimiter, idempotencyMiddleware, asyncHandler(checkIn));
-router.post('/check-out', attendanceLimiter, asyncHandler(checkOut));
+router.post('/check-out', attendanceLimiter, idempotencyMiddleware, asyncHandler(checkOut));
 router.get('/history', asyncHandler(getHistory));
 router.get('/quarter-warnings', asyncHandler(getMyQuarterWarnings));
 router.post('/undo', asyncHandler(undoAttendanceAction));

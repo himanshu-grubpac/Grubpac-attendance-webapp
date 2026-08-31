@@ -594,8 +594,11 @@ export async function updateOfficeSettings(req, res) {
       updatedBy: req.user._id,
     });
   } else {
-    Object.assign(settings, parsed, { updatedBy: req.user._id });
-    await settings.save();
+    await settings.updateOne(
+      { $set: { ...parsed, updatedBy: req.user._id } },
+      { runValidators: true },
+    );
+    settings = await OfficeSettings.findById(settings._id);
   }
 
   auditLog('office_settings_updated', {

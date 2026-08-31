@@ -49,6 +49,20 @@ function inferLoginPortal(user) {
   return 'employee';
 }
 
+/**
+ * When the app is opened via a deep link (e.g. the email "Take Action" link
+ * redirects to /admin/leave/approvals?…), the portal must follow the URL
+ * rather than the last stored login portal. Otherwise ProtectedRoute would
+ * bounce the user to the default route of the stale portal.
+ */
+function deepLinkPortal() {
+  if (typeof window === 'undefined') return null;
+  const { pathname } = window.location;
+  if (pathname.startsWith('/admin/')) return 'admin';
+  if (pathname.startsWith('/employee/')) return 'employee';
+  return null;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loginPortal, setLoginPortal] = useState(() => readStoredLoginPortal());
@@ -113,9 +127,10 @@ export function AuthProvider({ children }) {
           return;
         }
         const stored = readStoredLoginPortal();
-        const portal = stored ?? inferLoginPortal(currentUser);
+        const deep = deepLinkPortal();
+        const portal = deep ?? stored ?? inferLoginPortal(currentUser);
         setLoginPortal(portal);
-        if (!stored) storeLoginPortal(portal);
+        if (!stored || deep) storeLoginPortal(portal);
       })
       .catch(() => {
         if (!cancelled) {

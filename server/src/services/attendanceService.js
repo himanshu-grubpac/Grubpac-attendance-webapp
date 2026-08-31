@@ -33,6 +33,8 @@ import {
 import { auditLog } from '../utils/auditLog.js';
 import {
   hasApprovedWfhForIstDate,
+  hasPendingWfhForIstDate,
+  findWfhRequestForIstDate,
 } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 
@@ -43,9 +45,12 @@ function throwError(message, statusCode = 400) {
 }
 
 async function getTodayRecords(userId, session = null) {
+  const dayStart = startOfDayIST();
+  const dayEnd = endOfDayIST();
+
   const query = AttendanceRecord.find({
     userId,
-    timestamp: { $gte: startOfDayIST(), $lte: endOfDayIST() },
+    timestamp: { $gte: dayStart, $lte: dayEnd },
     status: 'allowed',
   }).sort({ timestamp: 1 });
 
@@ -53,7 +58,24 @@ async function getTodayRecords(userId, session = null) {
     query.session(session);
   }
 
-  return query;
+  const records = await query;
+
+  return filterSpilloverAutoCheckouts(records);
+}
+
+export function filterSpilloverAutoCheckouts(records) {
+  const checkIns = records.filter((r) => r.type === 'check_in');
+  if (checkIns.length === 0) {
+    return records.filter((r) => !r.autoCheckout);
+  }
+
+  const earliestCheckIn = checkIns[0].timestamp;
+  return records.filter((r) => {
+    if (r.autoCheckout && r.type === 'check_out' && r.timestamp < earliestCheckIn) {
+      return false;
+    }
+    return true;
+  });
 }
 
 async function loadPendingLeaveForToday(userId) {
@@ -120,6 +142,7 @@ function buildTodayStatus(
   pendingLeaveToday = null,
   wfhApprovedToday = false,
   approvedLeaveToday = null,
+  wfhPendingToday = false,
 ) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
@@ -132,6 +155,7 @@ function buildTodayStatus(
     pendingLeaveToday,
     approvedLeaveToday,
     wfhApprovedToday,
+    wfhPendingToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
     office: {
@@ -171,12 +195,13 @@ async function getUndoAvailability(userId) {
 
 export async function getTodayStatus(userId) {
   const istToday = getISTDateInputValue();
-  const [records, office, pendingLeaveToday, wfhApprovedToday, approvedLeaveToday] = await Promise.all([
+  const [records, office, pendingLeaveToday, wfhApprovedToday, approvedLeaveToday, wfhPendingToday] = await Promise.all([
     getTodayRecords(userId),
     getOfficeSettings(),
     loadPendingLeaveForToday(userId),
     hasApprovedWfhForIstDate(userId, istToday),
     loadApprovedLeaveForToday(userId),
+    hasPendingWfhForIstDate(userId, istToday),
   ]);
   const status = buildTodayStatus(
     records,
@@ -184,6 +209,7 @@ export async function getTodayStatus(userId) {
     pendingLeaveToday,
     wfhApprovedToday,
     approvedLeaveToday,
+    wfhPendingToday,
   );
   status.undo = await getUndoAvailability(userId);
   return status;
@@ -199,10 +225,12 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       const records = await getTodayRecords(userId, session);
       const istToday = getISTDateInputValue();
       let wfhApprovedToday = false;
+      let wfhPendingToday = false;
       let approvedLeaveToday = null;
       if (type === 'check_in') {
-        [wfhApprovedToday, approvedLeaveToday] = await Promise.all([
+        [wfhApprovedToday, wfhPendingToday, approvedLeaveToday] = await Promise.all([
           hasApprovedWfhForIstDate(userId, istToday),
+          hasPendingWfhForIstDate(userId, istToday),
           loadApprovedLeaveForToday(userId),
         ]);
       }
@@ -212,13 +240,14 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         null,
         wfhApprovedToday,
         approvedLeaveToday,
+        wfhPendingToday,
       );
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
       let attendanceMode;
       if (type === 'check_out' && existingCheckIn) {
         attendanceMode = existingCheckIn.attendanceMode ?? 'office';
       } else if (type === 'check_in') {
-        attendanceMode = wfhApprovedToday ? 'wfh' : 'office';
+        attendanceMode = wfhApprovedToday || wfhPendingToday ? 'wfh' : 'office';
       } else {
         attendanceMode = payload.attendanceMode ?? 'office';
       }
@@ -242,6 +271,20 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         if (!today.checkIn) {
           businessReasons.push('Check-in is required before check-out.');
         } else {
+          businessReasons.push('You have already checked out today.');
+        }
+      }
+      if (type === 'check_out' && today.checkIn && !today.checkOut) {
+        const dayStart = startOfDayIST();
+        const dayEnd = endOfDayIST();
+        const duplicateCheckOut = await AttendanceRecord.findOne({
+          userId,
+          type: 'check_out',
+          status: 'allowed',
+          attendanceMode: today.checkIn.attendanceMode ?? 'office',
+          timestamp: { $gte: today.checkIn.timestamp, $lte: dayEnd },
+        }).session(session);
+        if (duplicateCheckOut) {
           businessReasons.push('You have already checked out today.');
         }
       }
@@ -271,6 +314,10 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
             status,
             rejectionReasons,
             lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
+            leaveStatus:
+              type === 'check_in' && attendanceMode === 'wfh' && !wfhApprovedToday
+                ? 'pending'
+                : 'approved',
             ...policyFields,
           },
         ],
@@ -683,6 +730,7 @@ function snapshotAttendanceRecord(record) {
     type: record.type,
     timestamp: record.timestamp,
     attendanceMode: record.attendanceMode,
+    leaveStatus: record.leaveStatus ?? 'approved',
     attendanceTag: record.attendanceTag,
     warningIssued: record.warningIssued,
     quarterWarningIndex: record.quarterWarningIndex,
@@ -820,6 +868,7 @@ function serializeAdminAttendanceListRecord(record) {
     type: record.type,
     timestamp: record.timestamp,
     attendanceMode: record.attendanceMode,
+    leaveStatus: record.leaveStatus ?? 'approved',
     attendanceTag: record.attendanceTag,
     warningIssued: record.warningIssued,
     quarterWarningIndex: record.quarterWarningIndex,
@@ -833,17 +882,7 @@ function serializeAdminAttendanceListRecord(record) {
 }
 
 /** Synthetic geo fields for admin-created attendance (no live device location). */
-export function buildAdminSyntheticGeoFields(office) {
-  return {
-    latitude: office.latitude,
-    longitude: office.longitude,
-    accuracyMeters: 1,
-    distanceMeters: 0,
-    officeLatitude: office.latitude,
-    officeLongitude: office.longitude,
-    radiusMeters: office.radiusMeters,
-  };
-}
+export { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 
 /**
  * Returns a block reason when admins must not create attendance for dayKey, else null.

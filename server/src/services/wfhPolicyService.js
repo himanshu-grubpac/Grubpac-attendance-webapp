@@ -31,24 +31,41 @@ function resolveIstDay(dateInput) {
   return parseDateInputAsISTDay(getISTDateInputValue(dateInput ?? new Date()));
 }
 
-export async function hasApprovedWfhForIstDate(userId, dateInput) {
+/** Single WFH leave request covering the IST day for the given status(es). */
+async function findWfhForIstDate(userId, dateInput, status) {
   const istDay = resolveIstDay(dateInput);
   if (!istDay) {
-    return false;
+    return null;
   }
 
   const wfhType = await LeaveType.findOne({ code: WFH_LEAVE_TYPE_CODE, isActive: true }).select('_id');
   if (!wfhType) {
-    return false;
+    return null;
   }
 
-  const request = await LeaveRequest.findOne({
+  const statusFilter = Array.isArray(status) ? { $in: status } : status;
+  return LeaveRequest.findOne({
     userId,
     leaveTypeId: wfhType._id,
-    status: 'approved',
+    status: statusFilter,
     startDate: { $lte: istDay },
     endDate: { $gte: istDay },
-  }).select('_id');
+  })
+    .select('_id status startDate endDate')
+    .sort({ createdAt: -1 });
+}
 
+export async function hasApprovedWfhForIstDate(userId, dateInput) {
+  const request = await findWfhForIstDate(userId, dateInput, 'approved');
   return Boolean(request);
+}
+
+export async function hasPendingWfhForIstDate(userId, dateInput) {
+  const request = await findWfhForIstDate(userId, dateInput, 'pending');
+  return Boolean(request);
+}
+
+/** Any WFH request (pending or approved) covering the IST day. */
+export async function findWfhRequestForIstDate(userId, dateInput) {
+  return findWfhForIstDate(userId, dateInput, ['pending', 'approved']);
 }

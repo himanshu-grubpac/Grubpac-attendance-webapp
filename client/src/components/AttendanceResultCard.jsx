@@ -6,6 +6,8 @@ export default function AttendanceResultCard({ result, quarterAllowance = 3, pen
 
   const allowed = result.status === 'allowed';
   const record = result.record;
+  const pendingWfh =
+    record?.attendanceMode === 'wfh' && record?.leaveStatus === 'pending';
   const outcome =
     allowed && record?.type === 'check_in'
       ? formatCheckInOutcome(record, { allowance: quarterAllowance })
@@ -19,6 +21,11 @@ export default function AttendanceResultCard({ result, quarterAllowance = 3, pen
       {pendingLeaveFollowUp ? (
         <p className="result-card__pending-leave alert alert--warning alert--block">
           {pendingLeaveFollowUp}
+        </p>
+      ) : null}
+      {pendingWfh ? (
+        <p className="result-card__pending-leave alert alert--warning alert--block">
+          WFH approval pending — your check-in shows red until your manager approves the WFH request.
         </p>
       ) : null}
       {outcome ? (

@@ -155,14 +155,12 @@ export function renderLeaveManagerEmail({
   dateText,
   timeText,
   withActions,
-  approvalUrl,
-  rejectUrl,
+  actionUrl,
 }) {
   const subject = `Leave request applied: ${leaveTypeName}`;
   const actions = withActions
     ? `<p style="margin:0 0 20px;">
-         <a href="${approvalUrl}" style="display:inline-block;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border-radius:8px;margin-right:10px;">Approve</a>
-         <a href="${rejectUrl}" style="display:inline-block;background:#dc2626;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border-radius:8px;">Reject</a>
+         <a href="${actionUrl}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 24px;border-radius:8px;">Take Action &rarr;</a>
        </p>`
     : `<p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#6b7280;">This leave type is auto-approved, so no action is required from you.</p>`;
   const html = `<!doctype html>
@@ -178,7 +176,7 @@ export function renderLeaveManagerEmail({
             <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
             <p style="margin:0 0 20px;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
             ${actions}
-            <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">These links are secure, single-use, and expire automatically. If the buttons do not work, open the approvals page in the admin portal.</p>
+            <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">This link is secure, single-use, and expires automatically. If the button does not work, open the approvals page in the admin portal.</p>
           </td></tr>
           <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
         </table>
@@ -190,7 +188,7 @@ export function renderLeaveManagerEmail({
 Reason: ${reason || '—'}
 Date: ${dateText}
 Time: ${timeText}
-${withActions ? `Review/approve/reject here: ${approvalUrl}` : 'This leave type is auto-approved; no action required.'}`;
+${withActions ? `Take action here: ${actionUrl}` : 'This leave type is auto-approved; no action required.'}`;
   return { subject, html, text };
 }
 

@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import TimeField from './TimeField.jsx';
-
 const TYPE_OPTIONS = [
   { value: 'office', label: 'Office' },
   { value: 'wfh', label: 'WFH' },
@@ -29,6 +28,8 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
   const dialogRef = useRef(null);
   const firstFieldRef = useRef(null);
   const previouslyFocused = useRef(null);
+  const officeTimeRef = useRef(null);
+  const wfhTimeRef = useRef(null);
 
   useEscapeKey(open && !saving, () => handleClose());
 
@@ -74,20 +75,26 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
 
   function handleClose() {
     if (saving) return;
-    onClose(null);
+    onClose();
   }
 
   async function handleSubmit(e) {
-    e.preventDefault();
-    if (!enabled) {
-      setError('Enable auto-checkout before saving timings.');
-      return;
-    }
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    // The TimeField only commits on blur/period click; if the user types a
+    // time and clicks Save without blurring first, commit the pending input
+    // and use the committed value (React state would still be stale here).
+    const officeTime = officeTimeRef.current?.commit?.() ?? office.time;
+    const wfhTime = wfhTimeRef.current?.commit?.() ?? wfh.time;
     setSaving(true);
     setError('');
     try {
-      await onSave({ enabled, type, office, wfh });
-      onClose('saved');
+      const data = {
+        enabled,
+        office: { ...office, time: officeTime },
+        wfh: { ...wfh, time: wfhTime },
+      };
+      await onSave(data);
     } catch (err) {
       setError(err.message || 'Failed to save settings.');
       setSaving(false);
@@ -163,7 +170,7 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
 
                 <label className="modal__subfield">
                   Time
-                  <TimeField value={current.time} onChange={setCurrentTime} aria-label="Auto-checkout time" />
+                  <TimeField value={current.time} onChange={setCurrentTime} aria-label="Auto-checkout time" innerRef={type === 'wfh' ? wfhTimeRef : officeTimeRef} />
                 </label>
               </div>
             </div>
@@ -174,7 +181,7 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
             <button type="button" className="btn btn-ghost" onClick={handleClose} disabled={saving}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
+            <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={saving}>
               {saving ? 'Saving…' : 'Save timings'}
             </button>
           </div>

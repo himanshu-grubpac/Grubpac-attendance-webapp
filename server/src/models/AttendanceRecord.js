@@ -20,6 +20,16 @@ const attendanceRecordSchema = new mongoose.Schema(
       required: true,
       default: 'office',
     },
+    /**
+     * Approval state of the WFH leave covering this check-in, used to show the
+     * check-in in red until the manager approves the WFH request. Only relevant
+     * for allowed WFH check-ins; office check-ins keep the default.
+     */
+    leaveStatus: {
+      type: String,
+      enum: ['approved', 'pending'],
+      default: 'approved',
+    },
     timestamp: { type: Date, required: true, default: Date.now },
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true },

@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
 import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
@@ -9,8 +10,13 @@ import { getTodayMonthIst } from '../../components/MonthField.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
+import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 
 const APPROVALS_PAGE_SIZE = 20;
+
+// Mirrors the server undo window (LEAVE_DECISION_UNDO_MS). The applicant email
+// is only sent once this window expires, so the popup countdown must match.
+const DECISION_UNDO_MS = 15000;
 
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
 
@@ -229,6 +235,7 @@ async function fetchActiveEmployees() {
 }
 
 export default function AdminLeaveApprovals() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess, showError } = useToast();
   const { showActionPopup } = useActionPopup();
@@ -249,6 +256,8 @@ export default function AdminLeaveApprovals() {
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
   const [queueStatus, setQueueStatus] = useState('pending');
+
+  const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
 
   const employeeFilterRef = useRef(employeeFilter);
   const yearFilterRef = useRef(yearFilter);
@@ -347,6 +356,19 @@ export default function AdminLeaveApprovals() {
       .finally(() => setEmployeesLoading(false));
   }, []);
 
+  useEffect(() => {
+    const decision = searchParams.get('decision');
+    const requestId = searchParams.get('requestId');
+    if (decision === 'request' && requestId && requests.length > 0) {
+      const target = requests.find((r) => r.id === requestId);
+      if (target && target.status === 'pending') {
+        setDecisionModal({ open: true, item: target, comment: '' });
+        setExpandedIds((prev) => ({ ...prev, [requestId]: true }));
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, requests, setSearchParams]);
+
   function setCommentFor(id, value) {
     setComments((prev) => ({ ...prev, [id]: value }));
   }
@@ -387,50 +409,46 @@ export default function AdminLeaveApprovals() {
   }
 
   async function handleDecision(id, decision) {
-    const item = requests.find((request) => request.id === id);
-    const note = (comments[id] ?? '').trim();
+    const item = decisionModal.item || requests.find((r) => r.id === id);
+    const note = (decisionModal.comment || (comments[id] ?? '')).trim();
+    if (decision === 'reject' && !note) {
+      showError('A remark is required when rejecting a leave request.');
+      return;
+    }
     const payload = note ? { comment: note } : {};
 
     if (decision === 'reject') {
-      await requestConfirm({
-        title: 'Decline leave request?',
-        message: item
-          ? `Decline ${item.userName}'s request for ${leaveTypeLabel(item)} (${dateRangeLabel(item)}). The employee will be notified. This action cannot be reversed from this screen.`
-          : 'Decline this leave request? The employee will be notified. This action cannot be reversed from this screen.',
-        confirmLabel: 'Decline request',
-        variant: 'danger',
-        onConfirm: async () => {
-          setActingId(id);
-          setError('');
-          try {
-            await leaveApi.rejectRequest(id, payload);
-            showActionPopup({
-              message: 'Leave request declined. If done by mistake, click Undo to revert it.',
-              undoLabel: 'Undo',
-              onUndo: async () => {
-                try {
-                  await leaveApi.undoDecision(id);
-                  showSuccess('Leave decision undone.');
-                  await loadRequests({ nextPage: page });
-                } catch (err) {
-                  showError(getErrorMessage(err));
-                }
-              },
-              durationMs: 5 * 60 * 1000,
-            });
-            setComments((prev) => {
-              const next = { ...prev };
-              delete next[id];
-              return next;
-            });
-            await loadRequests({ nextPage: page });
-          } catch (err) {
-            showError(getErrorMessage(err));
-          } finally {
-            setActingId(null);
-          }
-        },
-      });
+      setActingId(id);
+      setError('');
+      try {
+        await leaveApi.rejectRequest(id, payload);
+        setDecisionModal({ open: false, item: null, comment: '' });
+        showActionPopup({
+          message: 'Leave request declined. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: async () => {
+            try {
+              await leaveApi.undoDecision(id);
+              showSuccess('Leave decision undone.');
+              await loadRequests({ nextPage: page });
+              setDecisionModal({ open: true, item: item, comment: note });
+            } catch (err) {
+              showError(getErrorMessage(err));
+            }
+          },
+          durationMs: DECISION_UNDO_MS,
+        });
+        setComments((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        await loadRequests({ nextPage: page });
+      } catch (err) {
+        showError(getErrorMessage(err));
+      } finally {
+        setActingId(null);
+      }
       return;
     }
 
@@ -438,6 +456,7 @@ export default function AdminLeaveApprovals() {
     setError('');
     try {
       await leaveApi.approveRequest(id, payload);
+      setDecisionModal({ open: false, item: null, comment: '' });
       showActionPopup({
         message: 'Leave request approved. If done by mistake, click Undo to revert it.',
         undoLabel: 'Undo',
@@ -446,11 +465,12 @@ export default function AdminLeaveApprovals() {
             await leaveApi.undoDecision(id);
             showSuccess('Leave decision undone.');
             await loadRequests({ nextPage: page });
+            setDecisionModal({ open: true, item: item, comment: note });
           } catch (err) {
             showError(getErrorMessage(err));
           }
         },
-        durationMs: 5 * 60 * 1000,
+        durationMs: DECISION_UNDO_MS,
       });
       setComments((prev) => {
         const next = { ...prev };
@@ -762,38 +782,16 @@ export default function AdminLeaveApprovals() {
                                 ) : null}
 
                                 {isPendingQueue ? (
-                                  <>
-                                    <label className="approval-row__comment field">
-                                      <span className="label">Approver comment (optional)</span>
-                                      <input
-                                        type="text"
-                                        value={comments[item.id] ?? ''}
-                                        onChange={(event) => setCommentFor(item.id, event.target.value)}
-                                        placeholder="Shared with the employee after your decision"
-                                        disabled={busy}
-                                        maxLength={500}
-                                      />
-                                    </label>
-
-                                    <div className="approval-row__actions">
-                                      <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        disabled={busy}
-                                        onClick={() => handleDecision(item.id, 'approve')}
-                                      >
-                                        {busy ? 'Submitting…' : 'Approve'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-danger"
-                                        disabled={busy}
-                                        onClick={() => handleDecision(item.id, 'reject')}
-                                      >
-                                        Decline
-                                      </button>
-                                    </div>
-                                  </>
+                                  <div className="approval-row__actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary"
+                                      disabled={busy}
+                                      onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
+                                    >
+                                      Take Action
+                                    </button>
+                                  </div>
                                 ) : null}
                               </div>
                             </td>
@@ -812,6 +810,18 @@ export default function AdminLeaveApprovals() {
       </section>
 
       {confirmDialog}
+
+      <LeaveDecisionModal
+        open={decisionModal.open}
+        item={decisionModal.item}
+        initialComment={decisionModal.comment}
+        busy={actingId === decisionModal.item?.id}
+        error={error}
+        onCommentChange={(value) => setDecisionModal((prev) => ({ ...prev, comment: value }))}
+        onApprove={() => handleDecision(decisionModal.item.id, 'approve')}
+        onReject={() => handleDecision(decisionModal.item.id, 'reject')}
+        onCancel={() => setDecisionModal({ open: false, item: null, comment: '' })}
+      />
     </div>
   );
 }

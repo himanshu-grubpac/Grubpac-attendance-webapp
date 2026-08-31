@@ -49,7 +49,6 @@ export default function EmployeeApplyLeave() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [lastSubmit, setLastSubmit] = useState(null);
   const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -168,13 +167,13 @@ export default function EmployeeApplyLeave() {
         return;
       }
 
-      setLastSubmit({ id: req.id, snapshot: { ...form } });
+      const snapshot = { ...form };
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
       showToast('Leave request submitted.', {
         variant: 'success',
         durationMs: UNDO_WINDOW_MS,
-        action: { label: 'Undo', onClick: () => handleUndo(req.id) },
+        action: { label: 'Undo', onClick: () => handleUndo(req.id, snapshot) },
       });
       const year = new Date().getFullYear();
       leaveApi
@@ -188,18 +187,16 @@ export default function EmployeeApplyLeave() {
     }
   }
 
-  async function handleUndo(id) {
+  async function handleUndo(id, snapshot) {
     if (!id) return;
     try {
       await leaveApi.withdrawSubmitted(id);
-      if (lastSubmit) {
-        setForm(lastSubmit.snapshot);
-        setLastSubmit(null);
+      if (snapshot) {
+        setForm(snapshot);
       }
       showToast('Request reverted. Edit and submit again when ready.', { variant: 'info' });
     } catch (err) {
-      if (lastSubmit) setForm(lastSubmit.snapshot);
-      setLastSubmit(null);
+      if (snapshot) setForm(snapshot);
       showToast(getErrorMessage(err) || 'Could not undo the request.', { variant: 'error' });
     }
   }

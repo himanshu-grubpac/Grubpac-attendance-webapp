@@ -309,15 +309,17 @@ export async function validateCombinedAccumulation(
   }
 }
 
-export async function reservePendingDays(userId, leaveTypeId, days, year = getISTYear()) {
-  const balance = await LeaveBalance.findOne({ userId, leaveTypeId, year });
+export async function reservePendingDays(userId, leaveTypeId, days, year = getISTYear(), session = null) {
+  const query = LeaveBalance.findOne({ userId, leaveTypeId, year });
+  if (session) query.session(session);
+  const balance = await query;
   if (!balance) {
     throwError('Leave balance not found for this year.');
   }
 
   // Overdrawn leave is allowed: pending may exceed remaining stock (negative available).
   balance.pending += days;
-  await balance.save();
+  await balance.save(session ? { session } : undefined);
   return balance;
 }
 
@@ -325,7 +327,10 @@ export async function releasePendingDays(userId, leaveTypeId, days, year = getIS
   const query = LeaveBalance.findOne({ userId, leaveTypeId, year });
   if (session) query.session(session);
   const balance = await query;
-  if (!balance) return null;
+  if (!balance) {
+    console.warn('[leave] releasePendingDays: balance not found', userId?.toString?.(), leaveTypeId?.toString?.(), year);
+    return null;
+  }
 
   balance.pending = Math.max(0, balance.pending - days);
   await balance.save(session ? { session } : undefined);
@@ -342,6 +347,20 @@ export async function approvePendingDays(userId, leaveTypeId, days, year = getIS
 
   balance.pending = Math.max(0, balance.pending - days);
   balance.used += days;
+  await balance.save(session ? { session } : undefined);
+  return balance;
+}
+
+export async function reverseApproval(userId, leaveTypeId, days, year = getISTYear(), session = null) {
+  const query = LeaveBalance.findOne({ userId, leaveTypeId, year });
+  if (session) query.session(session);
+  const balance = await query;
+  if (!balance) {
+    throwError('Leave balance not found for this year.');
+  }
+
+  balance.used = Math.max(0, balance.used - days);
+  balance.pending += days;
   await balance.save(session ? { session } : undefined);
   return balance;
 }

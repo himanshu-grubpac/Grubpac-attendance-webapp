@@ -3,6 +3,7 @@ import { PERMISSIONS } from '../../../shared/permissions.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
+import { leaveDecisionLimiter } from '../middleware/rateLimiters.js';
 import {
   adjustLeaveBalances,
   approveLeaveRequestHandler,
@@ -17,6 +18,7 @@ import {
   deleteHoliday,
   leaveDecisionLinkHandler,
   leaveDecisionLinkPageHandler,
+  leaveDecisionLoginHandler,
   deleteHolidayCategory,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
@@ -55,8 +57,10 @@ const router = Router();
 // Public, token-protected approve/reject from email (no login required).
 // GET shows a confirmation page (safe against email scanners auto-clicking links).
 // POST performs the action.
-router.get('/decision-link', asyncHandler(leaveDecisionLinkPageHandler));
-router.post('/decision-link', urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
+router.get('/decision-link', leaveDecisionLimiter, asyncHandler(leaveDecisionLinkPageHandler));
+router.post('/decision-link', leaveDecisionLimiter, urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
+// Auto-login: consumes the token, issues a JWT session, redirects to admin portal.
+router.get('/decision-login', leaveDecisionLimiter, asyncHandler(leaveDecisionLoginHandler));
 
 router.use(authenticate);
 

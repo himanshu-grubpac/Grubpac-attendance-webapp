@@ -68,6 +68,8 @@ export const env = {
   },
   /** TTL (ms) for single-use email action tokens used to approve/reject leave from email links. */
   leaveDecisionTokenTtlMs: Number(process.env.LEAVE_DECISION_TOKEN_TTL_MS ?? 48 * 60 * 60 * 1000),
+  /** Window (ms) during which an approve/reject leave decision can be undone before the applicant is emailed. */
+  leaveDecisionUndoMs: Number(process.env.LEAVE_DECISION_UNDO_MS ?? 15000),
 
   defaultOffice: {
     name: process.env.DEFAULT_OFFICE_NAME ?? 'Grubpac Technologies - Jhandewalan Office',

@@ -23,7 +23,7 @@ const leaveRequestSchema = new mongoose.Schema(
     decisionTokens: [
       {
         tokenHash: { type: String, required: true },
-        action: { type: String, enum: ['approve', 'reject'], required: true },
+        action: { type: String, enum: ['approve', 'reject', 'decide'], required: true },
         managerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         expiresAt: { type: Date, required: true },
         used: { type: Boolean, default: false },

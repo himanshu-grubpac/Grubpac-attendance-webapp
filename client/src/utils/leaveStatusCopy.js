@@ -96,9 +96,12 @@ export function buildTodayAttendanceModeLabel({
   checkIn,
 } = {}) {
   if (checkIn) {
-    return checkIn.attendanceMode === 'wfh'
-      ? 'Today: Work from home'
-      : 'Today: Office attendance';
+    if (checkIn.attendanceMode === 'wfh') {
+      return checkIn.leaveStatus === 'pending'
+        ? 'Today: Work from home (pending approval — shown in red until approved)'
+        : 'Today: Work from home (approved)';
+    }
+    return 'Today: Office attendance';
   }
   if (wfhApprovedToday) {
     return 'Today: Work from home (approved)';

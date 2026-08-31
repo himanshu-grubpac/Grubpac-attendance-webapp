@@ -1,7 +1,9 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
-import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob } from '../services/leaveService.js';
+import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob, recoverPendingSubmitNotifications } from '../services/leaveService.js';
 import { User } from '../models/User.js';
 import { getISTYear } from '../utils/istDate.js';
+import { logError } from '../utils/logger.js';
+import { acquireJobLock, releaseJobLock } from '../utils/jobLock.js';
 
 /**
  * Monthly leave accrual refresh for all active employees (current IST year).
@@ -31,24 +33,42 @@ export { applyYearEndCarryForward as runYearEndCarryForwardJob } from '../servic
  * email/SMS to the applicant. Decisions that are undone before the window
  * expires never reach this stage, so no mail/SMS is sent for them.
  */
-let leaveDecisionNotifyRunning = false;
-
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
-  if (leaveDecisionNotifyRunning) {
-    return { skipped: true, reason: 'already_running' };
+  const lock = await acquireJobLock('leave-decision-notify', { ttlMs: 120_000 });
+  if (!lock.acquired) {
+    return { skipped: true, reason: lock.reason };
   }
-  leaveDecisionNotifyRunning = true;
   try {
     return await leaveServiceRunLeaveDecisionNotifyJob(now);
   } finally {
-    leaveDecisionNotifyRunning = false;
+    await releaseJobLock('leave-decision-notify', lock.lockId);
+  }
+}
+
+/**
+ * Recover stale pending submit notifications (Lambda cold-start safe).
+ * Idempotent — safe to call multiple times.
+ */
+export async function recoverPendingSubmitNotificationsSafe() {
+  try {
+    return await recoverPendingSubmitNotifications();
+  } catch (err) {
+    logError('leave_submit_notification_recovery_failed', { error: err?.message });
+    return { recovered: 0 };
   }
 }
 
 export function startLeaveDecisionNotifyScheduler(intervalMs = 30 * 1000) {
+  if (process.env.NODE_ENV === 'test') return null;
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME) return null;
+
+  recoverPendingSubmitNotifications().catch((err) => {
+    logError('leave_submit_notification_recovery_failed', { error: err?.message });
+  });
+
   const run = () => {
     runLeaveDecisionNotifyJob().catch((err) => {
-      console.error('[leave] deferred decision notify job failed', err?.message);
+      logError('leave_deferred_decision_notify_job_failed', { error: err?.message });
     });
   };
   run();

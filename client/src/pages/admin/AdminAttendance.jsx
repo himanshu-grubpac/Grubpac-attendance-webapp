@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import TimeField, { isValidHHmmTime, normalizeHHmmTime } from '../../components/TimeField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import {
   IST_TIMEZONE,
   getISTDateInputValue,
+  formatISTDateTime,
 } from '../../utils/datetime.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 
@@ -30,9 +32,43 @@ const STATUS_LEGEND = [
   { code: 'LV', label: 'Leave', tone: 'info' },
   { code: 'OFC', label: 'Office', tone: 'office' },
   { code: 'WFH', label: 'WFH', tone: 'wfh' },
+  { code: 'WFH*', label: 'WFH pending approval (red)', tone: 'danger' },
   { code: 'W', label: 'Warning (late)', tone: 'warning' },
   { code: 'RJ', label: 'Rejected check-in', tone: 'danger' },
 ];
+
+/** Working-status filter options (leave codes from live leave types + work modes + presence). */
+const WORKING_STATUS_OPTIONS = [
+  { value: 'all', label: 'All Statuses' },
+  { value: 'office', label: 'Office' },
+  { value: 'wfh', label: 'WFH' },
+  { value: 'sl', label: 'SL (Sick Leave)' },
+  { value: 'cl', label: 'CL (Casual Leave)' },
+  { value: 'el', label: 'EL (Earned Leave)' },
+  { value: 'co', label: 'CO (Compensatory Off)' },
+  { value: 'rh', label: 'RH (Restricted Holiday)' },
+  { value: 'present', label: 'Present' },
+  { value: 'absent', label: 'Absent' },
+];
+
+const LEAVE_CODE_STATUS_KEYS = new Set(['sl', 'cl', 'el', 'co', 'rh']);
+
+/** Maps a classified day cell to a working-status filter key, or null if it has no status. */
+function cellStatusKey(cell) {
+  if (!cell) return null;
+  if (cell.kind === 'leave') {
+    const code = String(cell.leaveTypeCode ?? '').trim().toUpperCase();
+    if (code === 'WFH') return 'wfh';
+    if (LEAVE_CODE_STATUS_KEYS.has(code.toLowerCase())) return code.toLowerCase();
+    return 'absent';
+  }
+  if (cell.kind === 'present') {
+    return cell.modeTag === 'WFH' ? 'wfh' : 'office';
+  }
+  if (cell.kind === 'absent') return 'absent';
+  if (cell.kind === 'rejected') return 'absent';
+  return null;
+}
 
 const SUMMARY_CARDS = [
   { key: 'present', label: 'Total Present', tone: 'success', hintKey: 'presentHint' },
@@ -408,6 +444,14 @@ function employeeDesignation(employee) {
   return employee.designation || employee.departmentName || employee.department || null;
 }
 
+function employeeDepartmentId(employee) {
+  return employee.departmentId ?? employee.department?.id ?? null;
+}
+
+function employeeDepartmentName(employee) {
+  return employee.departmentName ?? employee.department?.name ?? employee.department ?? null;
+}
+
 function uniqueMonthsForWeek(dayKeys) {
   return [...new Set(dayKeys.map((key) => key.slice(0, 7)))];
 }
@@ -510,11 +554,14 @@ function classifyDayCell({
   if (allowedCheckIn) {
     const { statusTag, warningTag } = derivePolicyFromRecord(allowedCheckIn, policy);
     const editMeta = pickEditMetadata(allowedCheckIn);
+    const pendingWfh =
+      allowedCheckIn.attendanceMode === 'wfh' && allowedCheckIn.leaveStatus === 'pending';
     return {
       kind: 'present',
       statusTag,
       warningTag,
       modeTag: allowedCheckIn.attendanceMode === 'wfh' ? 'WFH' : 'OFC',
+      pendingWfh,
       checkInTime: formatCompactISTTime(allowedCheckIn.timestamp),
       checkOutTime: formatCompactISTTime(allowedCheckOut?.timestamp),
       lateNote: allowedCheckIn.lateNote ?? null,
@@ -645,6 +692,11 @@ function dayCellModifier(cell, dayKey, todayKey) {
     return dayKey === todayKey ? 'attendance-grid__day--today' : 'attendance-grid__day--empty';
   }
   if (cell.kind === 'present') {
+    if (cell.pendingWfh) {
+      return dayKey === todayKey
+        ? 'attendance-grid__day--today attendance-grid__day--present attendance-grid__day--pending-wfh'
+        : 'attendance-grid__day--present attendance-grid__day--pending-wfh';
+    }
     return dayKey === todayKey ? 'attendance-grid__day--today attendance-grid__day--present' : 'attendance-grid__day--present';
   }
   return '';
@@ -663,11 +715,15 @@ function dayCardModifiers(cell, dayKey, todayKey, isDaySelected) {
   } else if (cell.kind === 'rejected') {
     mods.push('attendance-day-card--rejected');
   } else if (cell.kind === 'present') {
-    mods.push(
-      cell.statusTag === 'HD' || cell.statusTag === 'LV'
-        ? 'attendance-day-card--half-day'
-        : 'attendance-day-card--present',
-    );
+    if (cell.pendingWfh) {
+      mods.push('attendance-day-card--pending-wfh');
+    } else {
+      mods.push(
+        cell.statusTag === 'HD' || cell.statusTag === 'LV'
+          ? 'attendance-day-card--half-day'
+          : 'attendance-day-card--present',
+      );
+    }
     if (cell.modeTag && cell.warningTag) mods.push('attendance-day-card--stacked');
   }
   if (dayKey === todayKey) mods.push('attendance-day-card--today');
@@ -828,8 +884,12 @@ function DayCell({ cell, cardClassName }) {
     ) : (
       <AttendanceStatusTag
         code={cell.statusTag}
-        tone={presentStatusTone(cell.statusTag)}
-        title={cellTitle ?? cell.statusTag}
+        tone={cell.pendingWfh ? 'danger' : presentStatusTone(cell.statusTag)}
+        title={
+          cell.pendingWfh
+            ? `${cellTitle ?? cell.statusTag} — WFH approval pending, shown in red until approved`
+            : (cellTitle ?? cell.statusTag)
+        }
       />
     );
 
@@ -840,8 +900,12 @@ function DayCell({ cell, cardClassName }) {
             cell.modeTag ? (
               <AttendanceStatusTag
                 code={cell.modeTag}
-                tone={modeTagTone(cell.modeTag)}
-                title={cellTitle ?? cell.modeTag}
+                tone={cell.pendingWfh ? 'danger' : modeTagTone(cell.modeTag)}
+                title={
+                  cell.pendingWfh
+                    ? 'WFH approval pending — shown in red until approved'
+                    : (cellTitle ?? cell.modeTag)
+                }
               />
             ) : null
           }
@@ -1113,6 +1177,7 @@ export default function AdminAttendance() {
   const [weekStart, setWeekStart] = useState(() => getWeekStartDayKey());
   const [selectedDayKey, setSelectedDayKey] = useState(() => getISTDateInputValue());
   const [employees, setEmployees] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [recordIndex, setRecordIndex] = useState(new Map());
   const [leaveEntries, setLeaveEntries] = useState([]);
   const [leaveTypeCodeById, setLeaveTypeCodeById] = useState(() => new Map());
@@ -1135,6 +1200,18 @@ export default function AdminAttendance() {
   const [editError, setEditError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deptFilter, setDeptFilter] = useState(null); // null = all, array = selected names, [] = none
+  const [statusFilter, setStatusFilter] = useState(null); // null = all, array = selected keys, [] = none
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterTriggerRef = useRef(null);
+  const filterPanelRef = useRef(null);
+  // History list (infinite scroll) state.
+  const [historyRecords, setHistoryRecords] = useState([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyError, setHistoryError] = useState('');
 
   const weekDays = useMemo(() => buildWeekDayKeys(weekStart), [weekStart]);
   const weekEnd = weekDays[6];
@@ -1157,7 +1234,7 @@ export default function AdminAttendance() {
       const dayKeys = buildWeekDayKeys(weekStart);
       const years = [...new Set(dayKeys.map((key) => key.slice(0, 4)))];
 
-      const [employeeList, officeResponse, warningResponse, confirmationResponse, weekRecords, leaveTypesResponse] =
+      const [employeeList, officeResponse, warningResponse, confirmationResponse, weekRecords, leaveTypesResponse, departmentResponse] =
         await Promise.all([
           fetchActiveEmployees(),
           adminApi.getOfficeSettings().catch(() => ({ settings: null })),
@@ -1165,9 +1242,11 @@ export default function AdminAttendance() {
           adminApi.listWeekConfirmations(weekStart).catch(() => ({ confirmations: [] })),
           fetchWeekRecords(weekStart),
           leaveApi.listTypes().catch(() => ({ types: [] })),
+          adminApi.listDepartments().catch(() => ({ departments: [] })),
         ]);
 
       setPolicy(resolvePolicy(officeResponse.settings));
+      setDepartments(departmentResponse.departments ?? []);
       setQuarterWarnings(warningResponse);
       const confirmationMap = {};
       for (const row of confirmationResponse.confirmations ?? []) {
@@ -1224,6 +1303,59 @@ export default function AdminAttendance() {
       setLoading(false);
     }
   }, [weekStart]);
+
+  // ── History list (infinite scroll) ──────────────────────────────────────
+  const loadHistoryPage = useCallback(async (nextPage) => {
+    if (nextPage < 1) return;
+    const isFirst = nextPage === 1;
+    if (isFirst) {
+      setHistoryLoading(true);
+    } else {
+      setHistoryLoadingMore(true);
+    }
+    setHistoryError('');
+    try {
+      const data = await adminApi.listAttendance({ weekStart, page: nextPage, limit: 20 });
+      const incoming = data.records ?? [];
+      setHistoryRecords((current) => {
+        const seen = new Set(current.map((record) => record.id ?? record._id));
+        return [...current, ...incoming.filter((record) => !seen.has(record.id ?? record._id))];
+      });
+      setHistoryPage(nextPage);
+      setHistoryTotalPages(data.pagination?.totalPages ?? 1);
+    } catch (err) {
+      setHistoryError(getErrorMessage(err));
+    } finally {
+      setHistoryLoading(false);
+      setHistoryLoadingMore(false);
+    }
+  }, [weekStart]);
+
+  useEffect(() => {
+    setHistoryRecords([]);
+    setHistoryPage(1);
+    setHistoryTotalPages(1);
+    setHistoryError('');
+    loadHistoryPage(1);
+  }, [loadHistoryPage]);
+
+  useEffect(() => {
+    // Reset pagination whenever filters change; keep the current week's first page.
+    setHistoryRecords([]);
+    setHistoryPage(1);
+    setHistoryTotalPages(1);
+    setHistoryError('');
+    loadHistoryPage(1);
+  }, [deptFilter, statusFilter, loadHistoryPage]);
+
+  function handleHistoryScroll(event) {
+    const el = event.currentTarget;
+    if (historyLoading || historyLoadingMore) return;
+    if (historyPage >= historyTotalPages) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      loadHistoryPage(historyPage + 1);
+    }
+  }
 
   useEffect(() => {
     loadWeek();
@@ -1301,6 +1433,117 @@ export default function AdminAttendance() {
     });
   }, [employees, weekDays, recordIndex, holidaySet, leaveEntries, leaveTypeCodeById, todayKey, policy]);
 
+  const departmentOptions = useMemo(() => {
+    const names = new Set();
+    for (const dept of departments) {
+      const name = dept.name ?? dept.departmentName;
+      if (name) names.add(name);
+    }
+    for (const employee of employees) {
+      const name = employeeDepartmentName(employee);
+      if (name) names.add(name);
+    }
+    const options = [...names].sort((a, b) => a.localeCompare(b));
+    return [
+      { value: 'all', label: 'All Departments' },
+      ...options.map((name) => ({ value: name, label: name })),
+    ];
+  }, [departments, employees]);
+
+  const allDeptNames = useMemo(
+    () => departmentOptions.filter((option) => option.value !== 'all').map((option) => option.value),
+    [departmentOptions],
+  );
+
+  const allStatusKeys = useMemo(
+    () => WORKING_STATUS_OPTIONS.filter((option) => option.value !== 'all').map((option) => option.value),
+    [],
+  );
+
+  const filteredGridRows = useMemo(() => {
+    return gridRows.filter(({ employee, cells }) => {
+      if (deptFilter !== null) {
+        if (deptFilter.length === 0) return false;
+        if (!deptFilter.includes(employeeDepartmentName(employee))) return false;
+      }
+      if (statusFilter !== null) {
+        if (statusFilter.length === 0) return false;
+        if (!cells.some((cell) => statusFilter.includes(cellStatusKey(cell)))) return false;
+      }
+      return true;
+    });
+  }, [gridRows, deptFilter, statusFilter]);
+
+  const activeFilterCount =
+    (deptFilter === null ? 0 : allDeptNames.length - deptFilter.length) +
+    (statusFilter === null ? 0 : allStatusKeys.length - statusFilter.length);
+
+  function isDeptChecked(name) {
+    return deptFilter === null || deptFilter.includes(name);
+  }
+
+  function isStatusChecked(key) {
+    return statusFilter === null || statusFilter.includes(key);
+  }
+
+  function toggleDept(name) {
+    setDeptFilter((current) => {
+      if (current === null) {
+        const next = allDeptNames.filter((item) => item !== name);
+        return next.length === 0 ? [] : next;
+      }
+      if (current.includes(name)) {
+        const next = current.filter((item) => item !== name);
+        return next.length === 0 ? [] : next;
+      }
+      const next = [...current, name];
+      return next.length === allDeptNames.length ? null : next;
+    });
+  }
+
+  function toggleStatus(key) {
+    setStatusFilter((current) => {
+      if (current === null) {
+        const next = allStatusKeys.filter((item) => item !== key);
+        return next.length === 0 ? [] : next;
+      }
+      if (current.includes(key)) {
+        const next = current.filter((item) => item !== key);
+        return next.length === 0 ? [] : next;
+      }
+      const next = [...current, key];
+      return next.length === allStatusKeys.length ? null : next;
+    });
+  }
+
+  function setAllDepts(selectAll) {
+    setDeptFilter(selectAll ? null : []);
+  }
+
+  function setAllStatuses(selectAll) {
+    setStatusFilter(selectAll ? null : []);
+  }
+
+  useEscapeKey(filterOpen, () => setFilterOpen(false));
+
+  useEffect(() => {
+    if (!filterOpen) return undefined;
+
+    function handlePointerDown(event) {
+      if (
+        filterTriggerRef.current?.contains(event.target) ||
+        filterPanelRef.current?.contains(event.target) ||
+        (event.target instanceof Element && event.target.closest('.select-field__panel'))
+      ) {
+        return;
+      }
+      setFilterOpen(false);
+    }
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [filterOpen]);
+
   const summary = useMemo(() => {
     let present = 0;
     let absent = 0;
@@ -1308,7 +1551,7 @@ export default function AdminAttendance() {
     let halfDay = 0;
     let workingSlots = 0;
 
-    for (const row of gridRows) {
+    for (const row of filteredGridRows) {
       for (const cell of row.cells) {
         if (cell.kind === 'weekend' || cell.kind === 'holiday' || cell.kind === 'future') continue;
         if (cell.kind === 'leave') continue;
@@ -1337,7 +1580,7 @@ export default function AdminAttendance() {
       lateHint: late > 0 ? 'Check-ins with warnings this week' : 'No late marks this week',
       halfDayHint: halfDay > 0 ? 'Per office half-day threshold' : 'No half-day marks this week',
     };
-  }, [gridRows]);
+  }, [filteredGridRows]);
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
   const statusOptions = useMemo(
@@ -1580,6 +1823,103 @@ export default function AdminAttendance() {
             >
               Current Week
             </button>
+            <div className="attendance-filter-popover-wrap">
+              <button
+                ref={filterTriggerRef}
+                type="button"
+                className={[
+                  'btn btn-ghost attendance-filter-trigger',
+                  activeFilterCount > 0 ? 'attendance-filter-trigger--active' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                aria-haspopup="dialog"
+                aria-expanded={filterOpen}
+                onClick={() => setFilterOpen((current) => !current)}
+              >
+                Filter
+                {activeFilterCount > 0 ? (
+                  <span className="attendance-filter-trigger__badge">{activeFilterCount}</span>
+                ) : null}
+              </button>
+              {filterOpen ? (
+                <div
+                  ref={filterPanelRef}
+                  className="attendance-filter-popover"
+                  role="dialog"
+                  aria-label="Attendance filters"
+                >
+                  <div className="attendance-filter-popover__group">
+                    <div className="attendance-filter-popover__group-head">
+                      <span className="attendance-filters__label">Department</span>
+                      <button
+                        type="button"
+                        className="attendance-filter-popover__select-all"
+                        onClick={() => setAllDepts(deptFilter !== null)}
+                      >
+                        {deptFilter === null ? 'Deselect all' : 'Select all'}
+                      </button>
+                    </div>
+                    <div className="attendance-filter-popover__options">
+                      {departmentOptions
+                        .filter((option) => option.value !== 'all')
+                        .map((option) => (
+                          <label
+                            key={option.value}
+                            className="attendance-filter-checkbox"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isDeptChecked(option.value)}
+                              onChange={() => toggleDept(option.value)}
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
+                  <div className="attendance-filter-popover__group">
+                    <div className="attendance-filter-popover__group-head">
+                      <span className="attendance-filters__label">Working Status</span>
+                      <button
+                        type="button"
+                        className="attendance-filter-popover__select-all"
+                        onClick={() => setAllStatuses(statusFilter !== null)}
+                      >
+                        {statusFilter === null ? 'Deselect all' : 'Select all'}
+                      </button>
+                    </div>
+                    <div className="attendance-filter-popover__options">
+                      {WORKING_STATUS_OPTIONS.filter((option) => option.value !== 'all').map((option) => (
+                        <label
+                          key={option.value}
+                          className="attendance-filter-checkbox"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isStatusChecked(option.value)}
+                            onChange={() => toggleStatus(option.value)}
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  {activeFilterCount > 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm attendance-filter-popover__clear"
+                      onClick={() => {
+                        setDeptFilter(null);
+                        setStatusFilter(null);
+                      }}
+                    >
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
         <div className="attendance-week-toolbar__days" role="group" aria-label="Week days">
@@ -1621,12 +1961,12 @@ export default function AdminAttendance() {
       >
         {loading ? (
           <GridSkeleton />
-        ) : gridRows.length === 0 ? (
+        ) : filteredGridRows.length === 0 ? (
           <div className="attendance-grid-empty">
             <EmptyState
               icon={EMPTY_ICONS.calendar}
-              title="No employees to display"
-              description="Register active employees to view attendance."
+              title="No employees match the filters"
+              description="Adjust the department or working status filters to see more."
             />
           </div>
         ) : (
@@ -1680,7 +2020,7 @@ export default function AdminAttendance() {
                 </tr>
               </thead>
               <tbody>
-                {gridRows.map(({ employee, cells, rejectedCount }, rowIndex) => {
+                {filteredGridRows.map(({ employee, cells, rejectedCount }, rowIndex) => {
                   const id = employee.id;
                   const confirmation = weekConfirmations[String(id)];
                   const isConfirming = confirmingUserId === id;
@@ -1794,6 +2134,101 @@ export default function AdminAttendance() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+      </section>
+
+      <section
+        className="attendance-history-panel card card--table"
+        aria-label="Attendance history list"
+      >
+        <div className="attendance-history-panel__header">
+          <h2 className="card__section-title">Attendance History</h2>
+          <span className="muted small">
+            Scroll to load more · Week of {formatWeekRangeLabel(weekStart, weekEnd)}
+          </span>
+        </div>
+        {historyError ? <div className="alert alert--error">{historyError}</div> : null}
+        {historyLoading ? (
+          <GridSkeleton />
+        ) : historyRecords.length === 0 ? (
+          <div className="attendance-grid-empty">
+            <EmptyState
+              icon={EMPTY_ICONS.calendar}
+              title="No attendance records for this week"
+              description={
+                deptFilter !== 'all' || statusFilter !== 'all'
+                  ? 'Adjust the filters to see more records.'
+                  : 'Employees have not checked in during this week.'
+              }
+            />
+          </div>
+        ) : (
+          <div
+            className="attendance-history-scroll table-wrap"
+            onScroll={handleHistoryScroll}
+          >
+            <table className="attendance-history">
+              <thead>
+                <tr>
+                  <th scope="col">Employee</th>
+                  <th scope="col">Department</th>
+                  <th scope="col">Date (IST)</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Mode</th>
+                  <th scope="col">Time (IST)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRecords.map((record) => {
+                  const user = record.userId;
+                  const userName =
+                    (typeof user === 'object' && user ? user.name : null) ?? 'Unknown';
+                  const userDept =
+                    (typeof user === 'object' && user
+                      ? user.departmentName ?? user.department ?? null
+                      : null) ?? '—';
+                  return (
+                    <tr key={record.id ?? record._id}>
+                      <td data-label="Employee">{userName}</td>
+                      <td data-label="Department">{userDept}</td>
+                      <td data-label="Date (IST)">{toIstDayKey(record.timestamp) ?? '—'}</td>
+                      <td data-label="Type">
+                        {record.type === 'check_in' ? 'Check-in' : 'Check-out'}
+                      </td>
+                      <td data-label="Status">
+                        <span
+                          className={`badge ${
+                            record.status === 'allowed' ? 'badge-success' : 'badge-warning'
+                          }`}
+                        >
+                          {record.status}
+                        </span>
+                      </td>
+                      <td data-label="Mode">
+                        <span
+                          className={`attendance-mode-badge attendance-mode-badge--${
+                            record.attendanceMode === 'wfh' ? 'wfh' : 'office'
+                          }`}
+                        >
+                          {record.attendanceMode === 'wfh' ? 'WFH' : 'Office'}
+                        </span>
+                      </td>
+                      <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {historyLoadingMore ? (
+              <div className="attendance-history-more">
+                <span className="spinner spinner--sm" aria-hidden="true" /> Loading more…
+              </div>
+            ) : null}
+            {!historyLoadingMore && historyPage >= historyTotalPages && historyRecords.length > 0 ? (
+              <p className="attendance-history-end muted small">End of records</p>
+            ) : null}
           </div>
         )}
       </section>

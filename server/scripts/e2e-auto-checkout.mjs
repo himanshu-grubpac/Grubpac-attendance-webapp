@@ -118,6 +118,25 @@ try {
   const resCustom = await runAutoCheckoutJob(now);
   const afterCustom = await AttendanceRecord.countDocuments({ userId: u2._id, type: 'check_out', autoCheckout: true });
   check('re-enabled auto-checkout processes overdue with custom time', afterCustom - beforeDisabled === 1 && resCustom.processed >= 1);
+
+  // Scenario 5: Concurrent invocation — only one should process
+  const u3 = await User.create({
+    email: 'e2e.ac3.' + Date.now() + '@grubpac.com',
+    passwordHash: bcrypt.hashSync('Password123!', 8), role: 'employee', isActive: true,
+    firstName: 'AC3', name: 'AC3', mobile: '7' + String(Date.now()).slice(-9), employeeCode: 'AC3' + Date.now(),
+  });
+  await AttendanceRecord.create({
+    userId: u3._id, type: 'check_in', attendanceMode: 'office',
+    timestamp: buildISTTimestampFromDayAndTime(twoDaysAgoKey, '09:00'),
+    status: 'allowed', rejectionReasons: [], ...geo,
+  });
+  const beforeConcurrent = await countAutoCheckouts();
+  const [resA, resB] = await Promise.all([runAutoCheckoutJob(now), runAutoCheckoutJob(now)]);
+  const afterConcurrent = await countAutoCheckouts();
+  const totalProcessed = (resA.processed || 0) + (resB.processed || 0);
+  const oneSkipped = resA.skipped || resB.skipped;
+  check('concurrent invocations — only one processes', totalProcessed <= 1 && oneSkipped);
+  check('concurrent invocations — no duplicate records', afterConcurrent - beforeConcurrent <= 1);
 } catch (e) {
   failed++;
   console.error('ERROR', e);

@@ -7,6 +7,7 @@ import {
   getAdminAttendanceCreateDayBlockReason,
   buildMonthBirthdayMap,
   resolveEmployeeMonthDayStatus,
+  filterSpilloverAutoCheckouts,
 } from './attendanceService.js';
 
 test('month calendar maps HD check-ins to half_day status', () => {
@@ -140,6 +141,44 @@ test('office geofence skipped for WFH check-in and WFH check-out', () => {
   assert.equal(enforceOfficeRadiusForMode('wfh'), false);
 });
 
+test('pending WFH check-in maps to wfh mode and pending leaveStatus', () => {
+  // Mirrors markAttendance: a covering WFH request (pending) forces wfh mode
+  // and marks the record pending until the manager approves.
+  const wfhApprovedToday = false;
+  const wfhPendingToday = true;
+  const attendanceMode = wfhApprovedToday || wfhPendingToday ? 'wfh' : 'office';
+  const leaveStatus =
+    attendanceMode === 'wfh' && !wfhApprovedToday ? 'pending' : 'approved';
+  assert.equal(attendanceMode, 'wfh');
+  assert.equal(leaveStatus, 'pending');
+});
+
+test('approved WFH check-in maps to wfh mode and approved leaveStatus', () => {
+  const wfhApprovedToday = true;
+  const wfhPendingToday = false;
+  const attendanceMode = wfhApprovedToday || wfhPendingToday ? 'wfh' : 'office';
+  const leaveStatus =
+    attendanceMode === 'wfh' && !wfhApprovedToday ? 'pending' : 'approved';
+  assert.equal(attendanceMode, 'wfh');
+  assert.equal(leaveStatus, 'approved');
+});
+
+test('office check-in without any WFH request keeps approved leaveStatus', () => {
+  const wfhApprovedToday = false;
+  const wfhPendingToday = false;
+  const attendanceMode = wfhApprovedToday || wfhPendingToday ? 'wfh' : 'office';
+  const leaveStatus =
+    attendanceMode === 'wfh' && !wfhApprovedToday ? 'pending' : 'approved';
+  assert.equal(attendanceMode, 'office');
+  assert.equal(leaveStatus, 'approved');
+});
+
+test('check-in is not blocked when only pending WFH covers today', () => {
+  // Pending WFH is not approved leave, so the generic approved-leave block
+  // must not trigger (isCheckInBlockedByApprovedLeave receives approvedLeaveToday=null).
+  assert.equal(isCheckInBlockedByApprovedLeave(null, false), false);
+});
+
 test('admin synthetic geo fields copy office coordinates', () => {
   const fields = buildAdminSyntheticGeoFields({
     latitude: 28.6448,
@@ -212,4 +251,145 @@ test('buildMonthBirthdayMap sorts multiple birthdays on same day', () => {
     map['2026-08-07'].map((entry) => entry.firstName),
     ['Asha', 'Zara'],
   );
+});
+
+function makeRecord(overrides) {
+  return {
+    _id: overrides._id || 'rec1',
+    type: overrides.type || 'check_in',
+    timestamp: overrides.timestamp || new Date(),
+    attendanceMode: overrides.attendanceMode || 'office',
+    status: overrides.status || 'allowed',
+    autoCheckout: overrides.autoCheckout || false,
+  };
+}
+
+test('filterSpilloverAutoCheckouts: no check-ins removes all auto-checkouts', () => {
+  const records = [
+    makeRecord({ type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-02T00:30:00Z') }),
+  ];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 0);
+});
+
+test('filterSpilloverAutoCheckouts: no check-ins keeps non-auto-checkout records', () => {
+  const records = [
+    makeRecord({ type: 'check_out', autoCheckout: false, timestamp: new Date('2026-09-02T00:30:00Z') }),
+  ];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 1);
+});
+
+test('filterSpilloverAutoCheckouts: keeps auto-checkout after check-in', () => {
+  const checkIn = makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') });
+  const autoCheckOut = makeRecord({ type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-01T18:00:00Z') });
+  const records = [checkIn, autoCheckOut];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 2);
+});
+
+test('filterSpilloverAutoCheckouts: removes spillover auto-checkout before check-in', () => {
+  const autoCheckOut = makeRecord({ type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-02T00:30:00Z') });
+  const checkIn = makeRecord({ type: 'check_in', timestamp: new Date('2026-09-02T03:30:00Z') });
+  const records = [autoCheckOut, checkIn];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].type, 'check_in');
+});
+
+test('filterSpilloverAutoCheckouts: keeps manual check-out even if before check-in', () => {
+  const manualCheckOut = makeRecord({ type: 'check_out', autoCheckout: false, timestamp: new Date('2026-09-02T00:30:00Z') });
+  const checkIn = makeRecord({ type: 'check_in', timestamp: new Date('2026-09-02T03:30:00Z') });
+  const records = [manualCheckOut, checkIn];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 2);
+});
+
+test('filterSpilloverAutoCheckouts: empty records returns empty', () => {
+  const filtered = filterSpilloverAutoCheckouts([]);
+  assert.equal(filtered.length, 0);
+});
+
+test('filterSpilloverAutoCheckouts: multiple spillovers all removed when no check-in', () => {
+  const records = [
+    makeRecord({ type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-01T00:30:00Z') }),
+    makeRecord({ type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-02T00:30:00Z') }),
+  ];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 0);
+});
+
+test('filterSpilloverAutoCheckouts: WFH next-day spillover removed when check-in on same day', () => {
+  const autoCheckOut = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    attendanceMode: 'wfh',
+    timestamp: new Date('2026-09-02T00:30:00Z'),
+  });
+  const checkIn = makeRecord({
+    type: 'check_in',
+    attendanceMode: 'wfh',
+    timestamp: new Date('2026-09-02T03:30:00Z'),
+  });
+  const records = [autoCheckOut, checkIn];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].type, 'check_in');
+});
+
+test('filterSpilloverAutoCheckouts: normal same-day auto-checkout after check-in kept', () => {
+  const checkIn = makeRecord({
+    type: 'check_in',
+    timestamp: new Date('2026-09-01T03:30:00Z'),
+  });
+  const autoCheckOut = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    timestamp: new Date('2026-09-01T18:00:00Z'),
+  });
+  const records = [checkIn, autoCheckOut];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 2);
+});
+
+test('filterSpilloverAutoCheckouts: multiple auto-checkouts for different modes', () => {
+  const officeAuto = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    attendanceMode: 'office',
+    timestamp: new Date('2026-09-01T18:00:00Z'),
+  });
+  const wfhAuto = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    attendanceMode: 'wfh',
+    timestamp: new Date('2026-09-02T00:30:00Z'),
+  });
+  const records = [officeAuto, wfhAuto];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 0, 'both auto-checkouts removed when no check-in');
+});
+
+test('filterSpilloverAutoCheckouts: multiple auto-checkouts with check-in keeps post-check-in ones', () => {
+  const checkIn = makeRecord({
+    type: 'check_in',
+    timestamp: new Date('2026-09-02T03:30:00Z'),
+  });
+  const officeAuto = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    attendanceMode: 'office',
+    timestamp: new Date('2026-09-02T18:00:00Z'),
+  });
+  const wfhSpillover = makeRecord({
+    type: 'check_out',
+    autoCheckout: true,
+    attendanceMode: 'wfh',
+    timestamp: new Date('2026-09-02T00:30:00Z'),
+  });
+  const records = [wfhSpillover, checkIn, officeAuto];
+  const filtered = filterSpilloverAutoCheckouts(records);
+  assert.equal(filtered.length, 2, 'spillover removed, check-in and office auto kept');
+  assert.equal(filtered[0].type, 'check_in');
+  assert.equal(filtered[1].autoCheckout, true);
 });

@@ -1,7 +1,9 @@
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { getOfficeSettings } from '../services/geoService.js';
-import { buildAdminSyntheticGeoFields } from '../services/attendanceService.js';
-import { auditLog } from '../utils/auditLog.js';
+import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
+import { auditLogSync } from '../utils/auditLog.js';
+import { logError } from '../utils/logger.js';
+import { acquireJobLock, releaseJobLock } from '../utils/jobLock.js';
 import {
   buildISTTimestampFromDayAndTime,
   getISTDateInputValue,
@@ -14,7 +16,6 @@ const DEFAULT_OFFICE_TIME = '23:59';
 const DEFAULT_WFH_TIME = '06:00';
 const SCAN_WINDOW_DAYS = 3;
 
-let running = false;
 let schedulerTimer = null;
 
 function nextISTDayKey(dayKey) {
@@ -37,10 +38,10 @@ export function computeAutoCheckoutDeadline(attendanceMode, dayKey, cfg) {
 }
 
 export async function runAutoCheckoutJob(now = new Date()) {
-  if (running) {
-    return { skipped: true, reason: 'already_running' };
+  const lock = await acquireJobLock('auto-checkout', { ttlMs: 240_000 });
+  if (!lock.acquired) {
+    return { skipped: true, reason: lock.reason };
   }
-  running = true;
   try {
     const office = await getOfficeSettings();
     const autoCheckout = (office && office.autoCheckout) || {};
@@ -76,20 +77,34 @@ export async function runAutoCheckoutJob(now = new Date()) {
       .select('userId timestamp attendanceMode')
       .lean();
 
-    const checkedOutKeys = new Set(
-      checkOuts.map((o) => o.userId.toString() + '|' + getISTDateInputValue(o.timestamp) + '|' + o.attendanceMode),
-    );
+    const checkOutsByUser = new Map();
+    for (const co of checkOuts) {
+      const uid = co.userId.toString();
+      if (!checkOutsByUser.has(uid)) checkOutsByUser.set(uid, []);
+      checkOutsByUser.get(uid).push(co);
+    }
 
     const pending = [];
     const seenKeys = new Set();
     for (const checkIn of checkIns) {
       const dayKey = getISTDateInputValue(checkIn.timestamp);
-      const key = checkIn.userId.toString() + '|' + dayKey + '|' + checkIn.attendanceMode;
-      if (checkedOutKeys.has(key) || seenKeys.has(key)) continue;
-      seenKeys.add(key);
       const mode = checkIn.attendanceMode === 'wfh' ? 'wfh' : 'office';
+      const key = checkIn.userId.toString() + '|' + dayKey + '|' + mode;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
       const deadline = computeAutoCheckoutDeadline(mode, dayKey, mode === 'wfh' ? wfhCfg : officeCfg);
       if (!deadline) continue;
+
+      const userCheckOuts = checkOutsByUser.get(checkIn.userId.toString()) ?? [];
+      const hasCheckOut = userCheckOuts.some(
+        (co) =>
+          co.attendanceMode === mode &&
+          co.timestamp >= checkIn.timestamp &&
+          co.timestamp <= deadline,
+      );
+      if (hasCheckOut) continue;
+
       if (now >= deadline) {
         pending.push({ checkIn, mode, deadline });
       }
@@ -107,7 +122,7 @@ export async function runAutoCheckoutJob(now = new Date()) {
         autoCheckout: true,
         ...buildAdminSyntheticGeoFields(office),
       });
-      auditLog('attendance_auto_checkout', {
+      await auditLogSync('attendance_auto_checkout', {
         userId: item.checkIn.userId.toString(),
         attendanceMode: item.mode,
         checkInAt: item.checkIn.timestamp,
@@ -119,22 +134,23 @@ export async function runAutoCheckoutJob(now = new Date()) {
 
     return { processed: checkedOut.length, checkedOut, runAt: now.toISOString() };
   } finally {
-    running = false;
+    await releaseJobLock('auto-checkout', lock.lockId);
   }
 }
 
 export function startAutoCheckoutScheduler(intervalMs = 60 * 1000) {
   if (process.env.NODE_ENV === 'test') return null;
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME) return null;
   if (schedulerTimer) return schedulerTimer;
   schedulerTimer = setInterval(() => {
     runAutoCheckoutJob().catch((err) => {
-      console.error('[autoCheckout] job failed:', (err && err.message) ? err.message : err);
+      logError('autoCheckout_job_failed', { error: err?.message ?? err });
     });
   }, intervalMs);
   if (schedulerTimer.unref) schedulerTimer.unref();
   const initial = setTimeout(() => {
     runAutoCheckoutJob().catch((err) => {
-      console.error('[autoCheckout] initial run failed:', (err && err.message) ? err.message : err);
+      logError('autoCheckout_initial_run_failed', { error: err?.message ?? err });
     });
   }, 5000);
   if (initial.unref) initial.unref();

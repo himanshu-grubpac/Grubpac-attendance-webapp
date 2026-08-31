@@ -46,7 +46,11 @@ function greetingForHour() {
 
 function todayStatusLabel(today) {
   if (today?.checkOut) return 'Checked out';
-  if (today?.checkIn) return 'Checked in';
+  if (today?.checkIn) {
+    return today.checkIn.attendanceMode === 'wfh' && today.checkIn.leaveStatus === 'pending'
+      ? 'Checked in (WFH pending)'
+      : 'Checked in';
+  }
   return 'Not checked in';
 }
 
@@ -294,7 +298,11 @@ export default function EmployeeDashboard() {
           <span
             className={`dash-status-badge${
               today?.checkIn ? ' dash-status-badge--in' : ''
-            }${today?.checkOut ? ' dash-status-badge--out' : ''}`}
+            }${today?.checkOut ? ' dash-status-badge--out' : ''}${
+              today?.checkIn?.attendanceMode === 'wfh' && today?.checkIn?.leaveStatus === 'pending'
+                ? ' dash-status-badge--pending-wfh'
+                : ''
+            }`}
           >
             {todayStatusLabel(today)}
           </span>
@@ -303,7 +311,13 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__times">
           <div>
             <span className="label">Check-in</span>
-            <strong>
+            <strong
+              className={
+                today?.checkIn?.attendanceMode === 'wfh' && today?.checkIn?.leaveStatus === 'pending'
+                  ? 'dash-checkin-time--pending-wfh'
+                  : undefined
+              }
+            >
               {today?.checkIn ? formatISTDateTime(today.checkIn.timestamp) : '—'}
             </strong>
           </div>

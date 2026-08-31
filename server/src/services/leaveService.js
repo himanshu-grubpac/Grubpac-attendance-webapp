@@ -6,10 +6,13 @@ import {
   getISTYear,
   computeLeaveDaysIST,
   parseDateInputAsISTDay,
+  endOfDayIST,
+  startOfDayIST,
 } from '../utils/istDate.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
+import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { Holiday } from '../models/Holiday.js';
 import { Department } from '../models/Department.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
@@ -23,8 +26,10 @@ import {
   getPolicyMapForYear,
   refreshAccruedEntitlements,
   releasePendingDays,
+  reservePendingDays,
   resolveLeaveYear,
   resolvePolicyForLeaveType,
+  reverseApproval,
   validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
@@ -33,6 +38,7 @@ import {
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import { validateLeaveApplyDeadline } from './wfhPolicyService.js';
+import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import { sendEmail, renderLeaveManagerEmail, renderLeaveApplicantEmail } from './emailService.js';
 import { sendSms } from './smsService.js';
 import { sendWhatsAppText } from './whatsappService.js';
@@ -65,6 +71,29 @@ function scheduleSubmitNotification(requestId) {
   }, LEAVE_SUBMIT_UNDO_WINDOW_MS);
   pendingSubmitTimers.set(requestId, timer);
 }
+
+export async function recoverPendingSubmitNotifications() {
+  const stale = await LeaveRequest.find({
+    status: 'pending',
+    notificationsSent: false,
+  }).select('_id createdAt');
+
+  let recovered = 0;
+  for (const req of stale) {
+    const age = Date.now() - new Date(req.createdAt).getTime();
+    if (age >= LEAVE_SUBMIT_UNDO_WINDOW_MS) {
+      pendingSubmitTimers.delete(req._id.toString());
+      await dispatchSubmitNotifications(req._id).catch((err) =>
+        console.error('[leave] recovered submit notification failed', req._id?.toString(), err?.message),
+      );
+      recovered += 1;
+    } else {
+      scheduleSubmitNotification(req._id.toString());
+    }
+  }
+  return { recovered };
+}
+
 async function loadManagerNotifyContext(requestId) {
   const request = await LeaveRequest.findById(requestId).populate(LEAVE_REQUEST_POPULATE);
   if (!request) return null;
@@ -107,7 +136,7 @@ async function applyLeaveApproval(
   await request.save({ session });
 }
 
-function formatLeaveDateText(request) {
+export function formatLeaveDateText(request) {
   const start = getISTDateInputValue(request.startDate);
   const end = getISTDateInputValue(request.endDate);
   return start === end ? start : `${start} to ${end}`;
@@ -133,17 +162,14 @@ async function notifyManagerChannels(managers, request, leaveType, { withActions
   const leaveTypeName = leaveType?.name || leaveType?.code || 'leave';
   const dateText = formatLeaveDateText(request);
   const timeText = formatLeaveTimeText(request);
-  const decisionBaseUrl = `${env.apiOrigin}/api/leave/decision-link`;
+  const decisionLoginBaseUrl = `${env.apiOrigin}/api/leave/decision-login`;
 
   await Promise.allSettled(
     managers.map(async (m) => {
-      let approvalUrl = `${env.clientOrigin}/admin/leave/approvals?request=${request._id}`;
-      let rejectUrl = approvalUrl;
+      let actionUrl = `${env.clientOrigin}/admin/leave/approvals?request=${request._id}`;
       if (withActions) {
-        const approveToken = await issueLeaveDecisionToken(request._id, m._id, 'approve');
-        const rejectToken = await issueLeaveDecisionToken(request._id, m._id, 'reject');
-        approvalUrl = `${decisionBaseUrl}?request=${request._id}&action=approve&token=${approveToken}`;
-        rejectUrl = `${decisionBaseUrl}?request=${request._id}&action=reject&token=${rejectToken}`;
+        const token = await issueLeaveDecisionToken(request._id, m._id, 'decide');
+        actionUrl = `${decisionLoginBaseUrl}?request=${request._id}&action=decide&token=${token}`;
       }
       const { subject, html, text } = renderLeaveManagerEmail({
         requesterName,
@@ -152,11 +178,10 @@ async function notifyManagerChannels(managers, request, leaveType, { withActions
         dateText,
         timeText,
         withActions,
-        approvalUrl,
-        rejectUrl,
+        actionUrl,
       });
       const smsText = withActions
-        ? `${requesterName} applied for ${leaveTypeName} (${dateText}). Approve: ${approvalUrl} | Reject: ${rejectUrl}`
+        ? `${requesterName} applied for ${leaveTypeName} (${dateText}). Take action: ${actionUrl}`
         : `${requesterName} applied for ${leaveTypeName} (${dateText}) (auto-approved).`;
       if (m.email) await sendEmail({ to: m.email, subject, html, text, tag: 'leave-manager' });
       if (m.mobile) await sendSms({ to: m.mobile, message: smsText });
@@ -167,14 +192,21 @@ async function notifyManagerChannels(managers, request, leaveType, { withActions
 
 const LEAVE_DECISION_TOKEN_TTL_MS = Number(process.env.LEAVE_DECISION_TOKEN_TTL_MS ?? 48 * 60 * 60 * 1000);
 
-function hashDecisionToken(raw) {
+export function hashDecisionToken(raw) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
 export async function issueLeaveDecisionToken(requestId, managerId, action) {
   const raw = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashDecisionToken(raw);
-  const expiresAt = new Date(Date.now() + LEAVE_DECISION_TOKEN_TTL_MS);
+  // The action link must stay valid until the applied leave date passes (IST).
+  // Use end-of-day of the leave's last day; if that is already in the past
+  // (backdated leave or same-day edge), cap to the minimum TTL so the link
+  // is still usable instead of dead on arrival.
+  const request = await LeaveRequest.findById(requestId).select('endDate');
+  let expiresAt = request?.endDate ? endOfDayIST(request.endDate) : null;
+  const minExpiresAt = new Date(Date.now() + LEAVE_DECISION_TOKEN_TTL_MS);
+  if (!expiresAt || expiresAt < minExpiresAt) expiresAt = minExpiresAt;
   await LeaveRequest.updateOne(
     { _id: requestId },
     { $push: { decisionTokens: { tokenHash, action, managerId, expiresAt, used: false, usedAt: null } } },
@@ -202,7 +234,9 @@ export async function consumeLeaveDecisionToken(requestId, action, rawToken) {
     { $set: { 'decisionTokens.$.used': true, 'decisionTokens.$.usedAt': new Date() } },
   );
   return matched.managerId;
-}export async function peekLeaveDecisionToken(requestId, action, rawToken) {
+}
+
+export async function peekLeaveDecisionToken(requestId, action, rawToken) {
   const request = await LeaveRequest.findById(requestId).select('decisionTokens status');
   if (!request) return null;
   const candidate = hashDecisionToken(rawToken);
@@ -218,7 +252,12 @@ export async function consumeLeaveDecisionToken(requestId, action, rawToken) {
 }
 
 
-const LEAVE_DECISION_UNDO_MS = 5 * 60 * 1000;
+// Window during which an approve/reject decision can be undone. Applicant
+// email/SMS is deferred until this window passes, so a reverted decision never
+// mails the applicant. Shared with the client popup via LEAVE_DECISION_UNDO_MS.
+const LEAVE_DECISION_UNDO_MS = Number(
+  process.env.LEAVE_DECISION_UNDO_MS ?? 15000,
+);
 
 export async function processLeaveDecision(request, actor, decision, decisionComment = null, { adminException = false } = {}) {
   if (decision !== 'approve' && decision !== 'approved' && decision !== 'reject' && decision !== 'rejected') {
@@ -245,12 +284,38 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
           approverId: actor._id,
           comment: decisionComment,
         });
+        // Approving a WFH request turns any pending-WFH check-ins (shown red)
+        // for the covered dates back to their default (approved) state.
+        const leaveTypeCode = String(
+          request.leaveTypeId?.code ?? request.leaveTypeId?.name ?? '',
+        ).toUpperCase();
+        if (leaveTypeCode === WFH_LEAVE_TYPE_CODE) {
+          await AttendanceRecord.updateMany(
+            {
+              userId,
+              type: 'check_in',
+              status: 'allowed',
+              leaveStatus: 'pending',
+              timestamp: {
+                $gte: startOfDayIST(request.startDate),
+                $lte: endOfDayIST(request.endDate),
+              },
+            },
+            { $set: { leaveStatus: 'approved' } },
+            { session },
+          );
+        }
+        request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
+        request.notificationsSent = false;
+        await request.save({ session });
       } else {
         await releasePendingDays(userId, leaveTypeId, request.days, year, session);
         request.status = 'rejected';
         request.approverId = actor._id;
         request.decidedAt = new Date();
         request.decisionComment = decisionComment;
+        request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
+        request.notificationsSent = false;
         await request.save({ session });
       }
     });
@@ -259,31 +324,16 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
   }
 
   // Notify the applicant in-app right away, but defer the email/SMS until the
-  // undo window passes so a mistaken decision can be reverted without mailing/SMSing.
-  if (isApproved) {
-    await notifyApplicantDecision({
-      applicant: requester,
-      request,
-      leaveType: request.leaveTypeId,
-      status,
-      decisionComment,
-      sendChannels: false,
-    });
-    request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
-    request.notificationsSent = false;
-  } else {
-    await createNotification({
-      userId,
-      type: 'leave.rejected',
-      title: 'Leave rejected',
-      body: `Your leave request was rejected.${decisionComment ? ` Comment: ${decisionComment}` : ''}`,
-      link: '/employee/leave/requests',
-      metadata: { requestId: request._id.toString() },
-    });
-    request.notifyAfter = null;
-    request.notificationsSent = true;
-  }
-  await request.save();
+  // undo window passes so a mistaken decision (approve or reject) can be
+  // reverted without mailing/SMSing the applicant.
+  await notifyApplicantDecision({
+    applicant: requester,
+    request,
+    leaveType: request.leaveTypeId,
+    status,
+    decisionComment,
+    sendChannels: false,
+  });
 
   auditLog(isApproved ? 'leave_request_approved' : 'leave_request_rejected', {
     adminId: actor._id.toString(),
@@ -697,12 +747,6 @@ export async function dispatchSubmitNotifications(requestId) {
 }
 
 export async function undoSubmittedLeaveRequest(requestId, actor) {
-  const existing = pendingSubmitTimers.get(requestId);
-  if (existing) {
-    clearTimeout(existing);
-    pendingSubmitTimers.delete(requestId);
-  }
-
   const request = await loadLeaveRequest(requestId);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   if (requesterId !== actor._id.toString()) {
@@ -715,7 +759,15 @@ export async function undoSubmittedLeaveRequest(requestId, actor) {
     throwError('This request was already sent to your manager.', 409);
   }
 
-  return cancelLeaveRequest(requestId, actor);
+  const result = await cancelLeaveRequest(requestId, actor);
+
+  const existing = pendingSubmitTimers.get(requestId);
+  if (existing) {
+    clearTimeout(existing);
+    pendingSubmitTimers.delete(requestId);
+  }
+
+  return result;
 }
 
 export async function cancelLeaveRequest(requestId, actor) {
@@ -738,7 +790,8 @@ export async function cancelLeaveRequest(requestId, actor) {
 
       request.status = 'cancelled';
       request.decidedAt = new Date();
-      request.approverId = actor._id;
+      request.approverId = null;
+      request.decisionTokens = [];
       await request.save({ session });
     });
   } finally {
@@ -821,9 +874,36 @@ export async function decideLeaveRequestByToken(requestId, action, rawToken) {
     err.statusCode = 409;
     throw err;
   }
-  const manager = await User.findById(managerId).select('name email');
+  const manager = await User.findById(managerId).select('name email role roleId tokenVersion isActive');
+  if (!manager || !manager.isActive) {
+    const err = new Error('Your account is no longer active.');
+    err.statusCode = 403;
+    throw err;
+  }
   await processLeaveDecision(request, manager, action, null);
   return { request, manager };
+}
+
+export async function autoLoginByDecisionToken(requestId, action, rawToken) {
+  const managerId = await consumeLeaveDecisionToken(requestId, action, rawToken);
+  if (!managerId) {
+    const err = new Error('This link is invalid, has already been used, or has expired.');
+    err.statusCode = 410;
+    throw err;
+  }
+  const request = await loadLeaveRequest(requestId);
+  if (request.status !== 'pending') {
+    const err = new Error('This leave request has already been decided.');
+    err.statusCode = 409;
+    throw err;
+  }
+  const manager = await User.findById(managerId).select('name email role roleId tokenVersion isActive');
+  if (!manager || !manager.isActive) {
+    const err = new Error('Your account is no longer active.');
+    err.statusCode = 403;
+    throw err;
+  }
+  return { manager, requestId };
 }
 export async function decideLeaveRequest(requestId, actor, permissions, decision, payload = {}) {
   const request = await loadLeaveRequest(requestId);
@@ -831,12 +911,18 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
     throwError('Only pending requests can be approved or rejected.');
   }
 
+  const isReject = decision === 'reject' || decision === 'rejected';
+  const comment = (payload.comment ?? '').trim() || null;
+  if (isReject && !comment) {
+    throwError('A remark is required when rejecting a leave request.');
+  }
+
   const requester = await loadRequester(request.userId?._id ?? request.userId);
   if (!canApproveLeave(actor, requester, permissions)) {
     throwError('You are not authorized to approve this leave request.', 403);
   }
 
-  return processLeaveDecision(request, actor, decision, payload.comment ?? null, {
+  return processLeaveDecision(request, actor, decision, comment, {
     adminException: !!payload.adminException,
   });
 }
@@ -845,6 +931,13 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
   const request = await loadLeaveRequest(requestId);
   if (request.status !== 'approved' && request.status !== 'rejected') {
     throwError('Only approved or rejected leave requests can be undone.', 400);
+  }
+
+  if (request.decidedAt) {
+    const elapsed = Date.now() - new Date(request.decidedAt).getTime();
+    if (elapsed > LEAVE_DECISION_UNDO_MS) {
+      throwError('The undo window has expired. The decision is now final.', 410);
+    }
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
@@ -860,7 +953,9 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
   try {
     await session.withTransaction(async () => {
       if (request.status === 'approved') {
-        await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+        await reverseApproval(userId, leaveTypeId, request.days, year, session);
+      } else if (request.status === 'rejected') {
+        await reservePendingDays(userId, leaveTypeId, request.days, year, session);
       }
       request.status = 'pending';
       request.approverId = null;
@@ -869,6 +964,7 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
       request.adminException = false;
       request.notifyAfter = null;
       request.notificationsSent = false;
+      request.decisionTokens = [];
       await request.save({ session });
     });
   } finally {
@@ -895,7 +991,7 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
 
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const due = await LeaveRequest.find({
-    status: 'approved',
+    status: { $in: ['approved', 'rejected'] },
     notifyAfter: { $ne: null, $lte: now },
     notificationsSent: false,
   }).populate(LEAVE_REQUEST_POPULATE);
@@ -907,7 +1003,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
       applicant: requester,
       request,
       leaveType: request.leaveTypeId,
-      status: 'approved',
+      status: request.status,
       decisionComment: request.decisionComment,
       sendChannels: true,
     });

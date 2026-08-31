@@ -23,3 +23,11 @@ export const passwordResetLimiter = rateLimit({
   legacyHeaders: false,
   message: { message: 'Too many password reset requests. Please try again later.' },
 });
+
+export const leaveDecisionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'test' ? 10_000 : 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many leave decision attempts. Please try again later.' },
+});

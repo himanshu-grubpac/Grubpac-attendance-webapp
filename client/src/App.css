@@ -5389,6 +5389,16 @@ body::-webkit-scrollbar-thumb {
   color: var(--info);
 }
 
+.dash-status-badge--pending-wfh {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error);
+}
+
+.dash-checkin-time--pending-wfh {
+  color: var(--error);
+}
+
 .dash-hero__times {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5449,6 +5459,11 @@ body::-webkit-scrollbar-thumb {
 
 .attendance-mode-badge--office { color: var(--primary); background: var(--primary-soft); }
 .attendance-mode-badge--wfh { color: #0891b2; background: color-mix(in srgb, #06b6d4 12%, var(--surface)); }
+
+.attendance-mode-badge--wfh-pending {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, var(--surface));
+}
 
 .dash-hero__cta {
   width: 100%;
@@ -8020,6 +8035,198 @@ body::-webkit-scrollbar-thumb {
   border-radius: inherit;
 }
 
+/* ── Attendance filter button + popover ────────────────────────────────── */
+.attendance-filter-popover-wrap {
+  position: relative;
+}
+
+.attendance-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.attendance-filter-trigger--active {
+  border-color: var(--accent, var(--primary));
+  color: var(--accent, var(--primary));
+}
+
+.attendance-filter-trigger__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--accent, var(--primary));
+  color: var(--on-accent, #fff);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.attendance-filter-popover {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 17rem;
+  max-width: 20rem;
+  padding: var(--space-3);
+  background: var(--surface-1, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 0.5rem);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.18));
+}
+
+.attendance-filter-popover__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.attendance-filter-popover__group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.attendance-filter-popover__select-all {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent, var(--primary));
+  cursor: pointer;
+}
+
+.attendance-filter-popover__select-all:hover {
+  text-decoration: underline;
+}
+
+.attendance-filter-popover__options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.attendance-filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--text, var(--text-primary));
+}
+
+.attendance-filter-checkbox:hover {
+  background: var(--surface-hover, var(--surface-2, transparent));
+}
+
+.attendance-filter-checkbox input[type='checkbox'] {
+  accent-color: var(--accent, var(--primary));
+  cursor: pointer;
+}
+
+.attendance-filter-popover__clear {
+  align-self: flex-start;
+}
+
+.attendance-filters__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted, var(--text-secondary));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Attendance history list (infinite scroll) ────────────────────────── */
+.attendance-history-panel {
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg, var(--radius));
+  margin-top: var(--space-3);
+}
+
+.attendance-history-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.attendance-history-scroll {
+  max-height: 32rem;
+  overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.attendance-history-scroll.table-wrap {
+  border: none;
+}
+
+.attendance-history {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.attendance-history thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-1, var(--surface));
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, var(--text-secondary));
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.attendance-history tbody td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.attendance-history tbody tr:hover {
+  background: var(--surface-hover, var(--surface-2, transparent));
+}
+
+.attendance-history-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: var(--space-3);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 0.85rem;
+}
+
+.attendance-history-end {
+  text-align: center;
+  padding: var(--space-3);
+}
+
 .attendance-grid {
   --attendance-grid-line: var(--border);
   --attendance-grid-line-strong: var(--border-strong);
@@ -8389,6 +8596,10 @@ body::-webkit-scrollbar-thumb {
   background: transparent;
 }
 
+.attendance-grid__day--pending-wfh {
+  background: transparent;
+}
+
 .attendance-grid tbody tr:nth-child(even) .attendance-grid__day--weekend,
 .attendance-grid tbody tr:nth-child(even) .attendance-grid__day--holiday {
   background: transparent;
@@ -8465,6 +8676,10 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-day-card--rejected {
+  background: color-mix(in srgb, var(--error) 10%, var(--surface-2));
+}
+
+.attendance-day-card--pending-wfh {
   background: color-mix(in srgb, var(--error) 10%, var(--surface-2));
 }
 
