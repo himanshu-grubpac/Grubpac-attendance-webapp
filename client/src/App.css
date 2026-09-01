@@ -10355,6 +10355,68 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
+/* ── Column editor panel (employees) ────────────────────────────── */
+
+.column-editor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.column-editor-list__item {
+  min-width: 0;
+}
+
+.column-editor-list__label {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--interaction);
+  user-select: none;
+}
+
+.column-editor-list__label:hover {
+  background: var(--surface-hover, var(--surface-2));
+}
+
+.column-editor-list__label--locked {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.column-editor-list__label--locked:hover {
+  background: transparent;
+}
+
+.column-editor-list__checkbox {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+}
+
+.column-editor-list__text {
+  flex: 1 1 auto;
+  font-size: 0.875rem;
+  color: var(--text);
+  min-width: 0;
+}
+
+.column-editor-list__badge {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
 /* ── Register employee (mobile-first) ───────────────────────────── */
 
 .page--register-employee {
