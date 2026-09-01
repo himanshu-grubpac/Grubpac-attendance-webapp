@@ -339,6 +339,15 @@ export const helpApi = {
     api
       .get(`/help/tickets/${ticketId}/attachments/${attachmentId}/download`)
       .then((r) => r.data),
+  presignCommentAttachment: (ticketId, commentId, payload) =>
+    api.post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/presign`, payload).then((r) => r.data),
+  confirmCommentAttachment: (ticketId, commentId, attachmentId) =>
+    api
+      .post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/${attachmentId}/confirm`)
+      .then((r) => r.data),
+  deleteTicket: (id) => api.delete(`/help/tickets/${id}`).then((r) => r.data),
+  deleteComment: (ticketId, commentId) =>
+    api.delete(`/help/tickets/${ticketId}/comments/${commentId}`).then((r) => r.data),
 };
 
 export const salaryApi = {

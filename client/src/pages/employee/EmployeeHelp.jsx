@@ -390,23 +390,35 @@ export default function EmployeeHelp() {
           });
 
           const failedCount = results.filter((item) => !item.success).length;
-          if (failedCount === 0) {
+          if (failedCount === results.length) {
+            await helpApi.deleteTicket(ticketId);
+            showError('File upload failed. Ticket was not created.');
+            setForm(EMPTY_FORM);
+            setSelectedFiles([]);
+            setFileUploadStates([]);
+            setShowForm(false);
+            await loadTickets(page);
+            return;
+          } else if (failedCount > 0) {
+            showError(
+              `Ticket created, but ${failedCount} of ${results.length} attachment uploads failed.`,
+            );
+          } else {
             showSuccess(
               selectedFiles.length === 1
                 ? 'Help ticket submitted with attachment.'
                 : `Help ticket submitted with ${selectedFiles.length} attachments.`,
             );
-          } else if (failedCount === results.length) {
-            showError('Ticket created, but all attachment uploads failed.');
-          } else {
-            showError(
-              `Ticket created, but ${failedCount} of ${results.length} attachment uploads failed.`,
-            );
           }
         } catch (uploadErr) {
-          showError(
-            `Ticket created, but attachment upload failed: ${getErrorMessage(uploadErr)}`,
-          );
+          await helpApi.deleteTicket(ticketId);
+          showError('File upload failed. Ticket was not created.');
+          setForm(EMPTY_FORM);
+          setSelectedFiles([]);
+          setFileUploadStates([]);
+          setShowForm(false);
+          await loadTickets(page);
+          return;
         }
       } else {
         showSuccess('Help ticket submitted.');

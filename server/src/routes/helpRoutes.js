@@ -5,11 +5,15 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   addCommentHandler,
   confirmAttachmentHandler,
+  confirmCommentAttachmentHandler,
   createTicketHandler,
+  deleteCommentHandler,
+  deleteTicketHandler,
   downloadAttachmentHandler,
   getTicketHandler,
   listTicketsHandler,
   presignAttachmentHandler,
+  presignCommentAttachmentHandler,
   updateTicketStatusHandler,
 } from '../controllers/helpController.js';
 
@@ -79,6 +83,42 @@ router.get(
     PERMISSIONS.HELP_MANAGE,
   ),
   asyncHandler(downloadAttachmentHandler),
+);
+
+router.post(
+  '/tickets/:id/comments/:commentId/attachments/presign',
+  requirePermission(
+    PERMISSIONS.HELP_READ,
+    PERMISSIONS.HELP_WRITE,
+    PERMISSIONS.HELP_MANAGE,
+  ),
+  asyncHandler(presignCommentAttachmentHandler),
+);
+
+router.post(
+  '/tickets/:id/comments/:commentId/attachments/:attachmentId/confirm',
+  requirePermission(
+    PERMISSIONS.HELP_READ,
+    PERMISSIONS.HELP_WRITE,
+    PERMISSIONS.HELP_MANAGE,
+  ),
+  asyncHandler(confirmCommentAttachmentHandler),
+);
+
+router.delete(
+  '/tickets/:id',
+  requirePermission(PERMISSIONS.HELP_WRITE, PERMISSIONS.HELP_MANAGE),
+  asyncHandler(deleteTicketHandler),
+);
+
+router.delete(
+  '/tickets/:id/comments/:commentId',
+  requirePermission(
+    PERMISSIONS.HELP_READ,
+    PERMISSIONS.HELP_WRITE,
+    PERMISSIONS.HELP_MANAGE,
+  ),
+  asyncHandler(deleteCommentHandler),
 );
 
 export default router;
