@@ -7,7 +7,9 @@ import {
   getAdminAttendanceCreateDayBlockReason,
   buildMonthBirthdayMap,
   resolveEmployeeMonthDayStatus,
+  isLeaveDecisionAwaitingFinalization,
   filterSpilloverAutoCheckouts,
+  monthCalendarStatusForCheckIn,
 } from './attendanceService.js';
 
 test('month calendar maps HD check-ins to half_day status', () => {
@@ -18,6 +20,24 @@ test('month calendar maps present and legacy check-ins to present status', () =>
   assert.equal(monthCalendarStatusForCheckInTag('P'), 'present');
   assert.equal(monthCalendarStatusForCheckInTag(null), 'present');
   assert.equal(monthCalendarStatusForCheckInTag(undefined), 'present');
+});
+
+test('month calendar maps pending WFH check-ins to a distinct pending status', () => {
+  assert.equal(
+    monthCalendarStatusForCheckIn({ attendanceMode: 'wfh', leaveStatus: 'pending', attendanceTag: 'P' }),
+    'wfh_pending',
+  );
+  assert.equal(
+    monthCalendarStatusForCheckIn({ attendanceMode: 'office', leaveStatus: 'pending', attendanceTag: 'P' }),
+    'wfh_pending',
+  );
+});
+
+test('month calendar preserves policy status for approved WFH check-ins', () => {
+  assert.equal(
+    monthCalendarStatusForCheckIn({ attendanceMode: 'wfh', leaveStatus: 'approved', attendanceTag: 'HD' }),
+    'half_day',
+  );
 });
 
 test('approved WFH without check-in maps to wfh / wfh_future', () => {
@@ -40,6 +60,41 @@ test('approved WFH without check-in maps to wfh / wfh_future', () => {
       wfhDay: true,
     }),
     'wfh_future',
+  );
+});
+
+test('pending WFH decision stays pending until the undo window expires', () => {
+  const now = new Date('2026-08-07T10:00:00.000Z');
+  const expiresAt = new Date('2026-08-07T10:00:01.000Z');
+  assert.equal(isLeaveDecisionAwaitingFinalization(expiresAt, now), true);
+  assert.equal(isLeaveDecisionAwaitingFinalization(new Date('2026-08-07T10:00:00.000Z'), now), false);
+  assert.equal(isLeaveDecisionAwaitingFinalization(null, now), false);
+});
+
+test('pending WFH without check-in maps to wfh_pending', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-07',
+      todayKey: '2026-08-07',
+      isWeekend: false,
+      isHoliday: false,
+      pendingWfhDay: true,
+    }),
+    'wfh_pending',
+  );
+});
+
+test('pending WFH keeps a check-in visually pending during the undo window', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-07',
+      todayKey: '2026-08-07',
+      isWeekend: false,
+      isHoliday: false,
+      checkInStatus: 'present',
+      pendingWfhDay: true,
+    }),
+    'wfh_pending',
   );
 });
 
@@ -141,16 +196,23 @@ test('office geofence skipped for WFH check-in and WFH check-out', () => {
   assert.equal(enforceOfficeRadiusForMode('wfh'), false);
 });
 
-test('pending WFH check-in maps to wfh mode and pending leaveStatus', () => {
-  // Mirrors markAttendance: a covering WFH request (pending) forces wfh mode
-  // and marks the record pending until the manager approves.
+test('pending WFH check-in maps mode by location and marks pending leaveStatus', () => {
+  // Mirrors markAttendance: with a pending WFH request the mode is location-based
+  // (inside office → office, elsewhere → wfh) and the record is pending until approval.
   const wfhApprovedToday = false;
   const wfhPendingToday = true;
-  const attendanceMode = wfhApprovedToday || wfhPendingToday ? 'wfh' : 'office';
-  const leaveStatus =
-    attendanceMode === 'wfh' && !wfhApprovedToday ? 'pending' : 'approved';
-  assert.equal(attendanceMode, 'wfh');
-  assert.equal(leaveStatus, 'pending');
+
+  // Outside the office radius → wfh mode, pending status.
+  const outsideMode = 'wfh';
+  const outsideStatus = wfhPendingToday && !wfhApprovedToday ? 'pending' : 'approved';
+  assert.equal(outsideMode, 'wfh');
+  assert.equal(outsideStatus, 'pending');
+
+  // Inside the office radius → office mode, still pending status.
+  const insideMode = 'office';
+  const insideStatus = wfhPendingToday && !wfhApprovedToday ? 'pending' : 'approved';
+  assert.equal(insideMode, 'office');
+  assert.equal(insideStatus, 'pending');
 });
 
 test('approved WFH check-in maps to wfh mode and approved leaveStatus', () => {

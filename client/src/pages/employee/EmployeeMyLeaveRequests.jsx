@@ -1,11 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { formatISTDate } from '../../utils/datetime.js';
+import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+
+/** True when an approved leave can still be cancelled (its end date has not passed, IST). */
+function canCancelApprovedLeave(item) {
+  if (item.status !== 'approved') return false;
+  const todayKey = getISTDateInputValue();
+  const endKey = typeof item.endDate === 'string' ? item.endDate.slice(0, 10) : null;
+  if (!endKey) return false;
+  return endKey >= todayKey;
+}
 
 export default function EmployeeMyLeaveRequests() {
   const navigate = useNavigate();
@@ -34,13 +43,21 @@ export default function EmployeeMyLeaveRequests() {
     loadRequests(page);
   }, [page]);
 
-  async function handleCancel(id) {
-    if (!window.confirm('Cancel this leave request? It will be removed.')) {
+  async function handleCancel(item) {
+    const isApproved = item.status === 'approved';
+    const message = isApproved
+      ? 'Cancel this approved leave? The leave days will be returned to your balance.'
+      : 'Cancel this leave request? It will be removed.';
+    if (!window.confirm(message)) {
       return;
     }
     try {
-      await leaveApi.cancelRequest(id);
-      showSuccess('Leave request cancelled.');
+      await leaveApi.cancelRequest(item.id);
+      showSuccess(
+        isApproved
+          ? 'Approved leave cancelled. The days were returned to your balance.'
+          : 'Leave request cancelled.',
+      );
       loadRequests(page);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -94,8 +111,8 @@ export default function EmployeeMyLeaveRequests() {
                         <LeaveStatusBadge status={item.status} />
                       </td>
                       <td data-label="Action" className="cell-actions">
-                        {item.status === 'pending' && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item.id)}>
+                        {(item.status === 'pending' || canCancelApprovedLeave(item)) && (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item)}>
                             Cancel
                           </button>
                         )}

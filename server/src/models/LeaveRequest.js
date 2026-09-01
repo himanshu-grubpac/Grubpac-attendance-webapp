@@ -32,6 +32,8 @@ const leaveRequestSchema = new mongoose.Schema(
     ],
     notifyAfter: { type: Date, default: null },
     notificationsSent: { type: Boolean, default: false },
+    /** True once the manager-facing submit notification has been delivered. */
+    submitNotificationsSent: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
@@ -66,6 +68,7 @@ leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     decidedAt: this.decidedAt,
     decisionComment: this.decisionComment,
     adminException: this.adminException,
+    decisionUndoExpiresAt: this.notifyAfter,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

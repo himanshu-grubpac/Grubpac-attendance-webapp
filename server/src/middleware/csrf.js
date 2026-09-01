@@ -22,7 +22,7 @@ export function getCsrfCookieOptions() {
   return {
     httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: env.jwtCookieMaxAgeMs,
     path: '/',
   };
@@ -36,7 +36,7 @@ export function clearCsrfCookie(res) {
   res.clearCookie(CSRF_COOKIE_NAME, {
     httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
   });
 }

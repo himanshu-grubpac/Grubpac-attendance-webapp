@@ -9,12 +9,12 @@ import {
 import {
   ADMIN_PORTAL_PERMISSIONS,
   PERMISSIONS,
-  hasAdminPortalAccess,
   hasAnyPermission as userHasAnyPermission,
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
 import { authApi } from '../services/api.js';
 import { fetchSessionWithRetry } from '../utils/serverReady.js';
+import { resolveLoginPortal } from '../config/nav.js';
 
 const AuthContext = createContext(null);
 
@@ -40,13 +40,6 @@ function storeLoginPortal(portal) {
   } catch {
     // Ignore storage failures.
   }
-}
-
-function inferLoginPortal(user) {
-  if (hasAdminPortalAccess(user?.permissions)) {
-    return 'admin';
-  }
-  return 'employee';
 }
 
 /**
@@ -128,7 +121,7 @@ export function AuthProvider({ children }) {
         }
         const stored = readStoredLoginPortal();
         const deep = deepLinkPortal();
-        const portal = deep ?? stored ?? inferLoginPortal(currentUser);
+        const portal = resolveLoginPortal(deep ?? stored, currentUser);
         setLoginPortal(portal);
         if (!stored || deep) storeLoginPortal(portal);
       })

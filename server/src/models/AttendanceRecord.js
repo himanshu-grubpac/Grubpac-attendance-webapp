@@ -27,8 +27,15 @@ const attendanceRecordSchema = new mongoose.Schema(
      */
     leaveStatus: {
       type: String,
-      enum: ['approved', 'pending'],
+      enum: ['approved', 'pending', 'rejected'],
       default: 'approved',
+    },
+    /** WFH leave request that caused this check-in to be marked pending. */
+    leaveRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'LeaveRequest',
+      default: null,
+      index: true,
     },
     timestamp: { type: Date, required: true, default: Date.now },
     latitude: { type: Number, required: true },

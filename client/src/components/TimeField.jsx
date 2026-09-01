@@ -27,7 +27,7 @@ function toParts(value) {
 }
 
 /** A 12-hour-only time control. The API value remains HH:mm for reliable policy evaluation. */
-export default function TimeField({ value, onChange, disabled = false, id, 'aria-label': ariaLabel, className = '', innerRef }) {
+export default function TimeField({ value, onChange, disabled = false, id, 'aria-label': ariaLabel, className = '', innerRef, onInvalid }) {
   const parts = toParts(value);
   const [hourText, setHourText] = useState(String(parts.hour));
   const [minuteText, setMinuteText] = useState(String(parts.minute).padStart(2, '0'));
@@ -48,6 +48,7 @@ export default function TimeField({ value, onChange, disabled = false, id, 'aria
     const hour = Number(hourValue);
     const minute = Number(minuteValue);
     if (!Number.isInteger(hour) || hour < 1 || hour > 12 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      onInvalid?.();
       setHourText(String(parts.hour));
       setMinuteText(String(parts.minute).padStart(2, '0'));
       return null;

@@ -220,3 +220,62 @@ Time: ${timeText}
 Remarks: ${remarks || '—'}`;
   return { subject, html, text };
 }
+
+/** Applicant notification when a leave request (approved or pending) is cancelled by the employee. */
+export function renderLeaveCancelledEmail({ leaveTypeName, dateText, timeText, wasApproved }) {
+  const subject = `Leave request cancelled: ${leaveTypeName}`;
+  const balanceNote = wasApproved
+    ? '<p style="margin:0 0 12px;font-size:14px;line-height:1.5;">The approved leave days have been returned to your leave balance.</p>'
+    : '';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your <strong>${leaveTypeName}</strong> leave request has been <strong>cancelled</strong>.</p>
+            ${balanceNote}
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your ${leaveTypeName} leave request has been cancelled.
+Date: ${dateText}
+Time: ${timeText}
+${wasApproved ? 'The approved leave days have been returned to your leave balance.' : ''}`;
+  return { subject, html, text };
+}
+
+/** Approver notification when an employee cancels an approved leave. */
+export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeName, dateText, timeText }) {
+  const subject = `Approved leave cancelled: ${leaveTypeName}`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has cancelled their approved <strong>${leaveTypeName}</strong> leave.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${applicantName} cancelled their approved ${leaveTypeName} leave.
+Date: ${dateText}
+Time: ${timeText}`;
+  return { subject, html, text };
+}

@@ -25,6 +25,7 @@ import {
   getAvailableBalance,
   getPolicyMapForYear,
   refreshAccruedEntitlements,
+  releaseApprovedDays,
   releasePendingDays,
   reservePendingDays,
   resolveLeaveYear,
@@ -39,7 +40,13 @@ import {
 } from './teamScopeService.js';
 import { validateLeaveApplyDeadline } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
-import { sendEmail, renderLeaveManagerEmail, renderLeaveApplicantEmail } from './emailService.js';
+import {
+  sendEmail,
+  renderLeaveManagerEmail,
+  renderLeaveApplicantEmail,
+  renderLeaveCancelledEmail,
+  renderLeaveCancelledForApproverEmail,
+} from './emailService.js';
 import { sendSms } from './smsService.js';
 import { sendWhatsAppText } from './whatsappService.js';
 import { env } from '../config/env.js';
@@ -69,6 +76,7 @@ function scheduleSubmitNotification(requestId) {
       console.error('[leave] deferred submit notification failed', requestId, err?.message),
     );
   }, LEAVE_SUBMIT_UNDO_WINDOW_MS);
+  if (timer.unref) timer.unref();
   pendingSubmitTimers.set(requestId, timer);
 }
 
@@ -76,6 +84,7 @@ export async function recoverPendingSubmitNotifications() {
   const stale = await LeaveRequest.find({
     status: 'pending',
     notificationsSent: false,
+    submitNotificationsSent: { $ne: true },
   }).select('_id createdAt');
 
   let recovered = 0;
@@ -218,9 +227,10 @@ export async function consumeLeaveDecisionToken(requestId, action, rawToken) {
   const request = await LeaveRequest.findById(requestId).select('decisionTokens');
   if (!request || !request.decisionTokens || request.decisionTokens.length === 0) return null;
   const candidate = hashDecisionToken(rawToken);
+  const now = new Date();
   let matched = null;
   for (const t of request.decisionTokens) {
-    if (t.action !== action || t.used || t.expiresAt <= new Date()) continue;
+    if (t.action !== action || t.used || t.expiresAt <= now) continue;
     const a = Buffer.from(t.tokenHash, 'hex');
     const b = Buffer.from(candidate, 'hex');
     if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
@@ -229,11 +239,22 @@ export async function consumeLeaveDecisionToken(requestId, action, rawToken) {
     }
   }
   if (!matched) return null;
-  await LeaveRequest.updateOne(
-    { _id: requestId, 'decisionTokens._id': matched._id },
-    { $set: { 'decisionTokens.$.used': true, 'decisionTokens.$.usedAt': new Date() } },
+  const claimed = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: requestId,
+      decisionTokens: {
+        $elemMatch: {
+          _id: matched._id,
+          action,
+          tokenHash: candidate,
+          used: false,
+          expiresAt: { $gt: now },
+        },
+      },
+    },
+    { $set: { 'decisionTokens.$.used': true, 'decisionTokens.$.usedAt': now } },
   );
-  return matched.managerId;
+  return claimed ? matched.managerId : null;
 }
 
 export async function peekLeaveDecisionToken(requestId, action, rawToken) {
@@ -255,9 +276,7 @@ export async function peekLeaveDecisionToken(requestId, action, rawToken) {
 // Window during which an approve/reject decision can be undone. Applicant
 // email/SMS is deferred until this window passes, so a reverted decision never
 // mails the applicant. Shared with the client popup via LEAVE_DECISION_UNDO_MS.
-const LEAVE_DECISION_UNDO_MS = Number(
-  process.env.LEAVE_DECISION_UNDO_MS ?? 15000,
-);
+const LEAVE_DECISION_UNDO_MS = env.leaveDecisionUndoMs;
 
 export async function processLeaveDecision(request, actor, decision, decisionComment = null, { adminException = false } = {}) {
   if (decision !== 'approve' && decision !== 'approved' && decision !== 'reject' && decision !== 'rejected') {
@@ -284,38 +303,23 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
           approverId: actor._id,
           comment: decisionComment,
         });
-        // Approving a WFH request turns any pending-WFH check-ins (shown red)
-        // for the covered dates back to their default (approved) state.
-        const leaveTypeCode = String(
-          request.leaveTypeId?.code ?? request.leaveTypeId?.name ?? '',
-        ).toUpperCase();
-        if (leaveTypeCode === WFH_LEAVE_TYPE_CODE) {
-          await AttendanceRecord.updateMany(
-            {
-              userId,
-              type: 'check_in',
-              status: 'allowed',
-              leaveStatus: 'pending',
-              timestamp: {
-                $gte: startOfDayIST(request.startDate),
-                $lte: endOfDayIST(request.endDate),
-              },
-            },
-            { $set: { leaveStatus: 'approved' } },
-            { session },
-          );
-        }
+        // Keep WFH check-ins in the pending (red) state until the decision's
+        // undo window expires. The decision-finalization job applies approved
+        // status after the window closes.
         request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
         request.notificationsSent = false;
+        request.submitNotificationsSent = true;
         await request.save({ session });
       } else {
         await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+        // Keep WFH check-ins pending until the rejection also becomes final.
         request.status = 'rejected';
         request.approverId = actor._id;
         request.decidedAt = new Date();
         request.decisionComment = decisionComment;
         request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
         request.notificationsSent = false;
+        request.submitNotificationsSent = true;
         await request.save({ session });
       }
     });
@@ -420,6 +424,107 @@ async function loadRequester(userId) {
     throwError('Employee not found.', 404);
   }
   return user;
+}
+
+function leaveTypeCodeFor(leaveType) {
+  return String(leaveType?.code ?? leaveType?.name ?? '').trim().toUpperCase();
+}
+
+function isWfhLeaveType(leaveType) {
+  return leaveTypeCodeFor(leaveType) === WFH_LEAVE_TYPE_CODE;
+}
+
+function wfhAttendanceRange(request) {
+  return {
+    $gte: startOfDayIST(request.startDate),
+    $lte: endOfDayIST(request.endDate),
+  };
+}
+
+function buildWfhAttendanceFilter(
+  request,
+  { fromStatuses, legacyAnyMode = false, linkedOnly = false } = {},
+) {
+  const userId = request.userId?._id ?? request.userId;
+  const statusFilter = fromStatuses?.length
+    ? { leaveStatus: { $in: fromStatuses } }
+    : {};
+  const base = {
+    userId,
+    type: 'check_in',
+    status: 'allowed',
+    timestamp: wfhAttendanceRange(request),
+    ...statusFilter,
+  };
+
+  const linked = { ...base, leaveRequestId: request._id };
+  if (linkedOnly) return linked;
+
+  return {
+    $or: [
+      linked,
+      {
+        ...base,
+        leaveRequestId: { $in: [null] },
+        ...(legacyAnyMode ? {} : { attendanceMode: 'wfh' }),
+      },
+    ],
+  };
+}
+
+async function updateWfhAttendanceForRequest(
+  request,
+  { fromStatuses, toStatus, legacyAnyMode = false, leaveType, session } = {},
+) {
+  if (!isWfhLeaveType(leaveType ?? request.leaveTypeId)) return;
+
+  const update = toStatus
+    ? { $set: { leaveStatus: toStatus, leaveRequestId: request._id } }
+    : { $unset: { leaveStatus: 1, leaveRequestId: 1 } };
+  const options = session ? { session } : undefined;
+  const linkedIdentityFilter = buildWfhAttendanceFilter(request, { linkedOnly: true });
+  const linkedQuery = AttendanceRecord.findOne(linkedIdentityFilter).select('_id');
+  if (session) linkedQuery.session(session);
+  const linkedRecord = await linkedQuery.lean();
+  const filter = linkedRecord
+    ? buildWfhAttendanceFilter(request, { fromStatuses, linkedOnly: true })
+    : buildWfhAttendanceFilter(request, { fromStatuses, legacyAnyMode });
+  return AttendanceRecord.updateMany(
+    filter,
+    update,
+    options,
+  );
+}
+
+async function clearWfhAttendanceMarkers(request, { legacyStatuses = ['pending'], session } = {}) {
+  if (!isWfhLeaveType(request.leaveType ?? request.leaveTypeId)) return;
+
+  const userId = request.userId?._id ?? request.userId;
+  const options = session ? { session } : undefined;
+  const linkedFilter = {
+    userId,
+    type: 'check_in',
+    status: 'allowed',
+    leaveRequestId: request._id,
+  };
+  const linkedQuery = AttendanceRecord.findOne(linkedFilter).select('_id');
+  if (session) linkedQuery.session(session);
+  const linkedRecord = await linkedQuery.lean();
+  const filter = linkedRecord
+    ? linkedFilter
+    : {
+        userId,
+        type: 'check_in',
+        status: 'allowed',
+        leaveRequestId: { $in: [null] },
+        leaveStatus: { $in: legacyStatuses },
+        timestamp: wfhAttendanceRange(request),
+      };
+  await AttendanceRecord.updateMany(
+    filter,
+    { $unset: { leaveStatus: 1, leaveRequestId: 1 } },
+    options,
+  );
 }
 
 export function canApproveLeave(actor, requester, permissions) {
@@ -646,6 +751,17 @@ export async function createLeaveRequest(userId, payload) {
         { session },
       );
 
+      if (!autoApprove && isWfhLeaveType(validated.leaveType)) {
+        // A request can be submitted after the employee has already checked in.
+        // Link that check-in now so later decisions update the exact record.
+        await updateWfhAttendanceForRequest(request, {
+          toStatus: 'pending',
+          legacyAnyMode: true,
+          leaveType: validated.leaveType,
+          session,
+        });
+      }
+
       if (autoApprove) {
         await applyLeaveApproval(request, {
           userId,
@@ -739,10 +855,15 @@ async function notifyApproversOnSubmit(requester, request, leaveType = null) {
 export async function dispatchSubmitNotifications(requestId) {
   const request = await LeaveRequest.findById(requestId).populate(LEAVE_REQUEST_POPULATE);
   if (!request) return;
-  if (request.status !== 'pending' || request.notificationsSent) return;
+  if (
+    request.status !== 'pending'
+    || request.notificationsSent
+    || request.submitNotificationsSent
+  ) return;
   await notifyApproversOnSubmit(request.userId, request, request.leaveTypeId);
   await sendLeaveManagerEmail(requestId);
   request.notificationsSent = true;
+  request.submitNotificationsSent = true;
   await request.save();
 }
 
@@ -775,23 +896,49 @@ export async function cancelLeaveRequest(requestId, actor) {
   if (request.userId?._id?.toString() !== actor._id.toString() && request.userId?.toString() !== actor._id.toString()) {
     throwError('You can only cancel your own leave requests.', 403);
   }
-  if (request.status !== 'pending') {
-    throwError('Only pending leave requests can be cancelled.');
+  if (request.status !== 'pending' && request.status !== 'approved') {
+    throwError('Only pending or approved leave requests can be cancelled.');
+  }
+  // Once the applied leave date has passed, the leave can no longer be cancelled.
+  if (request.endDate && new Date(endOfDayIST(request.endDate)).getTime() < Date.now()) {
+    throwError('This leave request can no longer be cancelled because the leave dates have passed.');
   }
 
   const year = getISTYear(request.startDate);
   const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
   const userId = request.userId?._id ?? request.userId;
+  const wasApproved = request.status === 'approved';
+  const approverId = request.approverId?._id?.toString?.() ?? request.approverId?.toString?.() ?? null;
 
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+      if (wasApproved) {
+        // Return the consumed leave days fully back to the available balance.
+        await releaseApprovedDays(userId, leaveTypeId, request.days, year, session);
+        // Clear any approved WFH marks on attendance records for the covered dates.
+        await updateWfhAttendanceForRequest(request, {
+          fromStatuses: ['approved', 'pending'],
+          legacyAnyMode: true,
+          session,
+        });
+      } else {
+        await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+        // A pending WFH cancellation must also remove its red attendance marker.
+        await updateWfhAttendanceForRequest(request, {
+          fromStatuses: ['pending', 'rejected'],
+          legacyAnyMode: true,
+          session,
+        });
+      }
 
       request.status = 'cancelled';
       request.decidedAt = new Date();
       request.approverId = null;
       request.decisionTokens = [];
+      request.notifyAfter = null;
+      request.notificationsSent = true;
+      request.submitNotificationsSent = true;
       await request.save({ session });
     });
   } finally {
@@ -801,9 +948,83 @@ export async function cancelLeaveRequest(requestId, actor) {
   auditLog('leave_request_cancelled', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
+    wasApproved,
   });
 
+  // Notify the applicant and the original approver by email.
+  await notifyLeaveCancelled(request, wasApproved, approverId);
+
   return request.toSafeJSON();
+}
+
+/** Emails the applicant (and the original approver, when applicable) that an approved leave was cancelled. */
+async function notifyLeaveCancelled(request, wasApproved, approverId) {
+  const userId = request.userId?._id?.toString?.() ?? request.userId?.toString?.();
+  const applicant = await User.findById(userId).select('name email mobile whatsappOptIn');
+  const leaveTypeName =
+    request.leaveTypeId?.name || request.leaveTypeId?.code || 'leave';
+  const dateText = formatLeaveDateText(request);
+  const timeText = formatLeaveTimeText(request);
+
+  try {
+    if (wasApproved) {
+      await createNotification({
+        userId,
+        type: 'leave.cancelled',
+        title: 'Leave cancelled',
+        body: `Your ${leaveTypeName} leave (${dateText}) was cancelled. The leave days have been returned to your balance.`,
+        link: '/employee/leave/requests',
+        metadata: { requestId: request._id.toString() },
+      });
+    }
+
+    if (applicant?.email) {
+      const { subject, html, text } = renderLeaveCancelledEmail({
+        leaveTypeName,
+        dateText,
+        timeText,
+        wasApproved,
+      });
+      await sendEmail({ to: applicant.email, subject, html, text, tag: 'leave-cancelled' });
+    }
+    if (applicant?.mobile) {
+      const smsText = `Your ${leaveTypeName} leave (${dateText}) was cancelled.`;
+      await sendSms({ to: applicant.mobile, message: smsText });
+    }
+    if (applicant?.whatsappOptIn && applicant?.mobile) {
+      await sendWhatsAppText({ to: applicant.mobile, message: `Your ${leaveTypeName} leave (${dateText}) was cancelled.` });
+    }
+  } catch (err) {
+    console.error('[leave] cancelled notification failed', request._id?.toString(), err?.message);
+  }
+
+  // Notify the original approver that the approved leave was cancelled by the employee.
+  if (wasApproved && approverId) {
+    try {
+      const approver = await User.findById(approverId).select('name email mobile whatsappOptIn');
+      if (!approver) return;
+      const applicantName = applicant?.name || 'An employee';
+      if (approver.email) {
+        const { subject, html, text } = renderLeaveCancelledForApproverEmail({
+          applicantName,
+          leaveTypeName,
+          dateText,
+          timeText,
+        });
+        await sendEmail({ to: approver.email, subject, html, text, tag: 'leave-cancelled-approver' });
+      }
+      await createNotification({
+        userId: approverId,
+        type: 'leave.cancelled',
+        title: 'Leave cancelled by employee',
+        body: `${applicantName} cancelled their approved ${leaveTypeName} leave (${dateText}).`,
+        link: '/admin/leave/approvals',
+        metadata: { requestId: request._id.toString() },
+      });
+    } catch (err) {
+      console.error('[leave] approver cancellation notice failed', request._id?.toString(), err?.message);
+    }
+  }
 }
 
 export async function editLeaveRequest(requestId, actor, payload) {
@@ -819,6 +1040,13 @@ export async function editLeaveRequest(requestId, actor, payload) {
   const userId = request.userId?._id ?? request.userId;
   const oldLeaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
   const oldYear = getISTYear(request.startDate);
+  const oldRequestSnapshot = {
+    _id: request._id,
+    userId,
+    leaveTypeId: request.leaveTypeId,
+    startDate: request.startDate,
+    endDate: request.endDate,
+  };
   const adminException = false;
 
   const session = await mongoose.startSession();
@@ -826,6 +1054,8 @@ export async function editLeaveRequest(requestId, actor, payload) {
     await session.withTransaction(async () => {
       // Release the previously reserved pending days before reserving the new ones.
       await releasePendingDays(userId, oldLeaveTypeId, request.days, oldYear, session);
+
+      await clearWfhAttendanceMarkers(oldRequestSnapshot, { session });
 
       const validated = await validateLeaveRequestInput({
         userId,
@@ -838,6 +1068,12 @@ export async function editLeaveRequest(requestId, actor, payload) {
         excludeRequestId: request._id,
       });
 
+      await reserveValidatedLeaveBalance(
+        validated.balance,
+        validated.balancePendingDelta,
+        session,
+      );
+
       request.leaveTypeId = payload.leaveTypeId;
       request.startDate = validated.startDate;
       request.endDate = validated.endDate;
@@ -847,7 +1083,18 @@ export async function editLeaveRequest(requestId, actor, payload) {
       request.documentUrl = payload.documentUrl ?? null;
       request.adminException = adminException;
       request.status = 'pending';
+      request.notificationsSent = false;
+      request.submitNotificationsSent = false;
       await request.save({ session });
+
+      if (isWfhLeaveType(validated.leaveType)) {
+        await updateWfhAttendanceForRequest(request, {
+          toStatus: 'pending',
+          legacyAnyMode: true,
+          leaveType: validated.leaveType,
+          session,
+        });
+      }
     });
   } finally {
     session.endSession();
@@ -858,10 +1105,18 @@ export async function editLeaveRequest(requestId, actor, payload) {
     requestId: request._id.toString(),
   });
 
+  scheduleSubmitNotification(request._id.toString());
+
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
-export async function decideLeaveRequestByToken(requestId, action, rawToken) {
+export async function decideLeaveRequestByToken(requestId, action, rawToken, decisionComment = null) {
+  const comment = typeof decisionComment === 'string' ? decisionComment.trim() : null;
+  if (action === 'reject' && !comment) {
+    const err = new Error('A remark is required when rejecting a leave request.');
+    err.statusCode = 400;
+    throw err;
+  }
   const managerId = await consumeLeaveDecisionToken(requestId, action, rawToken);
   if (!managerId) {
     const err = new Error('This action link is invalid, has already been used, or has expired.');
@@ -880,7 +1135,7 @@ export async function decideLeaveRequestByToken(requestId, action, rawToken) {
     err.statusCode = 403;
     throw err;
   }
-  await processLeaveDecision(request, manager, action, null);
+  await processLeaveDecision(request, manager, action, comment);
   return { request, manager };
 }
 
@@ -954,8 +1209,24 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
     await session.withTransaction(async () => {
       if (request.status === 'approved') {
         await reverseApproval(userId, leaveTypeId, request.days, year, session);
+        // Undoing a WFH approval puts only that request's check-ins back into
+        // the pending (red) state until the request is approved again.
+        await updateWfhAttendanceForRequest(request, {
+          fromStatuses: ['approved', 'pending'],
+          toStatus: 'pending',
+          legacyAnyMode: true,
+          session,
+        });
       } else if (request.status === 'rejected') {
         await reservePendingDays(userId, leaveTypeId, request.days, year, session);
+        // A rejected WFH request may have had its marker cleared. Restore it
+        // when the decision is undone so the pending state is visible again.
+        await updateWfhAttendanceForRequest(request, {
+          fromStatuses: ['rejected', 'pending'],
+          toStatus: 'pending',
+          legacyAnyMode: true,
+          session,
+        });
       }
       request.status = 'pending';
       request.approverId = null;
@@ -964,6 +1235,7 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
       request.adminException = false;
       request.notifyAfter = null;
       request.notificationsSent = false;
+      request.submitNotificationsSent = true;
       request.decisionTokens = [];
       await request.save({ session });
     });
@@ -989,7 +1261,32 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
   return request.toSafeJSON();
 }
 
+async function expirePendingWfhAttendance(now) {
+  const wfhType = await LeaveType.findOne({ code: WFH_LEAVE_TYPE_CODE }).select('_id code');
+  if (!wfhType) return 0;
+
+  const staleRequests = await LeaveRequest.find({
+    userId: { $exists: true },
+    leaveTypeId: wfhType._id,
+    status: 'pending',
+    endDate: { $lt: startOfDayIST(now) },
+  }).select('_id userId startDate endDate leaveTypeId');
+
+  let expired = 0;
+  for (const request of staleRequests) {
+    const result = await updateWfhAttendanceForRequest(request, {
+      fromStatuses: ['pending'],
+      toStatus: 'rejected',
+      legacyAnyMode: true,
+      leaveType: wfhType,
+    });
+    expired += result.modifiedCount ?? 0;
+  }
+  return expired;
+}
+
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
+  const expiredPendingWfh = await expirePendingWfhAttendance(now);
   const due = await LeaveRequest.find({
     status: { $in: ['approved', 'rejected'] },
     notifyAfter: { $ne: null, $lte: now },
@@ -998,6 +1295,22 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
 
   let processed = 0;
   for (const request of due) {
+    // WFH attendance markers stay pending while the decision can still be
+    // undone. Apply the final marker only after the undo window has elapsed.
+    if (request.status === 'approved') {
+      await updateWfhAttendanceForRequest(request, {
+        fromStatuses: ['pending', 'rejected'],
+        toStatus: 'approved',
+        legacyAnyMode: true,
+      });
+    } else if (request.status === 'rejected') {
+      await updateWfhAttendanceForRequest(request, {
+        fromStatuses: ['pending'],
+        toStatus: 'rejected',
+        legacyAnyMode: true,
+      });
+    }
+
     const requester = await loadRequester(request.userId?._id ?? request.userId);
     await notifyApplicantDecision({
       applicant: requester,
@@ -1014,7 +1327,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
     processed += 1;
   }
 
-  return { processed, runAt: now.toISOString() };
+  return { processed, expiredPendingWfh, runAt: now.toISOString() };
 }
 
 export async function listLeaveRequests(actor, permissions, query) {
@@ -1123,6 +1436,8 @@ export async function getTeamCalendar(actor, permissions, query) {
   const start = parseDateInputAsISTDay(`${year}-${String(monthNum).padStart(2, '0')}-01`);
   const lastDay = new Date(Date.UTC(year, monthNum, 0)).getUTCDate();
   const end = parseDateInputAsISTDay(`${year}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`);
+  const calendarStart = startOfDayIST(start);
+  const calendarEnd = endOfDayIST(end);
 
   const userFilter = { isActive: true };
   if (query.departmentId) {
@@ -1144,8 +1459,8 @@ export async function getTeamCalendar(actor, permissions, query) {
   const requests = await LeaveRequest.find({
     userId: { $in: userIds },
     status: 'approved',
-    startDate: { $lte: end },
-    endDate: { $gte: start },
+    startDate: { $lte: calendarEnd },
+    endDate: { $gte: calendarStart },
   })
     .populate(LEAVE_REQUEST_POPULATE)
     .sort({ startDate: 1 });

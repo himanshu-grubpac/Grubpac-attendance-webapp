@@ -8,14 +8,11 @@ import {
   buildISTTimestampFromDayAndTime,
   getISTDateInputValue,
   parseDateInputAsISTDay,
-  startOfDayIST,
   endOfDayIST,
 } from '../utils/istDate.js';
 
 const DEFAULT_OFFICE_TIME = '23:59';
 const DEFAULT_WFH_TIME = '06:00';
-const SCAN_WINDOW_DAYS = 3;
-
 let schedulerTimer = null;
 
 function nextISTDayKey(dayKey) {
@@ -52,13 +49,12 @@ export async function runAutoCheckoutJob(now = new Date()) {
     const officeCfg = autoCheckout.office;
     const wfhCfg = autoCheckout.wfh;
 
-    const scanStart = startOfDayIST(new Date(now.getTime() - SCAN_WINDOW_DAYS * 24 * 60 * 60 * 1000));
     const scanEnd = endOfDayIST(now);
 
     const checkIns = await AttendanceRecord.find({
       type: 'check_in',
       status: 'allowed',
-      timestamp: { $gte: scanStart, $lte: scanEnd },
+      timestamp: { $lte: scanEnd },
     })
       .select('userId timestamp attendanceMode')
       .lean();
@@ -72,7 +68,7 @@ export async function runAutoCheckoutJob(now = new Date()) {
       type: 'check_out',
       status: 'allowed',
       userId: { $in: userIds },
-      timestamp: { $gte: scanStart, $lte: scanEnd },
+      timestamp: { $lte: scanEnd },
     })
       .select('userId timestamp attendanceMode')
       .lean();

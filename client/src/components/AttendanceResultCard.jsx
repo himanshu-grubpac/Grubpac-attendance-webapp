@@ -6,8 +6,7 @@ export default function AttendanceResultCard({ result, quarterAllowance = 3, pen
 
   const allowed = result.status === 'allowed';
   const record = result.record;
-  const pendingWfh =
-    record?.attendanceMode === 'wfh' && record?.leaveStatus === 'pending';
+  const pendingWfh = record?.type === 'check_in' && record?.leaveStatus === 'pending';
   const outcome =
     allowed && record?.type === 'check_in'
       ? formatCheckInOutcome(record, { allowance: quarterAllowance })

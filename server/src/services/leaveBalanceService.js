@@ -365,6 +365,26 @@ export async function reverseApproval(userId, leaveTypeId, days, year = getISTYe
   return balance;
 }
 
+/**
+ * Fully releases consumed leave days back to the available balance — used when an
+ * approved leave is cancelled by the employee. Unlike reverseApproval (undo flow,
+ * which re-queues days as pending), cancellation frees the days entirely so the
+ * employee's available balance actually increases.
+ */
+export async function releaseApprovedDays(userId, leaveTypeId, days, year = getISTYear(), session = null) {
+  const query = LeaveBalance.findOne({ userId, leaveTypeId, year });
+  if (session) query.session(session);
+  const balance = await query;
+  if (!balance) {
+    throwError('Leave balance not found for this year.');
+  }
+
+  balance.used = Math.max(0, balance.used - days);
+  balance.pending = Math.max(0, balance.pending - days);
+  await balance.save(session ? { session } : undefined);
+  return balance;
+}
+
 export function resolveLeaveYear(startDateInput) {
   const start = parseDateInputAsISTDay(startDateInput);
   return getISTYear(start);

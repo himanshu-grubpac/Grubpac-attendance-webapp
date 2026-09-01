@@ -21,6 +21,8 @@ export default function LeaveDecisionModal({
   const commentRef = useRef(null);
   const previouslyFocused = useRef(null);
 
+  const remarkEmpty = !initialComment.trim();
+
   useEscapeKey(open && !busy, onCancel);
 
   useEffect(() => {
@@ -128,13 +130,13 @@ export default function LeaveDecisionModal({
         ) : null}
 
         <label className="field" style={{ marginBottom: '16px' }}>
-          <span className="label">Remarks</span>
+          <span className="label">Remarks <span style={{ color: '#dc2626' }}>*</span></span>
           <textarea
             ref={commentRef}
             className="approval-row__comment-input"
             value={initialComment}
             onChange={(event) => onCommentChange?.(event.target.value)}
-            placeholder="Share a remark with the employee (required when rejecting)"
+            placeholder="Enter a remark for the employee"
             disabled={busy}
             maxLength={500}
             rows={3}
@@ -148,7 +150,7 @@ export default function LeaveDecisionModal({
             type="button"
             className="btn btn-danger"
             onClick={onReject}
-            disabled={busy}
+            disabled={busy || remarkEmpty}
           >
             {busy ? 'Submitting…' : 'Reject'}
           </button>
@@ -157,7 +159,7 @@ export default function LeaveDecisionModal({
             type="button"
             className="btn btn-primary"
             onClick={onApprove}
-            disabled={busy}
+            disabled={busy || remarkEmpty}
           >
             {busy ? 'Submitting…' : 'Approve'}
           </button>

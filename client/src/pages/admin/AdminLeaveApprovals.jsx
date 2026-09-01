@@ -18,6 +18,12 @@ const APPROVALS_PAGE_SIZE = 20;
 // is only sent once this window expires, so the popup countdown must match.
 const DECISION_UNDO_MS = 15000;
 
+function decisionUndoDurationMs(request) {
+  const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
+  if (!Number.isFinite(expiresAt)) return DECISION_UNDO_MS;
+  return Math.max(0, expiresAt - Date.now());
+}
+
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
 
 const QUEUE_STATUS_OPTIONS = [
@@ -258,6 +264,7 @@ export default function AdminLeaveApprovals() {
   const [queueStatus, setQueueStatus] = useState('pending');
 
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
+  const deepLinkRef = useRef(null);
 
   const employeeFilterRef = useRef(employeeFilter);
   const yearFilterRef = useRef(yearFilter);
@@ -359,15 +366,46 @@ export default function AdminLeaveApprovals() {
   useEffect(() => {
     const decision = searchParams.get('decision');
     const requestId = searchParams.get('requestId');
-    if (decision === 'request' && requestId && requests.length > 0) {
-      const target = requests.find((r) => r.id === requestId);
-      if (target && target.status === 'pending') {
+    if (decision !== 'request' || !requestId) {
+      deepLinkRef.current = null;
+      return undefined;
+    }
+
+    const deepLinkKey = `${decision}:${requestId}`;
+    if (deepLinkRef.current === deepLinkKey) return undefined;
+    deepLinkRef.current = deepLinkKey;
+
+    let cancelled = false;
+    async function openDeepLinkedRequest() {
+      let target = requests.find((item) => item.id === requestId);
+      if (!target) {
+        try {
+          const data = await leaveApi.getRequest(requestId);
+          target = data.request ?? data;
+        } catch (err) {
+          if (!cancelled) {
+            showError(getErrorMessage(err));
+            setSearchParams({}, { replace: true });
+          }
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      if (target?.status === 'pending') {
         setDecisionModal({ open: true, item: target, comment: '' });
         setExpandedIds((prev) => ({ ...prev, [requestId]: true }));
+      } else {
+        showError('This leave request is no longer pending.');
       }
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, requests, setSearchParams]);
+
+    openDeepLinkedRequest();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, requests, setSearchParams, showError]);
 
   function setCommentFor(id, value) {
     setComments((prev) => ({ ...prev, [id]: value }));
@@ -411,33 +449,38 @@ export default function AdminLeaveApprovals() {
   async function handleDecision(id, decision) {
     const item = decisionModal.item || requests.find((r) => r.id === id);
     const note = (decisionModal.comment || (comments[id] ?? '')).trim();
-    if (decision === 'reject' && !note) {
-      showError('A remark is required when rejecting a leave request.');
+    if (!note) {
+      showError('A remark is required for this action.');
       return;
     }
-    const payload = note ? { comment: note } : {};
+    const payload = { comment: note };
 
     if (decision === 'reject') {
       setActingId(id);
       setError('');
       try {
-        await leaveApi.rejectRequest(id, payload);
+        const response = await leaveApi.rejectRequest(id, payload);
+        const durationMs = decisionUndoDurationMs(response?.request);
         setDecisionModal({ open: false, item: null, comment: '' });
-        showActionPopup({
-          message: 'Leave request declined. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await leaveApi.undoDecision(id);
-              showSuccess('Leave decision undone.');
-              await loadRequests({ nextPage: page });
-              setDecisionModal({ open: true, item: item, comment: note });
-            } catch (err) {
-              showError(getErrorMessage(err));
-            }
-          },
-          durationMs: DECISION_UNDO_MS,
-        });
+        if (durationMs > 0) {
+          showActionPopup({
+            message: 'Leave request declined. If done by mistake, click Undo to revert it.',
+            undoLabel: 'Undo',
+            onUndo: async () => {
+              try {
+                await leaveApi.undoDecision(id);
+                showSuccess('Leave decision undone.');
+                await loadRequests({ nextPage: page });
+                setDecisionModal({ open: true, item: item, comment: note });
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
+            durationMs,
+          });
+        } else {
+          showSuccess('Leave request declined.');
+        }
         setComments((prev) => {
           const next = { ...prev };
           delete next[id];
@@ -455,23 +498,28 @@ export default function AdminLeaveApprovals() {
     setActingId(id);
     setError('');
     try {
-      await leaveApi.approveRequest(id, payload);
+      const response = await leaveApi.approveRequest(id, payload);
+      const durationMs = decisionUndoDurationMs(response?.request);
       setDecisionModal({ open: false, item: null, comment: '' });
-      showActionPopup({
-        message: 'Leave request approved. If done by mistake, click Undo to revert it.',
-        undoLabel: 'Undo',
-        onUndo: async () => {
-          try {
-            await leaveApi.undoDecision(id);
-            showSuccess('Leave decision undone.');
-            await loadRequests({ nextPage: page });
-            setDecisionModal({ open: true, item: item, comment: note });
-          } catch (err) {
-            showError(getErrorMessage(err));
-          }
-        },
-        durationMs: DECISION_UNDO_MS,
-      });
+      if (durationMs > 0) {
+        showActionPopup({
+          message: 'Leave request approved. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: async () => {
+            try {
+              await leaveApi.undoDecision(id);
+              showSuccess('Leave decision undone.');
+              await loadRequests({ nextPage: page });
+              setDecisionModal({ open: true, item: item, comment: note });
+            } catch (err) {
+              showError(getErrorMessage(err));
+            }
+          },
+          durationMs,
+        });
+      } else {
+        showSuccess('Leave request approved.');
+      }
       setComments((prev) => {
         const next = { ...prev };
         delete next[id];

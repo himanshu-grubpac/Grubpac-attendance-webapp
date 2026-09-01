@@ -47,7 +47,7 @@ function greetingForHour() {
 function todayStatusLabel(today) {
   if (today?.checkOut) return 'Checked out';
   if (today?.checkIn) {
-    return today.checkIn.attendanceMode === 'wfh' && today.checkIn.leaveStatus === 'pending'
+    return today.checkIn.leaveStatus === 'pending'
       ? 'Checked in (WFH pending)'
       : 'Checked in';
   }
@@ -167,7 +167,7 @@ export default function EmployeeDashboard() {
 
   const effectiveAttendanceMode = today?.checkIn
     ? today.checkIn.attendanceMode ?? 'office'
-    : today?.wfhApprovedToday
+    : today?.wfhApprovedToday || today?.wfhPendingToday
       ? 'wfh'
       : 'office';
 
@@ -178,8 +178,13 @@ export default function EmployeeDashboard() {
     try {
       const coords = await getPosition({ fresh: true });
       const todayCheckInMode = today?.checkIn?.attendanceMode ?? 'office';
+      // With a pending WFH request the employee may check in from anywhere; the
+      // mode is decided by location (inside office → office, elsewhere → wfh).
+      const hasPendingWfh = Boolean(today?.wfhPendingToday);
       const requiresOfficeGeo =
-        type === 'check_in' ? !today?.wfhApprovedToday : todayCheckInMode !== 'wfh';
+        type === 'check_in'
+          ? !today?.wfhApprovedToday && !hasPendingWfh
+          : todayCheckInMode !== 'wfh';
 
       if (requiresOfficeGeo && office) {
         const preview = evaluateOfficeGeoPreview(coords, office);
@@ -191,8 +196,20 @@ export default function EmployeeDashboard() {
         }
       }
 
+      let checkInPayload = coords;
+      if (type === 'check_in' && hasPendingWfh) {
+        // Decide the mode by current location: inside the office radius → office (OFC*),
+        // outside → wfh (WFH*). Both stay red until the WFH request is approved.
+        const preview = office ? evaluateOfficeGeoPreview(coords, office) : null;
+        const insideOffice = preview ? preview.isWithinOffice : false;
+        checkInPayload = {
+          ...coords,
+          attendanceMode: insideOffice ? 'office' : 'wfh',
+        };
+      }
+
       const data = type === 'check_in'
-        ? await attendanceApi.checkIn(coords, lateNote)
+        ? await attendanceApi.checkIn(checkInPayload, lateNote)
         : await attendanceApi.checkOut(coords);
       setResult(data);
       if (data.quarterWarnings) {
@@ -269,6 +286,7 @@ export default function EmployeeDashboard() {
   const primaryAction = isCheckedIn ? 'check_out' : 'check_in';
   const todayModeLabel = buildTodayAttendanceModeLabel({
     wfhApprovedToday: today?.wfhApprovedToday,
+    wfhApprovalPendingToday: today?.wfhApprovalPendingToday,
     approvedLeaveToday: today?.approvedLeaveToday,
     checkIn: today?.checkIn,
   });
@@ -299,7 +317,7 @@ export default function EmployeeDashboard() {
             className={`dash-status-badge${
               today?.checkIn ? ' dash-status-badge--in' : ''
             }${today?.checkOut ? ' dash-status-badge--out' : ''}${
-              today?.checkIn?.attendanceMode === 'wfh' && today?.checkIn?.leaveStatus === 'pending'
+              today?.checkIn?.leaveStatus === 'pending'
                 ? ' dash-status-badge--pending-wfh'
                 : ''
             }`}
@@ -313,7 +331,7 @@ export default function EmployeeDashboard() {
             <span className="label">Check-in</span>
             <strong
               className={
-                today?.checkIn?.attendanceMode === 'wfh' && today?.checkIn?.leaveStatus === 'pending'
+                today?.checkIn?.leaveStatus === 'pending'
                   ? 'dash-checkin-time--pending-wfh'
                   : undefined
               }

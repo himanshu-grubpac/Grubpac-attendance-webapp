@@ -92,16 +92,19 @@ export function buildApplyLeaveNotice({ leaveTypeCode, leaveTypeName, policyPaid
 /** Read-only dashboard label for today's auto-detected attendance mode. */
 export function buildTodayAttendanceModeLabel({
   wfhApprovedToday,
+  wfhApprovalPendingToday,
   approvedLeaveToday,
   checkIn,
 } = {}) {
   if (checkIn) {
-    if (checkIn.attendanceMode === 'wfh') {
-      return checkIn.leaveStatus === 'pending'
-        ? 'Today: Work from home (pending approval — shown in red until approved)'
-        : 'Today: Work from home (approved)';
+    if (checkIn.leaveStatus === 'pending') {
+      return 'Today: Work from home (pending approval — shown in red until approved)';
     }
+    if (checkIn.attendanceMode === 'wfh') return 'Today: Work from home (approved)';
     return 'Today: Office attendance';
+  }
+  if (wfhApprovalPendingToday) {
+    return 'Today: Work from home (approval pending — shown in red until final)';
   }
   if (wfhApprovedToday) {
     return 'Today: Work from home (approved)';

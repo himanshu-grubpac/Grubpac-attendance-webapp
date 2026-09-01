@@ -5,6 +5,7 @@ import {
 } from '../../../shared/utils/wfhPolicy.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
+import { endOfDayIST, startOfDayIST } from '../utils/istDate.js';
 
 export {
   LEAVE_APPLY_CUTOFF_TIME,
@@ -44,14 +45,16 @@ async function findWfhForIstDate(userId, dateInput, status) {
   }
 
   const statusFilter = Array.isArray(status) ? { $in: status } : status;
+  // Range-intersect with the full IST day so requests are matched regardless of
+  // whether startDate/endDate were stored at UTC midnight or the IST-noon anchor.
   return LeaveRequest.findOne({
     userId,
     leaveTypeId: wfhType._id,
     status: statusFilter,
-    startDate: { $lte: istDay },
-    endDate: { $gte: istDay },
+    startDate: { $lte: endOfDayIST(istDay) },
+    endDate: { $gte: startOfDayIST(istDay) },
   })
-    .select('_id status startDate endDate')
+    .select('_id status startDate endDate notifyAfter')
     .sort({ createdAt: -1 });
 }
 

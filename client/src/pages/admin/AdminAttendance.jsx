@@ -416,6 +416,12 @@ function resolveLeaveTypeDisplayCode(entry, leaveTypeCodeById = null) {
   return 'LV';
 }
 
+function isPendingWfhApproval(entry, now = Date.now()) {
+  if (resolveLeaveTypeDisplayCode(entry) !== 'WFH' || entry?.status !== 'approved') return false;
+  const expiresAt = parseTimestamp(entry.decisionUndoExpiresAt)?.getTime();
+  return Number.isFinite(expiresAt) && expiresAt > now;
+}
+
 function buildLeaveTypeCodeById(types, leaveEntries) {
   const map = new Map(
     (types ?? []).map((item) => [
@@ -505,6 +511,7 @@ function classifyDayCell({
   leaveTypeCodeById,
   todayKey,
   policy,
+  now = Date.now(),
 }) {
   if (isWeekendDayKey(dayKey)) {
     return { kind: 'weekend' };
@@ -527,14 +534,19 @@ function classifyDayCell({
     return String(entryUserId) === String(userId) && leaveCoversDay(entry, dayKey);
   });
   if (leaveEntry) {
+    const leaveTypeCode = resolveLeaveTypeDisplayCode(leaveEntry, leaveTypeCodeById);
+    const pendingWfh = isPendingWfhApproval(leaveEntry, now);
     const leaveCell = {
       kind: 'leave',
-      leaveTypeCode: resolveLeaveTypeDisplayCode(leaveEntry, leaveTypeCodeById),
+      leaveTypeCode,
+      pendingWfh,
     };
     if (allowedCheckIn) {
       const editMeta = pickEditMetadata(allowedCheckIn);
       return {
         ...leaveCell,
+        kind: 'present',
+        pendingWfh: pendingWfh || allowedCheckIn.leaveStatus === 'pending',
         modeTag: allowedCheckIn.attendanceMode === 'wfh' ? 'WFH' : 'OFC',
         checkInTime: formatCompactISTTime(allowedCheckIn.timestamp),
         checkOutTime: formatCompactISTTime(allowedCheckOut?.timestamp),
@@ -554,8 +566,7 @@ function classifyDayCell({
   if (allowedCheckIn) {
     const { statusTag, warningTag } = derivePolicyFromRecord(allowedCheckIn, policy);
     const editMeta = pickEditMetadata(allowedCheckIn);
-    const pendingWfh =
-      allowedCheckIn.attendanceMode === 'wfh' && allowedCheckIn.leaveStatus === 'pending';
+    const pendingWfh = allowedCheckIn.leaveStatus === 'pending';
     return {
       kind: 'present',
       statusTag,
@@ -685,7 +696,11 @@ function dayCellModifier(cell, dayKey, todayKey) {
   if (!cell) return '';
   if (cell.kind === 'weekend') return 'attendance-grid__day--weekend';
   if (cell.kind === 'holiday') return 'attendance-grid__day--holiday';
-  if (cell.kind === 'leave') return 'attendance-grid__day--leave';
+  if (cell.kind === 'leave') {
+    return cell.pendingWfh
+      ? 'attendance-grid__day--pending-wfh'
+      : 'attendance-grid__day--leave';
+  }
   if (cell.kind === 'absent') return 'attendance-grid__day--absent';
   if (cell.kind === 'rejected') return 'attendance-grid__day--rejected';
   if (cell.kind === 'future' || cell.kind === 'pending') {
@@ -709,7 +724,7 @@ function dayCardModifiers(cell, dayKey, todayKey, isDaySelected) {
   } else if (cell.kind === 'weekend' || cell.kind === 'holiday') {
     mods.push('attendance-day-card--rest');
   } else if (cell.kind === 'leave') {
-    mods.push('attendance-day-card--leave');
+    mods.push(cell.pendingWfh ? 'attendance-day-card--pending-wfh' : 'attendance-day-card--leave');
   } else if (cell.kind === 'absent') {
     mods.push('attendance-day-card--absent');
   } else if (cell.kind === 'rejected') {
@@ -820,6 +835,7 @@ function DayCell({ cell, cardClassName }) {
     );
   } else if (cell.kind === 'leave') {
     const leaveCode = cell.leaveTypeCode || resolveLeaveTypeDisplayCode(cell);
+    const pendingWfh = Boolean(cell.pendingWfh && leaveCode === 'WFH');
     inner = (
       <div className="attendance-grid__cell attendance-grid__cell--leave">
         <DayCellBadgeRow
@@ -832,7 +848,13 @@ function DayCell({ cell, cardClassName }) {
               />
             ) : null
           }
-          right={<AttendanceStatusTag code={leaveCode} tone={leaveTypeTagTone(leaveCode)} />}
+          right={
+            <AttendanceStatusTag
+              code={pendingWfh ? `${leaveCode}*` : leaveCode}
+              tone={pendingWfh ? 'danger' : leaveTypeTagTone(leaveCode)}
+              title={pendingWfh ? 'WFH approval pending — shown in red until approved' : leaveCode}
+            />
+          }
         />
         <CheckInOutTimes
           checkInTime={cell.checkInTime}
@@ -899,7 +921,7 @@ function DayCell({ cell, cardClassName }) {
           left={
             cell.modeTag ? (
               <AttendanceStatusTag
-                code={cell.modeTag}
+                code={cell.pendingWfh ? `${cell.modeTag}*` : cell.modeTag}
                 tone={cell.pendingWfh ? 'danger' : modeTagTone(cell.modeTag)}
                 title={
                   cell.pendingWfh
@@ -1181,6 +1203,7 @@ export default function AdminAttendance() {
   const [recordIndex, setRecordIndex] = useState(new Map());
   const [leaveEntries, setLeaveEntries] = useState([]);
   const [leaveTypeCodeById, setLeaveTypeCodeById] = useState(() => new Map());
+  const [decisionNow, setDecisionNow] = useState(() => Date.now());
   const [holidaySet, setHolidaySet] = useState(new Set());
   const [policy, setPolicy] = useState(DEFAULT_POLICY);
   const [quarterWarnings, setQuarterWarnings] = useState({ byUser: {}, quarter: null, allowance: 3 });
@@ -1200,6 +1223,8 @@ export default function AdminAttendance() {
   const [editError, setEditError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [gridVisibleCount, setGridVisibleCount] = useState(20);
+  const GRID_PAGE_SIZE = 20;
   const [deptFilter, setDeptFilter] = useState(null); // null = all, array = selected names, [] = none
   const [statusFilter, setStatusFilter] = useState(null); // null = all, array = selected keys, [] = none
   const [filterOpen, setFilterOpen] = useState(false);
@@ -1345,8 +1370,17 @@ export default function AdminAttendance() {
     setHistoryPage(1);
     setHistoryTotalPages(1);
     setHistoryError('');
+    setGridVisibleCount(GRID_PAGE_SIZE);
     loadHistoryPage(1);
   }, [deptFilter, statusFilter, loadHistoryPage]);
+
+  function handleGridScroll(event) {
+    const el = event.currentTarget;
+    if (gridVisibleCount >= filteredGridRows.length) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) {
+      setGridVisibleCount((current) => Math.min(current + GRID_PAGE_SIZE, filteredGridRows.length));
+    }
+  }
 
   function handleHistoryScroll(event) {
     const el = event.currentTarget;
@@ -1358,8 +1392,24 @@ export default function AdminAttendance() {
   }
 
   useEffect(() => {
+    setGridVisibleCount(GRID_PAGE_SIZE);
     loadWeek();
   }, [loadWeek]);
+
+  useEffect(() => {
+    const nextExpiry = leaveEntries
+      .filter((entry) => resolveLeaveTypeDisplayCode(entry) === 'WFH' && entry?.status === 'approved')
+      .map((entry) => parseTimestamp(entry.decisionUndoExpiresAt)?.getTime())
+      .filter((expiresAt) => Number.isFinite(expiresAt) && expiresAt > Date.now())
+      .sort((a, b) => a - b)[0];
+    if (!nextExpiry) return undefined;
+
+    const timeout = setTimeout(
+      () => setDecisionNow(Date.now()),
+      Math.max(0, nextExpiry - Date.now() + 1),
+    );
+    return () => clearTimeout(timeout);
+  }, [leaveEntries, decisionNow]);
 
   useEffect(() => {
     function applyOfficePolicy(settings) {
@@ -1425,13 +1475,14 @@ export default function AdminAttendance() {
           leaveTypeCodeById,
           todayKey,
           policy,
+          now: decisionNow,
         }),
       );
       const rejectedCount = cells.filter((cell) => cell.kind === 'rejected').length;
       const warningCount = cells.filter((cell) => cell.warningTag).length;
       return { employee, cells, rejectedCount, warningCount };
     });
-  }, [employees, weekDays, recordIndex, holidaySet, leaveEntries, leaveTypeCodeById, todayKey, policy]);
+  }, [employees, weekDays, recordIndex, holidaySet, leaveEntries, leaveTypeCodeById, todayKey, policy, decisionNow]);
 
   const departmentOptions = useMemo(() => {
     const names = new Set();
@@ -1970,7 +2021,15 @@ export default function AdminAttendance() {
             />
           </div>
         ) : (
-          <div className="attendance-grid-scroll table-wrap">
+          <div
+            className="attendance-grid-scroll table-wrap"
+            onScroll={handleGridScroll}
+            style={{
+              '--selected-day-left': selectedDayKey
+                ? `calc(var(--attendance-row-num-width) + 14rem + ${weekDays.indexOf(selectedDayKey)} * 5.25rem)`
+                : undefined,
+            }}
+          >
             <table className="attendance-grid">
               <thead>
                 <tr>
@@ -2020,7 +2079,7 @@ export default function AdminAttendance() {
                 </tr>
               </thead>
               <tbody>
-                {filteredGridRows.map(({ employee, cells, rejectedCount }, rowIndex) => {
+                {filteredGridRows.slice(0, gridVisibleCount).map(({ employee, cells, rejectedCount }, rowIndex) => {
                   const id = employee.id;
                   const confirmation = weekConfirmations[String(id)];
                   const isConfirming = confirmingUserId === id;
@@ -2134,6 +2193,11 @@ export default function AdminAttendance() {
                 })}
               </tbody>
             </table>
+            <div className="attendance-grid-scroll__status">
+              {gridVisibleCount < filteredGridRows.length
+                ? `Showing ${gridVisibleCount} of ${filteredGridRows.length} employees — scroll for more`
+                : `Showing all ${filteredGridRows.length} employees`}
+            </div>
           </div>
         )}
       </section>

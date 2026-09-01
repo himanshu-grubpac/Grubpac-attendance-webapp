@@ -121,14 +121,12 @@ export default function EmployeeHistory() {
                           <span
                             className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}${
                               record.type === 'check_in' &&
-                              record.attendanceMode === 'wfh' &&
                               record.leaveStatus === 'pending'
                                 ? ' attendance-mode-badge--wfh-pending'
                                 : ''
                             }`}
                             title={
                               record.type === 'check_in' &&
-                              record.attendanceMode === 'wfh' &&
                               record.leaveStatus === 'pending'
                                 ? 'WFH approval pending — shown in red until approved'
                                 : undefined

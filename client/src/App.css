@@ -5815,6 +5815,12 @@ body::-webkit-scrollbar-thumb {
   color: var(--warning);
 }
 
+.month-calendar__cell--wfh_pending {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error);
+}
+
 .month-calendar__cell--leave {
   background: var(--info-bg);
   border-color: rgba(56, 189, 248, 0.25);
@@ -5897,6 +5903,11 @@ body::-webkit-scrollbar-thumb {
 .month-calendar__swatch--half_day {
   background: var(--warning-bg);
   border-color: var(--warning-border);
+}
+
+.month-calendar__swatch--wfh_pending {
+  background: var(--error-bg);
+  border-color: var(--error-border);
 }
 
 .month-calendar__swatch--leave {
@@ -7113,6 +7124,24 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.4;
   pointer-events: auto;
   animation: toast-enter 0.2s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.toast__progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.toast__progress-bar {
+  display: block;
+  height: 100%;
+  background: #f59e0b;
+  transition: width 0.1s linear;
 }
 
 .toast > span {
@@ -8022,17 +8051,31 @@ body::-webkit-scrollbar-thumb {
 
 .attendance-grid-scroll {
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  overscroll-behavior-y: contain;
   width: 100%;
   max-width: 100%;
+  max-height: 38rem;
   border-radius: inherit;
 }
 
 .attendance-grid-scroll.table-wrap {
   border: none;
   border-radius: inherit;
+}
+
+.attendance-grid-scroll__status {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted, var(--text-secondary));
+  border-top: 1px solid var(--border);
+}
+
+.attendance-grid-scroll__status:empty {
+  display: none;
 }
 
 /* ── Attendance filter button + popover ────────────────────────────────── */
@@ -8182,7 +8225,8 @@ body::-webkit-scrollbar-thumb {
 
 .attendance-history {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.85rem;
 }
 
@@ -8238,7 +8282,7 @@ body::-webkit-scrollbar-thumb {
   --attendance-day-card-height: calc(var(--attendance-row-height) - (2 * var(--attendance-cell-padding)));
   width: 100%;
   min-width: max-content;
-  border-collapse: collapse;
+  border-collapse: separate;
   border-spacing: 0;
   font-size: 0.8rem;
   table-layout: fixed;
@@ -8376,13 +8420,18 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-grid__col-day--selected {
+  position: sticky;
+  left: var(--selected-day-left, 0);
+  z-index: 2;
   background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
   box-shadow: inset 0 -2px 0 0 var(--primary);
 }
 
 /* border-collapse ignores cell radius — draw rounded top cap with a pseudo frame */
 .attendance-grid thead .attendance-grid__col-day--selected {
-  position: relative;
+  position: sticky;
+  left: var(--selected-day-left, 0);
+  z-index: 4;
   box-shadow: inset 0 -2px 0 0 var(--primary);
 }
 
@@ -8553,6 +8602,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-grid__day--selected {
+  position: sticky;
+  left: var(--selected-day-left, 0);
+  z-index: 1;
   background: transparent;
   box-shadow:
     inset 2px 0 0 0 var(--primary),
@@ -8561,7 +8613,9 @@ body::-webkit-scrollbar-thumb {
 
 /* Last row: single ::after frame for sides + rounded bottom — no inset side rails (they bleed past the curve) */
 .attendance-grid tbody tr:last-child .attendance-grid__day--selected {
-  position: relative;
+  position: sticky;
+  left: var(--selected-day-left, 0);
+  z-index: 1;
   box-shadow: none;
   overflow: hidden;
 }

@@ -10,7 +10,6 @@ import { runAutoCheckoutJob, computeAutoCheckoutDeadline } from './autoCheckoutJ
 import {
   buildISTTimestampFromDayAndTime,
   getISTDateInputValue,
-  startOfDayIST,
 } from '../utils/istDate.js';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -439,7 +438,7 @@ test('integration: scan window boundary — check-in at exactly 3 days ago is in
   }
 });
 
-test('integration: check-in older than 3 days is excluded', async () => {
+test('integration: check-in older than the previous scan window is still processed', async () => {
   await setupDb();
   try {
     await AttendanceRecord.deleteMany({});
@@ -454,8 +453,8 @@ test('integration: check-in older than 3 days is excluded', async () => {
     const result = await runAutoCheckoutJob(now);
     const after = await countAutoCheckouts(user._id);
 
-    assert.equal(after - before, 0, 'check-in older than 3 days should be excluded');
-    assert.equal(result.processed, 0);
+    assert.equal(after - before, 1, 'historical open check-in should be processed');
+    assert.equal(result.processed, 1);
   } finally {
     await teardownDb();
   }

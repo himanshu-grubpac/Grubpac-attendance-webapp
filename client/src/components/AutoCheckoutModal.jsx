@@ -84,8 +84,15 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
     // The TimeField only commits on blur/period click; if the user types a
     // time and clicks Save without blurring first, commit the pending input
     // and use the committed value (React state would still be stale here).
-    const officeTime = officeTimeRef.current?.commit?.() ?? office.time;
-    const wfhTime = wfhTimeRef.current?.commit?.() ?? wfh.time;
+    const activeTimeRef = type === 'wfh' ? wfhTimeRef : officeTimeRef;
+    const committedTime = activeTimeRef.current?.commit?.();
+    if (!committedTime) {
+      setError('Enter a valid auto-checkout time.');
+      return;
+    }
+
+    const officeTime = type === 'office' ? committedTime : office.time;
+    const wfhTime = type === 'wfh' ? committedTime : wfh.time;
     setSaving(true);
     setError('');
     try {
@@ -170,7 +177,13 @@ export default function AutoCheckoutModal({ open, initial, onClose, onSave }) {
 
                 <label className="modal__subfield">
                   Time
-                  <TimeField value={current.time} onChange={setCurrentTime} aria-label="Auto-checkout time" innerRef={type === 'wfh' ? wfhTimeRef : officeTimeRef} />
+                  <TimeField
+                    value={current.time}
+                    onChange={setCurrentTime}
+                    onInvalid={() => setError('Enter a valid auto-checkout time.')}
+                    aria-label="Auto-checkout time"
+                    innerRef={type === 'wfh' ? wfhTimeRef : officeTimeRef}
+                  />
                 </label>
               </div>
             </div>
