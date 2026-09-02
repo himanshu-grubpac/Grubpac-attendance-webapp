@@ -34,6 +34,17 @@ export function isEmailConfigured() {
   return Boolean(getTransport());
 }
 
+/** Close the pooled SMTP transport (test teardown / graceful shutdown). */
+export function closeEmailTransport() {
+  if (cachedTransport) {
+    if (typeof cachedTransport.close === 'function') {
+      cachedTransport.close();
+    }
+    cachedTransport = null;
+    transportResolved = false;
+  }
+}
+
 function buildFrom() {
   const { address, name } = env.emailFrom;
   if (!name) return address;

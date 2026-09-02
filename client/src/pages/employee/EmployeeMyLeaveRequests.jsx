@@ -7,9 +7,9 @@ import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 
-/** True when an approved leave can still be cancelled (its end date has not passed, IST). */
-function canCancelApprovedLeave(item) {
-  if (item.status !== 'approved') return false;
+/** True when the leave request can still be cancelled (end date has not passed, IST). */
+function canCancelLeaveRequest(item) {
+  if (item.status !== 'pending' && item.status !== 'approved') return false;
   const todayKey = getISTDateInputValue();
   const endKey = typeof item.endDate === 'string' ? item.endDate.slice(0, 10) : null;
   if (!endKey) return false;
@@ -111,7 +111,7 @@ export default function EmployeeMyLeaveRequests() {
                         <LeaveStatusBadge status={item.status} />
                       </td>
                       <td data-label="Action" className="cell-actions">
-                        {(item.status === 'pending' || canCancelApprovedLeave(item)) && (
+                        {canCancelLeaveRequest(item) && (
                           <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item)}>
                             Cancel
                           </button>

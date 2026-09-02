@@ -25,6 +25,7 @@ import {
   getAvailableBalance,
   getPolicyMapForYear,
   refreshAccruedEntitlements,
+  reclaimApprovedDays,
   releaseApprovedDays,
   releasePendingDays,
   reservePendingDays,
@@ -69,6 +70,7 @@ const LEAVE_SUBMIT_UNDO_WINDOW_MS = Number(
 const pendingSubmitTimers = new Map();
 
 function scheduleSubmitNotification(requestId) {
+  if (process.env.NODE_ENV === 'test') return;
   if (pendingSubmitTimers.has(requestId)) return;
   const timer = setTimeout(() => {
     pendingSubmitTimers.delete(requestId);
@@ -957,8 +959,12 @@ export async function cancelLeaveRequest(requestId, actor) {
   return request.toSafeJSON();
 }
 
-/** Emails the applicant (and the original approver, when applicable) that an approved leave was cancelled. */
-async function notifyLeaveCancelled(request, wasApproved, approverId) {
+/**
+ * Notifies the applicant (and original approver) that an approved leave was
+ * cancelled. The in-app notification is always sent immediately; email/SMS can
+ * be deferred (sendChannels=false) until the cancellation's undo window expires.
+ */
+async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChannels = true } = {}) {
   const userId = request.userId?._id?.toString?.() ?? request.userId?.toString?.();
   const applicant = await User.findById(userId).select('name email mobile whatsappOptIn');
   const leaveTypeName =
@@ -977,6 +983,8 @@ async function notifyLeaveCancelled(request, wasApproved, approverId) {
         metadata: { requestId: request._id.toString() },
       });
     }
+
+    if (!sendChannels) return;
 
     if (applicant?.email) {
       const { subject, html, text } = renderLeaveCancelledEmail({
@@ -998,7 +1006,8 @@ async function notifyLeaveCancelled(request, wasApproved, approverId) {
     console.error('[leave] cancelled notification failed', request._id?.toString(), err?.message);
   }
 
-  // Notify the original approver that the approved leave was cancelled by the employee.
+  // Notify the original approver that the approved leave was cancelled.
+  if (!sendChannels) return;
   if (wasApproved && approverId) {
     try {
       const approver = await User.findById(approverId).select('name email mobile whatsappOptIn');
@@ -1068,11 +1077,7 @@ export async function editLeaveRequest(requestId, actor, payload) {
         excludeRequestId: request._id,
       });
 
-      await reserveValidatedLeaveBalance(
-        validated.balance,
-        validated.balancePendingDelta,
-        session,
-      );
+      await reservePendingDays(userId, payload.leaveTypeId, validated.days, validated.year, session);
 
       request.leaveTypeId = payload.leaveTypeId;
       request.startDate = validated.startDate;

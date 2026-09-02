@@ -334,12 +334,12 @@ test('filterSpilloverAutoCheckouts: no check-ins removes all auto-checkouts', ()
   assert.equal(filtered.length, 0);
 });
 
-test('filterSpilloverAutoCheckouts: no check-ins keeps non-auto-checkout records', () => {
+test('filterSpilloverAutoCheckouts: no check-ins drops check-out records', () => {
   const records = [
     makeRecord({ type: 'check_out', autoCheckout: false, timestamp: new Date('2026-09-02T00:30:00Z') }),
   ];
   const filtered = filterSpilloverAutoCheckouts(records);
-  assert.equal(filtered.length, 1);
+  assert.equal(filtered.length, 0);
 });
 
 test('filterSpilloverAutoCheckouts: keeps auto-checkout after check-in', () => {

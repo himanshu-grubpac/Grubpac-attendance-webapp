@@ -31,6 +31,7 @@ export async function sendSms({ to, message }) {
   try {
     const res = await fetch(SMS_ENDPOINT, {
       method: 'POST',
+      signal: AbortSignal.timeout(10_000),
       headers: {
         'api-key': env.brevoApiKey,
         'Content-Type': 'application/json',

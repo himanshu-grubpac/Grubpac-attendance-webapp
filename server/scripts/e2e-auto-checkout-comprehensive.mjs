@@ -344,7 +344,8 @@ try {
   off.markModified('autoCheckout');
   await off.save();
 
-  // C11: Scan window — check-in older than 3 days is NOT scanned
+  // C11: Historical open check-in (older than 3 days) is still closed out — the
+  // job processes every unresolved open check-in using the current config.
   const u8 = await makeUser('c11');
   await AttendanceRecord.deleteMany({ userId: u8._id });
   const fourDaysAgoKey = getISTDateInputValue(new Date(now.getTime() - 4 * 86400000));
@@ -355,7 +356,7 @@ try {
   });
   const resC11 = await runAutoCheckoutJob(now);
   const c11Count = await AttendanceRecord.countDocuments({ userId: u8._id, type: 'check_out', autoCheckout: true });
-  check('C11: check-in older than SCAN_WINDOW_DAYS (3) not processed', c11Count === 0);
+  check('C11: historical open check-in is processed (backfilled)', c11Count === 1 && resC11.processed >= 1);
 
   // C12: Mixed modes — office overdue, WFH not overdue (same user, same day)
   const u9 = await makeUser('c12');
@@ -489,13 +490,13 @@ try {
   // ════════════════════════════════════════════════════════════════════════════
   section('E. filterSpilloverAutoCheckouts Edge Cases');
 
-  // E1: No check-ins → removes all auto-checkouts
+  // E1: No check-ins → drops all check-out records (check-out needs a check-in)
   const e1Records = [
     { type: 'check_out', autoCheckout: true, timestamp: new Date('2026-09-01T10:00:00Z') },
     { type: 'check_out', autoCheckout: false, timestamp: new Date('2026-09-01T11:00:00Z') },
   ];
   const e1Filtered = filterSpilloverAutoCheckouts(e1Records);
-  check('E1: no check-ins → removes auto-checkouts', e1Filtered.length === 1 && !e1Filtered[0].autoCheckout);
+  check('E1: no check-ins → drops all check-outs', e1Filtered.length === 0);
 
   // E2: Auto-checkout before earliest check-in → removed
   const e2Records = [

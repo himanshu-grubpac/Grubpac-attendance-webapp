@@ -385,6 +385,24 @@ export async function releaseApprovedDays(userId, leaveTypeId, days, year = getI
   return balance;
 }
 
+/**
+ * Inverse of releaseApprovedDays — restores consumed leave days after an
+ * approved-leave cancellation is undone. Standard approved leaves carry no
+ * pending days, so only `used` is re-consumed.
+ */
+export async function reclaimApprovedDays(userId, leaveTypeId, days, year = getISTYear(), session = null) {
+  const query = LeaveBalance.findOne({ userId, leaveTypeId, year });
+  if (session) query.session(session);
+  const balance = await query;
+  if (!balance) {
+    throwError('Leave balance not found for this year.');
+  }
+
+  balance.used += days;
+  await balance.save(session ? { session } : undefined);
+  return balance;
+}
+
 export function resolveLeaveYear(startDateInput) {
   const start = parseDateInputAsISTDay(startDateInput);
   return getISTYear(start);

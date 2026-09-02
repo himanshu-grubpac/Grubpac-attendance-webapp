@@ -53,6 +53,8 @@ beforeEach(async () => {
 });
 
 after(async () => {
+  const { closeEmailTransport } = await import('./emailService.js');
+  closeEmailTransport();
   await mongoose.disconnect();
   await memoryServer.stop();
 });
@@ -139,7 +141,7 @@ async function createAttendance({ userId, requestId = null, dayKey, time = '09:0
 
 const managerPermissions = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ_ALL];
 
-test('WFH rejection clears the red marker and undo restores pending state', async () => {
+test('WFH rejection finalizes without a red marker and undo restores pending state', async () => {
   const manager = await createUser('Manager', { role: 'admin' });
   const { applicant, request } = await createWfhFixture({ manager });
   const checkIn = await createAttendance({
@@ -150,13 +152,19 @@ test('WFH rejection clears the red marker and undo restores pending state', asyn
 
   await processLeaveDecision(request, manager, 'reject', 'WFH is not available today.');
   let saved = await AttendanceRecord.findById(checkIn._id).lean();
-  assert.equal(saved.leaveStatus, 'rejected');
+  assert.equal(saved.leaveStatus, 'pending', 'decision remains red during undo window');
   assert.equal(String(saved.leaveRequestId), String(request._id));
 
   await undoLeaveDecision(request._id, manager, managerPermissions);
   saved = await AttendanceRecord.findById(checkIn._id).lean();
   assert.equal(saved.leaveStatus, 'pending');
   assert.equal(String(saved.leaveRequestId), String(request._id));
+
+  const rejectedAgain = await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE);
+  await processLeaveDecision(rejectedAgain, manager, 'reject', 'WFH is still unavailable.');
+  await runLeaveDecisionNotifyJob(new Date(Date.now() + 20_000));
+  saved = await AttendanceRecord.findById(checkIn._id).lean();
+  assert.equal(saved.leaveStatus, 'rejected', 'finalized rejection is no longer red');
 });
 
 test('pending WFH cancellation removes its red marker', async () => {
@@ -204,7 +212,7 @@ test('approved WFH undo does not recolor an unrelated unlinked check-in', async 
 test('editing a pending WFH request clears old markers and reserves the new balance', async () => {
   const { applicant, leaveType, request, year } = await createWfhFixture();
   const oldDay = getISTDateInputValue(request.startDate);
-  const newDay = nextDay(oldDay);
+  const newDay = nextDay(oldDay, 3);
   const checkIn = await createAttendance({
     userId: applicant._id,
     requestId: request._id,

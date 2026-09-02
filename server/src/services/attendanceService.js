@@ -64,7 +64,10 @@ async function getTodayRecords(userId, session = null) {
 export function filterSpilloverAutoCheckouts(records) {
   const checkIns = records.filter((r) => r.type === 'check_in');
   if (checkIns.length === 0) {
-    return records.filter((r) => !r.autoCheckout);
+    // A check-out without a same-day check-in is invalid/orphan (e.g. a
+    // cross-day WFH auto-checkout, legacy seed, or stale record). Check-out can
+    // only happen after check-in, so never surface it as today's state.
+    return records.filter((r) => r.type !== 'check_out');
   }
 
   const earliestCheckIn = checkIns[0].timestamp;
