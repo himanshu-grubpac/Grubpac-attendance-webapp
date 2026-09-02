@@ -7895,6 +7895,18 @@ body::-webkit-scrollbar-thumb {
   vertical-align: middle;
 }
 
+.approvals-table__actions-col {
+  width: 7rem;
+  min-width: 7rem;
+  text-align: center;
+}
+
+.approvals-table__actions-cell {
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .approval-row--summary {
   cursor: pointer;
 }
@@ -8204,6 +8216,12 @@ body::-webkit-scrollbar-thumb {
   }
 
   .approval-row__status {
+    flex: 0 0 auto;
+    padding: 0.55rem 0.75rem 0 0;
+    text-align: right;
+  }
+
+  .approvals-table__actions-cell {
     flex: 0 0 auto;
     padding: 0.55rem 0.75rem 0 0;
     text-align: right;
@@ -13565,6 +13583,46 @@ body::-webkit-scrollbar-thumb {
   transition: width 0.25s linear;
 }
 
+.leave-type-row {
+  display: flex;
+  gap: 1rem;
+  align-items: start;
+}
+.leave-type-row__type {
+  flex: 0 1 48%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.leave-type-row__balance {
+  flex: 0 1 48%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-left: 30px;
+}
+.leave-balance-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  width: fit-content;
+  padding-top: 4px;
+}
+.leave-balance-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-h, #e2e8f0);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
 .leave-submit-summary {
   display: grid;
   gap: 0.5rem;
@@ -13642,10 +13700,6 @@ body::-webkit-scrollbar-thumb {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
-}
-
-.today-present-search {
-  max-width: 18rem;
 }
 
 .today-present-table__col-num {

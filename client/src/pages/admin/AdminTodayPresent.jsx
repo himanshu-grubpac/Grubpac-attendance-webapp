@@ -2,21 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 
-function statusLabel(member) {
-  switch (member.status) {
-    case 'checked_in':
-      return member.attendanceMode === 'wfh' ? 'WFH' : 'In Office';
-    case 'wfh':
-      return 'WFH';
-    case 'on_leave':
-      return member.approvedLeave?.leaveTypeCode
-        ? `On Leave (${member.approvedLeave.leaveTypeCode})`
-        : 'On Leave';
-    default:
-      return 'Not Checked In';
-  }
-}
-
 function isPresent(member) {
   return member.status === 'checked_in' || member.status === 'wfh';
 }
@@ -105,15 +90,21 @@ export default function AdminTodayPresent() {
 
       <section className="card card--table" aria-label="Team present status">
         <div className="card__header">
-          <h2 className="card__title">Team Attendance Today</h2>
-          <input
-            type="search"
-            className="input today-present-search"
-            placeholder="Search name, code, department, role"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            aria-label="Search team members"
-          />
+          <h2 className="card__title" style={{ textAlign: 'left' }}>Team Attendance Today</h2>
+          <div className="search-input">
+            <svg className="search-input__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              type="search"
+              className="input search-input__field"
+              placeholder="Search name, code, department, role"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Search team members"
+            />
+          </div>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
@@ -134,13 +125,12 @@ export default function AdminTodayPresent() {
                   <th scope="col">Department</th>
                   <th scope="col">Role</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Detail</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="muted small today-present-table__empty">
+                    <td colSpan={5} className="muted small today-present-table__empty">
                       No team members found.
                     </td>
                   </tr>
@@ -173,15 +163,6 @@ export default function AdminTodayPresent() {
                           >
                             {present ? 'Present' : 'Absent'}
                           </span>
-                        </td>
-                        <td data-label="Detail" className="muted small">
-                          {statusLabel(member)}
-                          {member.checkInTime && (
-                            <span className="today-present-table__time">
-                              {' · since '}
-                              {member.checkInTime}
-                            </span>
-                          )}
                         </td>
                       </tr>
                     );
