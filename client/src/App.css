@@ -7430,6 +7430,10 @@ body::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.55);
 }
 
+.modal .select-field__panel {
+  z-index: 130;
+}
+
 .modal {
   width: min(100%, 26rem);
   max-height: min(calc(100vh - 2.5rem), 32rem);
