@@ -257,6 +257,7 @@ export async function cancelApprovedLeaveByApproverHandler(req, res) {
     req.params.id,
     req.user,
     req.userPermissions,
+    { decisionComment: req.body?.comment ?? null },
   );
   res.json({ request });
 }

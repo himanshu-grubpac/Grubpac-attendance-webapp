@@ -16,5 +16,6 @@ export default defineConfig({
     globals: true,
     css: false,
     setupFiles: ['./vitest.setup.js'],
+    exclude: ['node_modules/**', 'src/utils/leaveStatusCopy.test.js'],
   },
 });

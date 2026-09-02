@@ -874,7 +874,7 @@ export async function cancelLeaveRequest(requestId, actor) {
 }
 
 /** Approver (or delegate) cancels an approved leave on behalf of the employee. */
-export async function cancelApprovedLeaveByApprover(requestId, actor, permissions) {
+export async function cancelApprovedLeaveByApprover(requestId, actor, permissions, { decisionComment = null } = {}) {
   const request = await loadLeaveRequest(requestId);
   const isApproved = request.status === 'approved' || request.pendingDecision === 'approved';
   if (!isApproved) {
@@ -888,7 +888,7 @@ export async function cancelApprovedLeaveByApprover(requestId, actor, permission
     throwError('You are not authorized to cancel this leave request.', 403);
   }
 
-  await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id });
+  await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id, decisionComment });
   return request.toSafeJSON();
 }
 
@@ -898,23 +898,23 @@ export async function cancelApprovedLeaveByApprover(requestId, actor, permission
  * deferral window — the applicant/approver email is only sent after the window
  * expires (via the decision-notify job).
  */
-async function applyLeaveCancellation(request, actor, { undoable = false, approverId: cancelActorId = null } = {}) {
+async function applyLeaveCancellation(request, actor, { undoable = false, approverId: cancelActorId = null, decisionComment = null } = {}) {
   const wasApproved = request.status === 'approved' || request.pendingDecision === 'approved';
   const userId = request.userId?._id ?? request.userId;
 
   if (undoable) {
     // Approved-leave cancellation: nothing changes until the undo window
-    // expires. Status, balance and WFH markers all stay frozen.
+    // expires. Status, balance and WFH markers all stay frozen. Preserve the
+    // original approval metadata (approverId/decidedAt) so an undo restores it.
     if (request.pendingDecision) {
       throwError('Another decision is already pending. Undo it first before cancelling.');
     }
     request.pendingDecision = 'cancelled';
-    request.approverId = cancelActorId ?? request.approverId;
-    request.decidedAt = new Date();
     request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
     request.notificationsSent = false;
     request.submitNotificationsSent = true;
     request.decisionTokens = [];
+    if (decisionComment) request.decisionComment = decisionComment;
     await request.save();
   } else {
     // Pending-leave cancellation: immediate, no undo needed.
@@ -962,11 +962,8 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
     throwError('No pending cancellation to undo.', 400);
   }
 
-  if (request.decidedAt) {
-    const elapsed = Date.now() - new Date(request.decidedAt).getTime();
-    if (elapsed > LEAVE_DECISION_UNDO_MS) {
-      throwError('The undo window has expired. The cancellation is now final.', 410);
-    }
+  if (request.notifyAfter && Date.now() > new Date(request.notifyAfter).getTime()) {
+    throwError('The undo window has expired. The cancellation is now final.', 410);
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
@@ -979,10 +976,9 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
   const userId = request.userId?._id ?? request.userId;
 
   // Nothing changed during the undo window — status, balance and WFH markers
-  // are all untouched. Just clear the pending decision fields.
+  // are all untouched. Just clear the pending decision fields. Keep the
+  // original approval metadata (approverId/decidedAt) intact.
   request.pendingDecision = null;
-  request.approverId = null;
-  request.decidedAt = null;
   request.notifyAfter = null;
   request.notificationsSent = false;
   request.submitNotificationsSent = true;

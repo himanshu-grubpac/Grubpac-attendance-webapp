@@ -60,7 +60,7 @@ export default function AdminDepartments() {
 
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(emptyForm);
-  const [managers, setManagers] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [fieldErrors, setFieldErrors] = useState({});
   const [modalError, setModalError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -106,10 +106,22 @@ export default function AdminDepartments() {
 
   useEffect(() => {
     loadDepartments();
-    adminApi
-      .listManagers({ limit: 200 })
-      .then((data) => setManagers(data.managers ?? []))
-      .catch(() => {});
+    (async () => {
+      try {
+        const allEmployees = [];
+        let page = 1;
+        let totalPages = 1;
+        while (page <= totalPages) {
+          const data = await adminApi.listEmployees({ page, limit: 100, isActive: 'true' });
+          allEmployees.push(...(data.employees ?? []));
+          totalPages = data.pagination?.totalPages ?? 1;
+          page += 1;
+        }
+        setEmployees(allEmployees);
+      } catch {
+        // Silently ignore — dropdown will show only "None".
+      }
+    })();
   }, [loadDepartments]);
 
   function clearFilters() {
@@ -334,6 +346,7 @@ export default function AdminDepartments() {
                   <th>Name</th>
                   <th>Code</th>
                   <th>Lead</th>
+                  <th>Employees</th>
                   <th>Status</th>
                   <th className="cell-actions-col">Actions</th>
                 </tr>
@@ -355,6 +368,9 @@ export default function AdminDepartments() {
                       }
                     >
                       {formatLeadLabel(department)}
+                    </td>
+                    <td data-label="Employees">
+                      {department.employeeCount ?? 0}
                     </td>
                     <td data-label="Status">
                       <StatusBadge active={department.isActive} />
@@ -425,30 +441,30 @@ export default function AdminDepartments() {
                 </label>
 
                 <div className="modal__field">
-                  <span className="label">Department lead</span>
+                  <span className="label">Department lead <span className="muted">(Optional)</span></span>
                   <SelectField
                     value={form.leadUserId ?? ''}
                     onChange={(value) => setForm({ ...form, leadUserId: value })}
                     options={[
                       { value: '', label: 'None' },
-                      ...managers.map((manager) => ({
-                        value: manager.id,
-                        label: manager.name,
+                      ...employees.map((emp) => ({
+                        value: emp.id,
+                        label: emp.name,
                       })),
                     ]}
                     aria-label="Department lead"
                   />
                 </div>
                 <div className="modal__field">
-                  <span className="label">Deputy lead</span>
+                  <span className="label">Deputy lead <span className="muted">(Optional)</span></span>
                   <SelectField
                     value={form.deputyUserId ?? ''}
                     onChange={(value) => setForm({ ...form, deputyUserId: value })}
                     options={[
                       { value: '', label: 'None' },
-                      ...managers.map((manager) => ({
-                        value: manager.id,
-                        label: manager.name,
+                      ...employees.map((emp) => ({
+                        value: emp.id,
+                        label: emp.name,
                       })),
                     ]}
                     aria-label="Deputy lead"

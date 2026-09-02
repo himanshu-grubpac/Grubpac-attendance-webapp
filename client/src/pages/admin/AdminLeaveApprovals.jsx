@@ -548,16 +548,15 @@ export default function AdminLeaveApprovals() {
         showActionPopup({
           message: 'Approved leave cancelled. If done by mistake, click Undo to revert it.',
           undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await leaveApi.undoCancellation(item.id);
-              showSuccess('Cancellation undone. Leave restored.');
-              await loadRequests({ nextPage: page });
-              setCancelModal({ open: true, item, comment: note });
-            } catch (err) {
-              showError(getErrorMessage(err));
-            }
-          },
+            onUndo: async () => {
+              try {
+                await leaveApi.undoCancellation(item.id);
+                showSuccess('Cancellation undone. Leave restored.');
+                await loadRequests({ nextPage: page });
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
           durationMs,
         });
       } else {

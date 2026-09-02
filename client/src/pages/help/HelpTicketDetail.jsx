@@ -264,9 +264,25 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     setError('');
     try {
       const data = await helpApi.getAttachmentDownloadUrl(id, attachmentId);
-      window.open(data.downloadUrl, '_blank', 'noopener,noreferrer');
+      const response = await fetch(data.downloadUrl);
+      if (!response.ok) {
+        throw new Error(`Download failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.fileName || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err) {
-      setError(getErrorMessage(err));
+      const msg = getErrorMessage(err);
+      setError(msg);
+      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+        await loadTicket();
+      }
     } finally {
       setDownloadingAttachmentId('');
     }

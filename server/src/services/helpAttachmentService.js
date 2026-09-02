@@ -286,6 +286,21 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
 
   const bucket = getUploadsBucket();
   const s3Client = getS3Client();
+
+  try {
+    await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: attachment.s3Key,
+      }),
+    );
+  } catch (s3Err) {
+    console.error('[help-attachment] Download HEAD check failed:', s3Err?.message ?? s3Err);
+    attachment.status = 'deleted';
+    await attachment.save();
+    throwError('Attachment file not found on server.', 404);
+  }
+
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: attachment.s3Key,
