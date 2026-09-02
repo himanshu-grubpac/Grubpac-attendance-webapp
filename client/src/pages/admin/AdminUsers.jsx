@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PERMISSIONS } from '@shared/permissions.js';
-import { adminApi, getErrorMessage } from '../../services/api.js';
+import { adminApi, getErrorMessage, preferencesApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -14,7 +14,7 @@ import StatusBadge from '../../components/StatusBadge.jsx';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
-const COLUMN_STORAGE_KEY = 'attendance.adminEmployeeColumns';
+const EMPLOYEE_TABLE_KEY = 'employeeList';
 
 const ALL_COLUMNS = [
   { key: 'name', label: 'Name', always: true },
@@ -35,21 +35,33 @@ const ALL_COLUMNS = [
 
 const DEFAULT_VISIBLE_COLUMNS = ['name', 'email', 'mobile', 'department', 'status', 'lastLogin'];
 
-function loadVisibleColumns() {
-  try {
-    const stored = localStorage.getItem(COLUMN_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch { /* ignore */ }
-  return DEFAULT_VISIBLE_COLUMNS;
+const ALL_COLUMN_KEYS = new Set(ALL_COLUMNS.map((column) => column.key));
+
+function normalizeVisibleColumns(keys) {
+  if (!Array.isArray(keys)) return DEFAULT_VISIBLE_COLUMNS;
+  const filtered = keys.filter((key) => ALL_COLUMN_KEYS.has(key));
+  if (!filtered.includes('name')) filtered.unshift('name');
+  return filtered.length > 0 ? filtered : DEFAULT_VISIBLE_COLUMNS;
 }
 
-function saveVisibleColumns(columns) {
-  try {
-    localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columns));
-  } catch { /* ignore */ }
+function columnsFromPreference(preferenceColumns) {
+  if (!Array.isArray(preferenceColumns) || preferenceColumns.length === 0) {
+    return DEFAULT_VISIBLE_COLUMNS;
+  }
+  const sorted = [...preferenceColumns].sort(
+    (left, right) => (left.order ?? 0) - (right.order ?? 0),
+  );
+  return normalizeVisibleColumns(sorted.map((column) => column.key));
+}
+
+function visibleColumnsToPayload(visibleKeys) {
+  const normalized = normalizeVisibleColumns(visibleKeys);
+  return normalized.map((key, order) => ({
+    key,
+    order,
+    width: null,
+    pinned: null,
+  }));
 }
 
 const STATUS_OPTIONS = [
@@ -180,7 +192,9 @@ export default function AdminUsers() {
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [newThisMonthFilter, setNewThisMonthFilter] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
+  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+  const [columnsLoading, setColumnsLoading] = useState(true);
+  const [columnsError, setColumnsError] = useState('');
   const [showColumnEditor, setShowColumnEditor] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef(null);
@@ -227,6 +241,32 @@ export default function AdminUsers() {
     }
     return map;
   }, [managers]);
+
+  const loadColumnPreferences = useCallback(async () => {
+    setColumnsLoading(true);
+    setColumnsError('');
+    try {
+      const response = await preferencesApi.getTablePreference(EMPLOYEE_TABLE_KEY);
+      setVisibleColumns(columnsFromPreference(response?.data?.columns));
+    } catch (err) {
+      setColumnsError(getErrorMessage(err));
+      setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+    } finally {
+      setColumnsLoading(false);
+    }
+  }, []);
+
+  const saveColumnPreferences = useCallback(async (nextVisibleColumns) => {
+    setColumnsError('');
+    try {
+      await preferencesApi.updateTablePreference(EMPLOYEE_TABLE_KEY, {
+        columns: visibleColumnsToPayload(nextVisibleColumns),
+      });
+    } catch (err) {
+      setColumnsError(getErrorMessage(err));
+      throw err;
+    }
+  }, []);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -293,6 +333,7 @@ export default function AdminUsers() {
   }, []);
 
   useEffect(() => {
+    loadColumnPreferences();
     loadStats();
     adminApi
       .listDepartments()
@@ -309,7 +350,7 @@ export default function AdminUsers() {
       .then((data) => setManagers(data.managers ?? []))
       .catch(() => { });
     loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '', nextRole: '' });
-  }, [loadEmployees, loadStats]);
+  }, [loadColumnPreferences, loadEmployees, loadStats]);
 
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {
@@ -548,8 +589,11 @@ export default function AdminUsers() {
     if (column?.always) return;
     setVisibleColumns((prev) => {
       const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-      saveVisibleColumns(next);
-      return next;
+      const normalized = normalizeVisibleColumns(next);
+      saveColumnPreferences(normalized).catch(() => {
+        setVisibleColumns(prev);
+      });
+      return normalized;
     });
   }
 
@@ -708,6 +752,7 @@ export default function AdminUsers() {
         </div>
 
         {listError ? <div className="alert alert--error">{listError}</div> : null}
+        {columnsError ? <div className="alert alert--error">{columnsError}</div> : null}
 
         {newThisMonthFilter ? (
           <p className="employees-filter-notice muted small" role="status">
@@ -922,27 +967,33 @@ export default function AdminUsers() {
               </button>
             </div>
             <div className="slide-panel__body">
-              <ul className="column-editor-list">
-                {ALL_COLUMNS.map((col) => (
-                  <li key={col.key} className="column-editor-list__item">
-                    <label
-                      className={`column-editor-list__label${col.always ? ' column-editor-list__label--locked' : ''}`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="column-editor-list__checkbox"
-                        checked={isColumnVisible(col.key)}
-                        onChange={() => handleColumnToggle(col.key)}
-                        disabled={col.always}
-                      />
-                      <span className="column-editor-list__text">{col.label}</span>
-                      {col.always ? (
-                        <span className="column-editor-list__badge">Always shown</span>
-                      ) : null}
-                    </label>
-                  </li>
-                ))}
-              </ul>
+              {columnsLoading ? (
+                <p className="muted small" role="status">
+                  Loading column preferences…
+                </p>
+              ) : (
+                <ul className="column-editor-list">
+                  {ALL_COLUMNS.map((col) => (
+                    <li key={col.key} className="column-editor-list__item">
+                      <label
+                        className={`column-editor-list__label${col.always ? ' column-editor-list__label--locked' : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="column-editor-list__checkbox"
+                          checked={isColumnVisible(col.key)}
+                          onChange={() => handleColumnToggle(col.key)}
+                          disabled={col.always || columnsLoading}
+                        />
+                        <span className="column-editor-list__text">{col.label}</span>
+                        {col.always ? (
+                          <span className="column-editor-list__badge">Always shown</span>
+                        ) : null}
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div className="slide-panel__footer">
               <div className="slide-panel__actions">
