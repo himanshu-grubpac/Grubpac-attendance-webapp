@@ -10464,6 +10464,7 @@ body::-webkit-scrollbar-thumb {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  gap: 0.5rem;
 }
 
 .employees-toolbar__actions .btn {

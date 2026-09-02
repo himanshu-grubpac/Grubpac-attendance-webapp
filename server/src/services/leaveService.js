@@ -285,61 +285,21 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
     throwError('Invalid leave decision.', 400);
   }
   const isApproved = decision === 'approve' || decision === 'approved';
-  const status = isApproved ? 'approved' : 'rejected';
-  const requester = await loadRequester(request.userId?._id ?? request.userId);
-  const year = getISTYear(request.startDate);
-  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  const pendingDecision = isApproved ? 'approved' : 'rejected';
   const userId = request.userId?._id ?? request.userId;
 
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      if (isApproved) {
-        if (adminException) request.adminException = true;
-        await applyLeaveApproval(request, {
-          userId,
-          leaveTypeId,
-          days: request.days,
-          year,
-          session,
-          approverId: actor._id,
-          comment: decisionComment,
-        });
-        // Keep WFH check-ins in the pending (red) state until the decision's
-        // undo window expires. The decision-finalization job applies approved
-        // status after the window closes.
-        request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
-        request.notificationsSent = false;
-        request.submitNotificationsSent = true;
-        await request.save({ session });
-      } else {
-        await releasePendingDays(userId, leaveTypeId, request.days, year, session);
-        // Keep WFH check-ins pending until the rejection also becomes final.
-        request.status = 'rejected';
-        request.approverId = actor._id;
-        request.decidedAt = new Date();
-        request.decisionComment = decisionComment;
-        request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
-        request.notificationsSent = false;
-        request.submitNotificationsSent = true;
-        await request.save({ session });
-      }
-    });
-  } finally {
-    session.endSession();
-  }
-
-  // Notify the applicant in-app right away, but defer the email/SMS until the
-  // undo window passes so a mistaken decision (approve or reject) can be
-  // reverted without mailing/SMSing the applicant.
-  await notifyApplicantDecision({
-    applicant: requester,
-    request,
-    leaveType: request.leaveTypeId,
-    status,
-    decisionComment,
-    sendChannels: false,
-  });
+  // Nothing changes until the undo window expires. The status, balance, and
+  // WFH markers all stay frozen while the admin can still undo.
+  request.pendingDecision = pendingDecision;
+  request.approverId = actor._id;
+  request.decidedAt = new Date();
+  request.decisionComment = decisionComment;
+  if (adminException) request.adminException = true;
+  request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
+  request.notificationsSent = false;
+  request.submitNotificationsSent = true;
+  request.decisionTokens = [];
+  await request.save();
 
   auditLog(isApproved ? 'leave_request_approved' : 'leave_request_rejected', {
     adminId: actor._id.toString(),
@@ -347,8 +307,6 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
     requestId: request._id.toString(),
     comment: decisionComment,
   });
-
-  await LeaveRequest.updateOne({ _id: request._id }, { $set: { decisionTokens: [] } });
 
   return request.toSafeJSON();
 }
@@ -901,60 +859,150 @@ export async function cancelLeaveRequest(requestId, actor) {
   if (request.status !== 'pending' && request.status !== 'approved') {
     throwError('Only pending or approved leave requests can be cancelled.');
   }
+  if (request.pendingDecision) {
+    throwError('A decision is already pending. Undo it first before cancelling.');
+  }
   // Once the applied leave date has passed, the leave can no longer be cancelled.
   if (request.endDate && new Date(endOfDayIST(request.endDate)).getTime() < Date.now()) {
     throwError('This leave request can no longer be cancelled because the leave dates have passed.');
   }
 
-  const year = getISTYear(request.startDate);
-  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
-  const userId = request.userId?._id ?? request.userId;
-  const wasApproved = request.status === 'approved';
-  const approverId = request.approverId?._id?.toString?.() ?? request.approverId?.toString?.() ?? null;
+  const wasApproved = request.status === 'approved' || request.pendingDecision === 'approved';
+  await applyLeaveCancellation(request, actor, { undoable: wasApproved });
 
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      if (wasApproved) {
-        // Return the consumed leave days fully back to the available balance.
-        await releaseApprovedDays(userId, leaveTypeId, request.days, year, session);
-        // Clear any approved WFH marks on attendance records for the covered dates.
-        await updateWfhAttendanceForRequest(request, {
-          fromStatuses: ['approved', 'pending'],
-          legacyAnyMode: true,
-          session,
-        });
-      } else {
+  return request.toSafeJSON();
+}
+
+/** Approver (or delegate) cancels an approved leave on behalf of the employee. */
+export async function cancelApprovedLeaveByApprover(requestId, actor, permissions) {
+  const request = await loadLeaveRequest(requestId);
+  const isApproved = request.status === 'approved' || request.pendingDecision === 'approved';
+  if (!isApproved) {
+    throwError('Only approved leave requests can be cancelled.', 400);
+  }
+  if (request.endDate && new Date(endOfDayIST(request.endDate)).getTime() < Date.now()) {
+    throwError('This leave request can no longer be cancelled because the leave dates have passed.');
+  }
+  const requester = await loadRequester(request.userId?._id ?? request.userId);
+  if (!canApproveLeave(actor, requester, permissions)) {
+    throwError('You are not authorized to cancel this leave request.', 403);
+  }
+
+  await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id });
+  return request.toSafeJSON();
+}
+
+/**
+ * Shared cancellation: frees the balance, clears WFH attendance markers, and
+ * marks the request cancelled. Approved cancellations are undoable for the
+ * deferral window — the applicant/approver email is only sent after the window
+ * expires (via the decision-notify job).
+ */
+async function applyLeaveCancellation(request, actor, { undoable = false, approverId: cancelActorId = null } = {}) {
+  const wasApproved = request.status === 'approved' || request.pendingDecision === 'approved';
+  const userId = request.userId?._id ?? request.userId;
+
+  if (undoable) {
+    // Approved-leave cancellation: nothing changes until the undo window
+    // expires. Status, balance and WFH markers all stay frozen.
+    if (request.pendingDecision) {
+      throwError('Another decision is already pending. Undo it first before cancelling.');
+    }
+    request.pendingDecision = 'cancelled';
+    request.approverId = cancelActorId ?? request.approverId;
+    request.decidedAt = new Date();
+    request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
+    request.notificationsSent = false;
+    request.submitNotificationsSent = true;
+    request.decisionTokens = [];
+    await request.save();
+  } else {
+    // Pending-leave cancellation: immediate, no undo needed.
+    const year = getISTYear(request.startDate);
+    const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+    const originalApproverId = request.approverId?._id?.toString?.() ?? request.approverId?.toString?.() ?? null;
+
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
         await releasePendingDays(userId, leaveTypeId, request.days, year, session);
-        // A pending WFH cancellation must also remove its red attendance marker.
         await updateWfhAttendanceForRequest(request, {
           fromStatuses: ['pending', 'rejected'],
           legacyAnyMode: true,
           session,
         });
-      }
+        request.status = 'cancelled';
+        request.decidedAt = new Date();
+        request.approverId = null;
+        request.decisionTokens = [];
+        request.notifyAfter = null;
+        request.notificationsSent = true;
+        request.submitNotificationsSent = true;
+        await request.save({ session });
+      });
+    } finally {
+      session.endSession();
+    }
 
-      request.status = 'cancelled';
-      request.decidedAt = new Date();
-      request.approverId = null;
-      request.decisionTokens = [];
-      request.notifyAfter = null;
-      request.notificationsSent = true;
-      request.submitNotificationsSent = true;
-      await request.save({ session });
-    });
-  } finally {
-    session.endSession();
+    await notifyLeaveCancelled(request, false, originalApproverId, { sendChannels: true });
   }
 
   auditLog('leave_request_cancelled', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
     wasApproved,
+    undoable,
+  });
+}
+
+/** Undoes an approved-leave cancellation, restoring the request to approved. */
+export async function undoLeaveCancellation(requestId, actor, permissions) {
+  const request = await loadLeaveRequest(requestId);
+  if (request.pendingDecision !== 'cancelled') {
+    throwError('No pending cancellation to undo.', 400);
+  }
+
+  if (request.decidedAt) {
+    const elapsed = Date.now() - new Date(request.decidedAt).getTime();
+    if (elapsed > LEAVE_DECISION_UNDO_MS) {
+      throwError('The undo window has expired. The cancellation is now final.', 410);
+    }
+  }
+
+  const requester = await loadRequester(request.userId?._id ?? request.userId);
+  const isOwner = request.userId?._id?.toString() === actor._id.toString()
+    || request.userId?.toString?.() === actor._id.toString();
+  if (!isOwner && !canApproveLeave(actor, requester, permissions)) {
+    throwError('You are not authorized to undo this cancellation.', 403);
+  }
+
+  const userId = request.userId?._id ?? request.userId;
+
+  // Nothing changed during the undo window — status, balance and WFH markers
+  // are all untouched. Just clear the pending decision fields.
+  request.pendingDecision = null;
+  request.approverId = null;
+  request.decidedAt = null;
+  request.notifyAfter = null;
+  request.notificationsSent = false;
+  request.submitNotificationsSent = true;
+  request.decisionTokens = [];
+  await request.save();
+
+  await createNotification({
+    userId,
+    type: 'leave.cancel_undone',
+    title: 'Leave cancellation undone',
+    body: 'Your approved leave was restored.',
+    link: '/employee/leave/requests',
+    metadata: { requestId: request._id.toString() },
   });
 
-  // Notify the applicant and the original approver by email.
-  await notifyLeaveCancelled(request, wasApproved, approverId);
+  auditLog('leave_request_cancellation_undone', {
+    adminId: actor._id.toString(),
+    userId: userId.toString(),
+    requestId: request._id.toString(),
+  });
 
   return request.toSafeJSON();
 }
@@ -1117,8 +1165,8 @@ export async function editLeaveRequest(requestId, actor, payload) {
 
 export async function decideLeaveRequestByToken(requestId, action, rawToken, decisionComment = null) {
   const comment = typeof decisionComment === 'string' ? decisionComment.trim() : null;
-  if (action === 'reject' && !comment) {
-    const err = new Error('A remark is required when rejecting a leave request.');
+  if (!comment) {
+    const err = new Error('A remark is required for this action.');
     err.statusCode = 400;
     throw err;
   }
@@ -1173,8 +1221,8 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
 
   const isReject = decision === 'reject' || decision === 'rejected';
   const comment = (payload.comment ?? '').trim() || null;
-  if (isReject && !comment) {
-    throwError('A remark is required when rejecting a leave request.');
+  if (!comment) {
+    throwError('A remark is required for this action.');
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
@@ -1189,8 +1237,8 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
 
 export async function undoLeaveDecision(requestId, actor, permissions) {
   const request = await loadLeaveRequest(requestId);
-  if (request.status !== 'approved' && request.status !== 'rejected') {
-    throwError('Only approved or rejected leave requests can be undone.', 400);
+  if (!request.pendingDecision) {
+    throwError('No pending decision to undo.', 400);
   }
 
   if (request.decidedAt) {
@@ -1205,48 +1253,20 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
     throwError('You are not authorized to undo this leave decision.', 403);
   }
 
-  const year = getISTYear(request.startDate);
-  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
   const userId = request.userId?._id ?? request.userId;
 
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      if (request.status === 'approved') {
-        await reverseApproval(userId, leaveTypeId, request.days, year, session);
-        // Undoing a WFH approval puts only that request's check-ins back into
-        // the pending (red) state until the request is approved again.
-        await updateWfhAttendanceForRequest(request, {
-          fromStatuses: ['approved', 'pending'],
-          toStatus: 'pending',
-          legacyAnyMode: true,
-          session,
-        });
-      } else if (request.status === 'rejected') {
-        await reservePendingDays(userId, leaveTypeId, request.days, year, session);
-        // A rejected WFH request may have had its marker cleared. Restore it
-        // when the decision is undone so the pending state is visible again.
-        await updateWfhAttendanceForRequest(request, {
-          fromStatuses: ['rejected', 'pending'],
-          toStatus: 'pending',
-          legacyAnyMode: true,
-          session,
-        });
-      }
-      request.status = 'pending';
-      request.approverId = null;
-      request.decidedAt = null;
-      request.decisionComment = null;
-      request.adminException = false;
-      request.notifyAfter = null;
-      request.notificationsSent = false;
-      request.submitNotificationsSent = true;
-      request.decisionTokens = [];
-      await request.save({ session });
-    });
-  } finally {
-    session.endSession();
-  }
+  // Nothing changed during the undo window — status, balance and WFH markers
+  // are all untouched. Just clear the pending decision fields.
+  request.pendingDecision = null;
+  request.approverId = null;
+  request.decidedAt = null;
+  request.decisionComment = null;
+  request.adminException = false;
+  request.notifyAfter = null;
+  request.notificationsSent = false;
+  request.submitNotificationsSent = true;
+  request.decisionTokens = [];
+  await request.save();
 
   await createNotification({
     userId,
@@ -1293,42 +1313,68 @@ async function expirePendingWfhAttendance(now) {
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const expiredPendingWfh = await expirePendingWfhAttendance(now);
   const due = await LeaveRequest.find({
-    status: { $in: ['approved', 'rejected'] },
+    pendingDecision: { $ne: null },
     notifyAfter: { $ne: null, $lte: now },
     notificationsSent: false,
   }).populate(LEAVE_REQUEST_POPULATE);
 
   let processed = 0;
   for (const request of due) {
-    // WFH attendance markers stay pending while the decision can still be
-    // undone. Apply the final marker only after the undo window has elapsed.
-    if (request.status === 'approved') {
+    const decision = request.pendingDecision;
+    const userId = request.userId?._id ?? request.userId;
+    const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+    const year = getISTYear(request.startDate);
+
+    if (decision === 'approved') {
+      // Finalise approval: consume the reserved pending days, mark WFH approved.
+      await approvePendingDays(userId, leaveTypeId, request.days, year);
       await updateWfhAttendanceForRequest(request, {
         fromStatuses: ['pending', 'rejected'],
         toStatus: 'approved',
         legacyAnyMode: true,
       });
-    } else if (request.status === 'rejected') {
+      request.status = 'approved';
+    } else if (decision === 'rejected') {
+      // Finalise rejection: release the reserved pending days, mark WFH rejected.
+      await releasePendingDays(userId, leaveTypeId, request.days, year);
       await updateWfhAttendanceForRequest(request, {
         fromStatuses: ['pending'],
         toStatus: 'rejected',
         legacyAnyMode: true,
       });
+      request.status = 'rejected';
+    } else if (decision === 'cancelled') {
+      // Finalise cancellation: release consumed days, unset WFH markers.
+      await releaseApprovedDays(userId, leaveTypeId, request.days, year);
+      await updateWfhAttendanceForRequest(request, {
+        fromStatuses: ['approved', 'pending'],
+        legacyAnyMode: true,
+      });
+      request.status = 'cancelled';
     }
 
-    const requester = await loadRequester(request.userId?._id ?? request.userId);
-    await notifyApplicantDecision({
-      applicant: requester,
-      request,
-      leaveType: request.leaveTypeId,
-      status: request.status,
-      decisionComment: request.decisionComment,
-      sendChannels: true,
-    });
-    await LeaveRequest.updateOne(
-      { _id: request._id },
-      { $set: { notificationsSent: true, notifyAfter: null } },
-    );
+    // Send the deferred email / SMS / WhatsApp notification.
+    if (decision === 'cancelled') {
+      const approverId = request.approverId?._id?.toString?.()
+        ?? request.approverId?.toString?.()
+        ?? null;
+      await notifyLeaveCancelled(request, true, approverId, { sendChannels: true });
+    } else {
+      const requester = await loadRequester(userId);
+      await notifyApplicantDecision({
+        applicant: requester,
+        request,
+        leaveType: request.leaveTypeId,
+        status: decision === 'approved' ? 'approved' : 'rejected',
+        decisionComment: request.decisionComment,
+        sendChannels: true,
+      });
+    }
+
+    request.pendingDecision = null;
+    request.notifyAfter = null;
+    request.notificationsSent = true;
+    await request.save();
     processed += 1;
   }
 

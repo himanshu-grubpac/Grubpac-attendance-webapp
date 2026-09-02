@@ -1,16 +1,16 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 
 export default function LeaveDecisionModal({
   open,
   item,
+  action = 'approve',
   initialComment = '',
   busy = false,
   error = '',
   onApprove,
   onReject,
-  onCancel,
   onCommentChange,
 }) {
   const titleId = useId();
@@ -22,8 +22,9 @@ export default function LeaveDecisionModal({
   const previouslyFocused = useRef(null);
 
   const remarkEmpty = !initialComment.trim();
+  const isCancelMode = action === 'cancel';
 
-  useEscapeKey(open && !busy, onCancel);
+  useEscapeKey(open && !busy, onReject);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -78,7 +79,7 @@ export default function LeaveDecisionModal({
     <div
       className="confirm-dialog-backdrop"
       role="presentation"
-      onClick={busy ? undefined : onCancel}
+      onClick={busy ? undefined : onReject}
     >
       <div
         ref={dialogRef}
@@ -91,7 +92,7 @@ export default function LeaveDecisionModal({
         onClick={(event) => event.stopPropagation()}
       >
         <h2 id={titleId} className="confirm-dialog__title">
-          Leave request decision
+          {isCancelMode ? 'Cancel approved leave' : 'Leave request decision'}
         </h2>
 
         <div id={descId} className="confirm-dialog__message" style={{ padding: 0 }}>
@@ -148,20 +149,20 @@ export default function LeaveDecisionModal({
           <button
             ref={rejectRef}
             type="button"
-            className="btn btn-danger"
+            className="btn"
             onClick={onReject}
-            disabled={busy || remarkEmpty}
+            disabled={busy}
           >
-            {busy ? 'Submitting…' : 'Reject'}
+            Cancel
           </button>
           <button
             ref={approveRef}
             type="button"
-            className="btn btn-primary"
+            className={`btn ${isCancelMode ? 'btn-danger' : 'btn-primary'}`}
             onClick={onApprove}
             disabled={busy || remarkEmpty}
           >
-            {busy ? 'Submitting…' : 'Approve'}
+            {busy ? 'Submitting…' : (isCancelMode ? 'Cancel leave' : 'Approve')}
           </button>
         </div>
       </div>

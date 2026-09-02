@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
@@ -17,8 +18,8 @@ function canCancelLeaveRequest(item) {
 }
 
 export default function EmployeeMyLeaveRequests() {
-  const navigate = useNavigate();
-  const { showSuccess } = useToast();
+  const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -52,12 +53,32 @@ export default function EmployeeMyLeaveRequests() {
       return;
     }
     try {
-      await leaveApi.cancelRequest(item.id);
-      showSuccess(
-        isApproved
-          ? 'Approved leave cancelled. The days were returned to your balance.'
-          : 'Leave request cancelled.',
-      );
+      const response = await leaveApi.cancelRequest(item.id);
+      if (isApproved) {
+        const durationMs = response?.request?.decisionUndoExpiresAt
+          ? Math.max(0, new Date(response.request.decisionUndoExpiresAt).getTime() - Date.now())
+          : 0;
+        if (durationMs > 0) {
+          showActionPopup({
+            message: 'Approved leave cancelled. If done by mistake, click Undo to revert.',
+            undoLabel: 'Undo',
+            onUndo: async () => {
+              try {
+                await leaveApi.undoCancellation(item.id);
+                showSuccess('Cancellation undone. Leave restored.');
+                loadRequests(page);
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
+            durationMs,
+          });
+        } else {
+          showSuccess('Approved leave cancelled. The days were returned to your balance.');
+        }
+      } else {
+        showSuccess('Leave request cancelled.');
+      }
       loadRequests(page);
     } catch (err) {
       setError(getErrorMessage(err));

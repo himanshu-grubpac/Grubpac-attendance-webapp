@@ -126,6 +126,17 @@ export default function EmployeeApplyLeave() {
     [types],
   );
 
+  const balanceItems = useMemo(
+    () =>
+      balances
+        .filter((b) => types.some((t) => t.id === b.leaveTypeId))
+        .map((b) => {
+          const t = types.find((t) => t.id === b.leaveTypeId);
+          return { code: t?.code ?? '?', available: b.available ?? 0 };
+        }),
+    [balances, types],
+  );
+
   function handleHalfDayChange(value) {
     setForm((current) => {
       const next = { ...current, halfDay: value };
@@ -245,17 +256,31 @@ export default function EmployeeApplyLeave() {
       <form className="card card--form form-grid form-grid--stacked" onSubmit={handleSubmit}>
         <p className="card__section-title form-grid__full">{isEditing ? 'Edit leave request' : 'Leave details'}</p>
 
-        <label className="form-grid__full">
-          <span className="label">Leave type</span>
-          <SelectField
-            value={form.leaveTypeId}
-            onChange={(value) => setForm({ ...form, leaveTypeId: value })}
-            options={leaveTypeOptions}
-            placeholder="Select leave type"
-            aria-label="Leave type"
-          />
-          <FieldError message={fieldErrors.leaveTypeId} />
-        </label>
+        <div className="form-grid__full leave-type-row">
+          <label className="leave-type-row__type">
+            <span className="label">Leave type</span>
+            <SelectField
+              value={form.leaveTypeId}
+              onChange={(value) => setForm({ ...form, leaveTypeId: value })}
+              options={leaveTypeOptions}
+              placeholder="Select leave type"
+              aria-label="Leave type"
+            />
+            <FieldError message={fieldErrors.leaveTypeId} />
+          </label>
+          {balanceItems.length > 0 && (
+            <div className="leave-type-row__balance">
+              <span className="label">Remaining</span>
+              <span className="leave-balance-summary">
+                {balanceItems.map((item) => (
+                  <span key={item.code} className="leave-balance-pill">
+                    {item.code} - {item.available}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
+        </div>
 
         <div className="form-grid__full form-grid form-grid--dates">
         <label className="form-field--sm">

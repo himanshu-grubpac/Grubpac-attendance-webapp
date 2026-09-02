@@ -181,7 +181,7 @@ async function main() {
   }
 
   // ═══════════════════════════════════════════════════════════
-  console.log('\n═══ Scenario 1: Approve → Undo restores balance ═══');
+  console.log('\n═══ Scenario 1: Approve → Undo (deferred) ═══');
   // ═══════════════════════════════════════════════════════════
   {
     const before = await getBalance('CL');
@@ -194,23 +194,35 @@ async function main() {
       assertEq(afterCreate.used, before.used, 'Used unchanged after create');
 
       const approveRes = await approveLeave(requestId);
-      check('Approve leave', approveRes.status === 200, `status=${approveRes.status}`);
+      check('Approve leave (deferred)', approveRes.status === 200, `status=${approveRes.status}`);
       const afterApprove = await getBalance('CL');
-      assertEq(afterApprove.pending, before.pending, 'Pending restored after approve');
-      assertEq(afterApprove.used, before.used + 1, 'Used incremented after approve');
+      assertEq(afterApprove.pending, before.pending + 1, 'Pending unchanged after deferred approve');
+      assertEq(afterApprove.used, before.used, 'Used unchanged after deferred approve');
+
+      const reqAfterApprove = await req('GET', `/api/leave/requests/${requestId}`);
+      const approveData = reqAfterApprove.json?.request;
+      assertEq(approveData?.status, 'pending', 'Status stays pending during undo window');
+      assertEq(approveData?.pendingDecision, 'approved', 'pendingDecision set to approved');
+      check('notifyAfter set', !!approveData?.notifyAfter, `notifyAfter=${approveData?.notifyAfter}`);
 
       const undoRes = await undoLeave(requestId);
       check('Undo approval', undoRes.status === 200, `status=${undoRes.status}`);
       const afterUndo = await getBalance('CL');
-      assertEq(afterUndo.pending, before.pending + 1, 'Pending restored after undo');
-      assertEq(afterUndo.used, before.used, 'Used restored after undo');
+      assertEq(afterUndo.pending, before.pending + 1, 'Pending unchanged after undo (still pending)');
+      assertEq(afterUndo.used, before.used, 'Used unchanged after undo');
+
+      const reqAfterUndo = await req('GET', `/api/leave/requests/${requestId}`);
+      const undoData = reqAfterUndo.json?.request;
+      assertEq(undoData?.status, 'pending', 'Status still pending after undo');
+      check('pendingDecision cleared', !undoData?.pendingDecision, `pendingDecision=${undoData?.pendingDecision}`);
+      check('notifyAfter cleared', !undoData?.notifyAfter, `notifyAfter=${undoData?.notifyAfter}`);
 
       await cancelLeave(requestId);
     }
   }
 
   // ═══════════════════════════════════════════════════════════
-  console.log('\n═══ Scenario 2: Reject → Undo restores pending ═══');
+  console.log('\n═══ Scenario 2: Reject → Undo (deferred) ═══');
   // ═══════════════════════════════════════════════════════════
   {
     const before = await getBalance('CL');
@@ -222,16 +234,26 @@ async function main() {
       assertEq(afterCreate.pending, before.pending + 1, 'Pending incremented after create');
 
       const rejectRes = await rejectLeave(requestId);
-      check('Reject leave', rejectRes.status === 200, `status=${rejectRes.status}`);
+      check('Reject leave (deferred)', rejectRes.status === 200, `status=${rejectRes.status}`);
       const afterReject = await getBalance('CL');
-      assertEq(afterReject.pending, before.pending, 'Pending restored after reject');
-      assertEq(afterReject.used, before.used, 'Used unchanged after reject');
+      assertEq(afterReject.pending, before.pending + 1, 'Pending unchanged after deferred reject');
+      assertEq(afterReject.used, before.used, 'Used unchanged after deferred reject');
+
+      const reqAfterReject = await req('GET', `/api/leave/requests/${requestId}`);
+      const rejectData = reqAfterReject.json?.request;
+      assertEq(rejectData?.status, 'pending', 'Status stays pending during undo window');
+      assertEq(rejectData?.pendingDecision, 'rejected', 'pendingDecision set to rejected');
 
       const undoRes = await undoLeave(requestId);
       check('Undo rejection', undoRes.status === 200, `status=${undoRes.status}`);
       const afterUndo = await getBalance('CL');
-      assertEq(afterUndo.pending, before.pending + 1, 'Pending restored after undo');
+      assertEq(afterUndo.pending, before.pending + 1, 'Pending unchanged after undo (still pending)');
       assertEq(afterUndo.used, before.used, 'Used unchanged after undo reject');
+
+      const reqAfterUndo = await req('GET', `/api/leave/requests/${requestId}`);
+      const undoData = reqAfterUndo.json?.request;
+      assertEq(undoData?.status, 'pending', 'Status still pending after undo');
+      check('pendingDecision cleared after undo', !undoData?.pendingDecision, `pendingDecision=${undoData?.pendingDecision}`);
 
       await cancelLeave(requestId);
     }
@@ -248,10 +270,13 @@ async function main() {
     if (requestId) {
       // Cycle 1: approve → undo
       await approveLeave(requestId);
+      const mid1 = await getBalance('CL');
+      assertEq(mid1.pending, before.pending + 1, 'Pending unchanged during deferred approve (cycle 1)');
+      assertEq(mid1.used, before.used, 'Used unchanged during deferred approve (cycle 1)');
       await undoLeave(requestId);
-      const mid = await getBalance('CL');
-      assertEq(mid.pending, before.pending + 1, 'Pending correct after cycle 1');
-      assertEq(mid.used, before.used, 'Used correct after cycle 1');
+      const mid2 = await getBalance('CL');
+      assertEq(mid2.pending, before.pending + 1, 'Pending correct after cycle 1');
+      assertEq(mid2.used, before.used, 'Used correct after cycle 1');
 
       // Cycle 2: approve → undo
       await approveLeave(requestId);
@@ -274,21 +299,28 @@ async function main() {
     if (requestId) {
       await approveLeave(requestId);
       const reqAfterApprove = await req('GET', `/api/leave/requests/${requestId}`);
-      check('Request is approved', reqAfterApprove.json?.request?.status === 'approved');
+      const approveData = reqAfterApprove.json?.request;
+      check('Status stays pending (deferred)', approveData?.status === 'pending');
+      check('pendingDecision set to approved', approveData?.pendingDecision === 'approved');
+      check('notificationsSent is false', approveData?.notificationsSent === false);
+      check('notifyAfter is set', !!approveData?.notifyAfter);
+      check('decidedAt is set', !!approveData?.decidedAt);
 
       await undoLeave(requestId);
       const reqAfterUndo = await req('GET', `/api/leave/requests/${requestId}`);
       const afterUndo = reqAfterUndo.json?.request;
-      check('Request reverted to pending', afterUndo?.status === 'pending');
+      check('Request still pending after undo', afterUndo?.status === 'pending');
+      check('pendingDecision cleared', !afterUndo?.pendingDecision);
       assertEq((afterUndo?.decisionTokens ?? []).length, 0, 'Decision tokens cleared');
-      assertEq(afterUndo?.notifyAfter ?? null, null, 'notifyAfter cleared');
+      check('notifyAfter cleared', !afterUndo?.notifyAfter);
+      check('decidedAt cleared', !afterUndo?.decidedAt);
 
       await cancelLeave(requestId);
     }
   }
 
   // ═══════════════════════════════════════════════════════════
-  console.log('\n═══ Scenario 5: Auto-approved (SL) → Undo ═══');
+  console.log('\n═══ Scenario 5: Auto-approved (SL) → immediate flow ═══');
   // ═══════════════════════════════════════════════════════════
   if (slTypeId) {
     const before = await getBalance('SL');
@@ -304,10 +336,11 @@ async function main() {
         assertEq(afterCreate.pending, before.pending, 'Pending unchanged after auto-approve');
 
         const undoRes = await undoLeave(requestId);
-        check('Undo auto-approved SL', undoRes.status === 200, `status=${undoRes.status}`);
-        const afterUndo = await getBalance('SL');
-        assertEq(afterUndo.used, before.used, 'Used restored after undo SL');
-        assertEq(afterUndo.pending, before.pending + 1, 'Pending restored after undo SL');
+        check('Undo auto-approved SL fails (no pendingDecision)', undoRes.status === 400, `status=${undoRes.status}`);
+
+        const afterFailedUndo = await getBalance('SL');
+        assertEq(afterFailedUndo.used, before.used + 1, 'Used unchanged after failed undo');
+        assertEq(afterFailedUndo.pending, before.pending, 'Pending unchanged after failed undo');
       }
       await cancelLeave(requestId);
     }

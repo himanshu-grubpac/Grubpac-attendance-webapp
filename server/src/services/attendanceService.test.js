@@ -9,6 +9,7 @@ import {
   resolveEmployeeMonthDayStatus,
   isLeaveDecisionAwaitingFinalization,
   filterSpilloverAutoCheckouts,
+  filterOrphanCheckOuts,
   monthCalendarStatusForCheckIn,
 } from './attendanceService.js';
 
@@ -318,6 +319,7 @@ test('buildMonthBirthdayMap sorts multiple birthdays on same day', () => {
 function makeRecord(overrides) {
   return {
     _id: overrides._id || 'rec1',
+    userId: overrides.userId || 'user1',
     type: overrides.type || 'check_in',
     timestamp: overrides.timestamp || new Date(),
     attendanceMode: overrides.attendanceMode || 'office',
@@ -454,4 +456,115 @@ test('filterSpilloverAutoCheckouts: multiple auto-checkouts with check-in keeps 
   assert.equal(filtered.length, 2, 'spillover removed, check-in and office auto kept');
   assert.equal(filtered[0].type, 'check_in');
   assert.equal(filtered[1].autoCheckout, true);
+});
+
+// ── filterOrphanCheckOuts ────────────────────────────────────────────────────
+
+test('filterOrphanCheckOuts: empty records returns empty', () => {
+  const filtered = filterOrphanCheckOuts([]);
+  assert.equal(filtered.length, 0);
+});
+
+test('filterOrphanCheckOuts: null/undefined returns input', () => {
+  assert.equal(filterOrphanCheckOuts(null), null);
+  assert.equal(filterOrphanCheckOuts(undefined), undefined);
+});
+
+test('filterOrphanCheckOuts: no check-ins drops all check-outs', () => {
+  const records = [
+    makeRecord({ type: 'check_out', timestamp: new Date('2026-09-02T00:30:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 0);
+});
+
+test('filterOrphanCheckOuts: keeps check-in records even without same-day check-in', () => {
+  const records = [
+    makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].type, 'check_in');
+});
+
+test('filterOrphanCheckOuts: keeps check-out with same-day check-in', () => {
+  const records = [
+    makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 2);
+});
+
+test('filterOrphanCheckOuts: removes cross-day check-out (no same-day check-in)', () => {
+  const records = [
+    makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ type: 'check_out', timestamp: new Date('2026-09-02T00:30:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].type, 'check_in');
+});
+
+test('filterOrphanCheckOuts: per-user filtering (user A has check-in, user B does not)', () => {
+  const records = [
+    makeRecord({ userId: 'userA', type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ userId: 'userA', type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+    makeRecord({ userId: 'userB', type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 2, 'userA check-in + check-out kept, userB orphan removed');
+  assert.equal(filtered[0].userId, 'userA');
+  assert.equal(filtered[1].userId, 'userA');
+});
+
+test('filterOrphanCheckOuts: rejected check-in does not count as same-day', () => {
+  const records = [
+    makeRecord({ type: 'check_in', status: 'rejected', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 1, 'rejected check-in does not save the check-out');
+  assert.equal(filtered[0].type, 'check_in');
+});
+
+test('filterOrphanCheckOuts: handles populated userId (object with _id)', () => {
+  const records = [
+    { _id: 'r1', type: 'check_in', status: 'allowed', userId: { _id: 'user1' }, timestamp: new Date('2026-09-01T03:30:00Z') },
+    { _id: 'r2', type: 'check_out', status: 'allowed', userId: { _id: 'user1' }, timestamp: new Date('2026-09-01T18:00:00Z') },
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 2);
+});
+
+test('filterOrphanCheckOuts: handles populated userId orphan (no _id match)', () => {
+  const records = [
+    { _id: 'r1', type: 'check_in', status: 'allowed', userId: { _id: 'user1' }, timestamp: new Date('2026-09-01T03:30:00Z') },
+    { _id: 'r2', type: 'check_out', status: 'allowed', userId: { _id: 'user2' }, timestamp: new Date('2026-09-01T18:00:00Z') },
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 1, 'user2 check-out is orphan');
+  assert.equal(filtered[0]._id, 'r1');
+});
+
+test('filterOrphanCheckOuts: multiple same-day check-ins keep the check-out', () => {
+  const records = [
+    makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ type: 'check_in', timestamp: new Date('2026-09-01T06:30:00Z') }),
+    makeRecord({ type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 3);
+});
+
+test('filterOrphanCheckOuts: preserves record order', () => {
+  const records = [
+    makeRecord({ _id: 'r1', type: 'check_in', timestamp: new Date('2026-09-01T03:30:00Z') }),
+    makeRecord({ _id: 'r2', type: 'check_out', timestamp: new Date('2026-09-01T18:00:00Z') }),
+    makeRecord({ _id: 'r3', type: 'check_in', timestamp: new Date('2026-09-02T03:30:00Z') }),
+    makeRecord({ _id: 'r4', type: 'check_out', timestamp: new Date('2026-09-02T18:00:00Z') }),
+  ];
+  const filtered = filterOrphanCheckOuts(records);
+  assert.equal(filtered.length, 4);
+  assert.deepEqual(filtered.map((r) => r._id), ['r1', 'r2', 'r3', 'r4']);
 });

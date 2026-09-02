@@ -8,6 +8,8 @@ import {
   adjustLeaveBalances,
   approveLeaveRequestHandler,
   cancelLeaveRequestHandler,
+  cancelApprovedLeaveByApproverHandler,
+  undoLeaveCancellationHandler,
   notifyLeaveRequestHandler,
   carryForwardHandler,
   createHoliday,
@@ -180,6 +182,16 @@ router.post(
   '/requests/:id/undo',
   requirePermission(PERMISSIONS.LEAVE_APPROVE),
   asyncHandler(undoLeaveDecisionHandler),
+);
+router.post(
+  '/requests/:id/cancel-approval',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(cancelApprovedLeaveByApproverHandler),
+);
+router.post(
+  '/requests/:id/undo-cancel',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(undoLeaveCancellationHandler),
 );
 
 router.get(

@@ -199,7 +199,7 @@ export async function listEmployees(req, res) {
   const [employees, total] = await Promise.all([
     User.find(query)
       .populate(USER_POPULATE_FIELDS)
-      .sort({ createdAt: -1 })
+      .sort({ name: 1 })
       .skip(skip)
       .limit(limit),
     User.countDocuments(query),

@@ -312,6 +312,10 @@ export const leaveApi = {
     api.post(`/leave/requests/${id}/reject`, payload).then((r) => r.data),
   undoDecision: (id) =>
     api.post(`/leave/requests/${id}/undo`).then((r) => r.data),
+  cancelApproved: (id, payload = {}) =>
+    api.post(`/leave/requests/${id}/cancel-approval`, payload).then((r) => r.data),
+  undoCancellation: (id) =>
+    api.post(`/leave/requests/${id}/undo-cancel`).then((r) => r.data),
   getTeamCalendar: (params = {}) => api.get('/leave/team-calendar', { params }).then((r) => r.data),
   listHolidays: (params = {}) => api.get('/leave/holidays', { params }).then((r) => r.data),
   listHolidayCategories: () => api.get('/leave/holiday-categories').then((r) => r.data),

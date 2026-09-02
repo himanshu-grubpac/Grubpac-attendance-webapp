@@ -40,6 +40,14 @@ Thumbs.db
 lambda-event.json
 lambda-invoke-out.json
 lambda-logs.json
+# Temporary / scratch scripts
+*.tmp
+*.tmp.*
+ck*.txt
+login*.json
+reqs.json
+check_esbuild.cjs
+*.plan.md
 # Optional local plan scratch
 web_attendance_app_mvp.plan.md
 

@@ -1541,13 +1541,13 @@ export async function undoAttendance(
       }).session(session);
 
       if (!undoAction) {
-        throw new Error('Undo action is invalid or already used');
+        throwError('Undo action is invalid or already used', 400);
       }
 
       if (Date.now() - new Date(undoAction.createdAt).getTime() > UNDO_WINDOW_MS) {
         undoAction.status = 'expired';
         await undoAction.save({ session });
-        throw new Error('Undo is only available within 5 minutes of the action.');
+        throwError('Undo is only available within 5 minutes of the action.', 410);
       }
 
       // 2. Find the target attendance
@@ -1557,7 +1557,7 @@ export async function undoAttendance(
       }).session(session);
 
       if (!attendanceRecord) {
-        throw new Error('Attendance record not found');
+        throwError('Attendance record not found', 404);
       }
 
       // 3. Find LAST attendance
@@ -1573,8 +1573,9 @@ export async function undoAttendance(
         String(lastAttendance._id) !==
           String(attendanceRecord._id)
       ) {
-        throw new Error(
+        throwError(
           'Only the last attendance action can be undone',
+          409,
         );
       }
 

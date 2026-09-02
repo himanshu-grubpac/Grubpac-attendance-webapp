@@ -29,17 +29,20 @@ const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#
 const QUEUE_STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
+  { value: 'cancelled', label: 'Cancelled' },
 ];
 
 function statCardsForQueue(queueStatus) {
-  const isPending = queueStatus === 'pending';
+  const labels = {
+    pending: { label: 'PENDING REQUESTS', hint: 'Awaiting your decision', icon: '⏳', tone: 'warning' },
+    approved: { label: 'APPROVED REQUESTS', hint: 'Decisions recorded in your scope', icon: '✓', tone: 'info' },
+    cancelled: { label: 'CANCELLED REQUESTS', hint: 'Cancelled leave requests', icon: '✕', tone: 'muted' },
+  };
+  const config = labels[queueStatus] ?? labels.pending;
   return [
     {
       key: 'count',
-      label: isPending ? 'PENDING REQUESTS' : 'APPROVED REQUESTS',
-      hint: isPending ? 'Awaiting your decision' : 'Decisions recorded in your scope',
-      icon: isPending ? '⏳' : '✓',
-      tone: isPending ? 'warning' : 'info',
+      ...config,
     },
     {
       key: 'days',
@@ -264,6 +267,7 @@ export default function AdminLeaveApprovals() {
   const [queueStatus, setQueueStatus] = useState('pending');
 
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
+  const [cancelModal, setCancelModal] = useState({ open: false, item: null, comment: '' });
   const deepLinkRef = useRef(null);
 
   const employeeFilterRef = useRef(employeeFilter);
@@ -323,12 +327,6 @@ export default function AdminLeaveApprovals() {
       if (nextEmployee) params.userId = nextEmployee;
       if (nextYear) params.year = nextYear;
       if (nextMonthPart) params.month = `${nextYear}-${nextMonthPart}`;
-      console.log('FILTER:', {
-        nextYear,
-        nextMonthPart,
-        nextMonth,
-        params,
-      });
       const data = await leaveApi.listRequests(params);
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);
@@ -533,6 +531,46 @@ export default function AdminLeaveApprovals() {
     }
   }
 
+  async function handleCancelApproved() {
+    const item = cancelModal.item;
+    const note = (cancelModal.comment || '').trim();
+    if (!note) {
+      showError('A remark is required to cancel this leave.');
+      return;
+    }
+    setActingId(item.id);
+    setError('');
+    try {
+      const response = await leaveApi.cancelApproved(item.id, { comment: note });
+      const durationMs = decisionUndoDurationMs(response?.request);
+      setCancelModal({ open: false, item: null, comment: '' });
+      if (durationMs > 0) {
+        showActionPopup({
+          message: 'Approved leave cancelled. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: async () => {
+            try {
+              await leaveApi.undoCancellation(item.id);
+              showSuccess('Cancellation undone. Leave restored.');
+              await loadRequests({ nextPage: page });
+              setCancelModal({ open: true, item, comment: note });
+            } catch (err) {
+              showError(getErrorMessage(err));
+            }
+          },
+          durationMs,
+        });
+      } else {
+        showSuccess('Approved leave cancelled.');
+      }
+      await loadRequests({ nextPage: page });
+    } catch (err) {
+      showError(getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
   const statCards = useMemo(() => statCardsForQueue(queueStatus), [queueStatus]);
   const isPendingQueue = queueStatus === 'pending';
 
@@ -571,7 +609,7 @@ export default function AdminLeaveApprovals() {
 
       <section
         className="approvals-panel card card--table"
-        aria-label={isPendingQueue ? 'Pending leave requests' : 'Approved leave requests'}
+        aria-label={`${queueStatus.charAt(0).toUpperCase() + queueStatus.slice(1)} leave requests`}
       >
         <div className="approvals-toolbar card__toolbar">
           <div className="approvals-toolbar__filters filter-bar">
@@ -633,17 +671,21 @@ export default function AdminLeaveApprovals() {
             icon={EMPTY_ICONS.leave}
             title={
               hasActiveFilters
-                ? `No ${isPendingQueue ? 'pending' : 'approved'} requests match these filters`
-                : isPendingQueue
+                ? `No ${queueStatus} requests match these filters`
+                : queueStatus === 'pending'
                   ? 'No leave requests pending approval'
-                  : 'No approved leave requests in this period'
+                  : queueStatus === 'approved'
+                    ? 'No approved leave requests in this period'
+                    : 'No cancelled leave requests'
             }
             description={
               hasActiveFilters
                 ? 'Try a different employee or month, or clear filters to see the full queue.'
-                : isPendingQueue
+                : queueStatus === 'pending'
                   ? 'New leave requests that require your decision will appear in this queue.'
-                  : 'Approved requests in your scope will appear here after decisions are recorded.'
+                  : queueStatus === 'approved'
+                    ? 'Approved requests in your scope will appear here after decisions are recorded.'
+                    : 'Cancelled leave requests will appear here.'
             }
             action={
               hasActiveFilters ? (
@@ -668,6 +710,7 @@ export default function AdminLeaveApprovals() {
                     <th>Period</th>
                     <th>Days</th>
                     <th>Status</th>
+                    <th className="approvals-table__actions-col">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -758,11 +801,40 @@ export default function AdminLeaveApprovals() {
                           <td data-label="Status" className="approval-row__status">
                             <LeaveStatusBadge status={item.status} />
                           </td>
+
+                          {!isExpanded ? (
+                            <td
+                              className="approvals-table__actions-cell"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {isPendingQueue ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={busy || Boolean(item.pendingDecision)}
+                                  onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
+                                >
+                                  Take Action
+                                </button>
+                              ) : queueStatus === 'approved' ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  disabled={busy || Boolean(item.pendingDecision)}
+                                  onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                >
+                                  Cancel
+                                </button>
+                              ) : null}
+                            </td>
+                          ) : (
+                            <td className="approvals-table__actions-cell" />
+                          )}
                         </tr>
 
                         {isExpanded ? (
                           <tr className="approval-row__detail-row">
-                            <td colSpan={7}>
+                            <td colSpan={8}>
                               <div id={detailId} className="approval-row__detail">
                                 {item.userEmail ? (
                                   <p className="approval-row__email muted small" title={item.userEmail}>
@@ -829,15 +901,32 @@ export default function AdminLeaveApprovals() {
                                   </div>
                                 ) : null}
 
+                                {item.pendingDecision ? (
+                                  <div className="approval-row__pending-decision" style={{ padding: '8px 12px', marginBottom: 8, background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 6, fontSize: 13, color: '#92400e' }}>
+                                    A <strong>{item.pendingDecision}</strong> decision is pending. Undo it first before making a new decision.
+                                  </div>
+                                ) : null}
+
                                 {isPendingQueue ? (
                                   <div className="approval-row__actions">
                                     <button
                                       type="button"
                                       className="btn btn-primary"
-                                      disabled={busy}
+                                      disabled={busy || Boolean(item.pendingDecision)}
                                       onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
                                     >
                                       Take Action
+                                    </button>
+                                  </div>
+                                ) : queueStatus === 'approved' ? (
+                                  <div className="approval-row__actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger"
+                                      disabled={busy || Boolean(item.pendingDecision)}
+                                      onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                    >
+                                      Cancel
                                     </button>
                                   </div>
                                 ) : null}
@@ -869,6 +958,18 @@ export default function AdminLeaveApprovals() {
         onApprove={() => handleDecision(decisionModal.item.id, 'approve')}
         onReject={() => handleDecision(decisionModal.item.id, 'reject')}
         onCancel={() => setDecisionModal({ open: false, item: null, comment: '' })}
+      />
+
+      <LeaveDecisionModal
+        open={cancelModal.open}
+        item={cancelModal.item}
+        action="cancel"
+        initialComment={cancelModal.comment}
+        busy={actingId === cancelModal.item?.id}
+        error={error}
+        onCommentChange={(value) => setCancelModal((prev) => ({ ...prev, comment: value }))}
+        onApprove={handleCancelApproved}
+        onReject={() => setCancelModal({ open: false, item: null, comment: '' })}
       />
     </div>
   );

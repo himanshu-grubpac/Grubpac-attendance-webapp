@@ -49,9 +49,11 @@ import {
 } from '../services/leaveBalanceService.js';
 import {
   cancelLeaveRequest,
+  cancelApprovedLeaveByApprover,
   createLeaveRequest,
   decideLeaveRequest,
   decideLeaveRequestByToken,
+  undoLeaveCancellation,
   undoLeaveDecision,
   editLeaveRequest,
   dispatchSubmitNotifications,
@@ -250,6 +252,24 @@ export async function undoSubmittedLeaveRequestHandler(req, res) {
   res.json({ request });
 }
 
+export async function cancelApprovedLeaveByApproverHandler(req, res) {
+  const request = await cancelApprovedLeaveByApprover(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
+
+export async function undoLeaveCancellationHandler(req, res) {
+  const request = await undoLeaveCancellation(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
+
 export async function approveLeaveRequestHandler(req, res) {
   const parsed = leaveDecisionSchema.parse(req.body ?? {});
   const request = await decideLeaveRequest(
@@ -340,11 +360,9 @@ function decisionConfirmHtml(action, token, requestId, leaveDetails = {}) {
         <p style="margin:0;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${safeReason}</p>
       </div>`
     : '';
-  const commentField = action === 'reject'
-    ? `<label style="display:block;margin:0 0 16px;font-size:14px;line-height:1.5;font-weight:600;">Remark (required)
+  const commentField = `<label style="display:block;margin:0 0 16px;font-size:14px;line-height:1.5;font-weight:600;">Remark (required)
                 <textarea name="comment" required maxlength="500" rows="3" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:9px;border:1px solid #d1d5db;border-radius:8px;font:inherit;"></textarea>
-              </label>`
-    : '';
+              </label>`;
   return `<!doctype html>
 <html lang="en">
   <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
@@ -412,8 +430,8 @@ export async function leaveDecisionLinkHandler(req, res) {
     return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
   }
   const decisionComment = typeof comment === 'string' ? comment.trim() : null;
-  if (action === 'reject' && !decisionComment) {
-    return res.status(400).type('html').send(decisionLinkHtml(false, 'A remark is required when rejecting a leave request.'));
+  if (!decisionComment) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'A remark is required for this action.'));
   }
   try {
     const { manager } = await decideLeaveRequestByToken(request, action, token, decisionComment);
