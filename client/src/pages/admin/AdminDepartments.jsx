@@ -25,6 +25,8 @@ const STATUS_OPTIONS = [
 const emptyForm = {
   name: '',
   code: '',
+  leadUserId: '',
+  deputyUserId: '',
 };
 
 function TableSkeleton() {
@@ -165,7 +167,11 @@ export default function AdminDepartments() {
 
     try {
       if (modal.mode === 'create') {
-        await adminApi.createDepartment(validation.data);
+        await adminApi.createDepartment({
+          ...validation.data,
+          leadUserId: form.leadUserId || null,
+          deputyUserId: form.deputyUserId || null,
+        });
         showSuccess(`Department "${validation.data.name}" created.`);
       } else {
         await adminApi.updateDepartment(modal.department.id, {
@@ -418,40 +424,36 @@ export default function AdminDepartments() {
                   <FieldError message={fieldErrors.code} />
                 </label>
 
-                {modal.mode === 'edit' ? (
-                  <>
-                    <div className="modal__field">
-                      <span className="label">Department lead</span>
-                      <SelectField
-                        value={form.leadUserId ?? ''}
-                        onChange={(value) => setForm({ ...form, leadUserId: value })}
-                        options={[
-                          { value: '', label: 'None' },
-                          ...managers.map((manager) => ({
-                            value: manager.id,
-                            label: manager.name,
-                          })),
-                        ]}
-                        aria-label="Department lead"
-                      />
-                    </div>
-                    <div className="modal__field">
-                      <span className="label">Deputy lead</span>
-                      <SelectField
-                        value={form.deputyUserId ?? ''}
-                        onChange={(value) => setForm({ ...form, deputyUserId: value })}
-                        options={[
-                          { value: '', label: 'None' },
-                          ...managers.map((manager) => ({
-                            value: manager.id,
-                            label: manager.name,
-                          })),
-                        ]}
-                        aria-label="Deputy lead"
-                      />
-                    </div>
-                  </>
-                ) : null}
+                <div className="modal__field">
+                  <span className="label">Department lead</span>
+                  <SelectField
+                    value={form.leadUserId ?? ''}
+                    onChange={(value) => setForm({ ...form, leadUserId: value })}
+                    options={[
+                      { value: '', label: 'None' },
+                      ...managers.map((manager) => ({
+                        value: manager.id,
+                        label: manager.name,
+                      })),
+                    ]}
+                    aria-label="Department lead"
+                  />
+                </div>
+                <div className="modal__field">
+                  <span className="label">Deputy lead</span>
+                  <SelectField
+                    value={form.deputyUserId ?? ''}
+                    onChange={(value) => setForm({ ...form, deputyUserId: value })}
+                    options={[
+                      { value: '', label: 'None' },
+                      ...managers.map((manager) => ({
+                        value: manager.id,
+                        label: manager.name,
+                      })),
+                    ]}
+                    aria-label="Deputy lead"
+                  />
+                </div>
               </div>
 
               <footer className="modal__footer">
