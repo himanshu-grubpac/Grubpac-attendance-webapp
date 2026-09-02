@@ -305,12 +305,6 @@ export default function AdminLeaveApprovals() {
       if (nextEmployee) params.userId = nextEmployee;
       if (nextYear) params.year = nextYear;
       if (nextMonthPart) params.month = `${nextYear}-${nextMonthPart}`;
-      console.log('FILTER:', {
-        nextYear,
-        nextMonthPart,
-        nextMonth,
-        params,
-      });
       const data = await leaveApi.listRequests(params);
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);

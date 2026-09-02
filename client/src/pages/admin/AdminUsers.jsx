@@ -393,7 +393,6 @@ export default function AdminUsers() {
 
   function handleStatusChange(value) {
     setStatusFilter(value);
-    console.log('value=', value);
     loadEmployees({
       query: search,
       nextPage: 1,
