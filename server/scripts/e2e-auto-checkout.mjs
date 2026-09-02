@@ -12,6 +12,9 @@ import {
   buildISTTimestampFromDayAndTime,
 } from '../src/utils/istDate.js';
 
+// Always run against an isolated in-memory MongoDB so we never touch real data.
+if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
+
 let passed = 0;
 let failed = 0;
 function check(name, cond) {
@@ -83,8 +86,8 @@ try {
   check('today office not auto-checked-out (future deadline)', !todayCO);
 
   // Deadline computation
-  const dOffice = computeAutoCheckoutDeadline('office', twoDaysAgoKey, '23:59', '06:00');
-  const dWfh = computeAutoCheckoutDeadline('wfh', twoDaysAgoKey, '23:59', '06:00');
+  const dOffice = computeAutoCheckoutDeadline('office', twoDaysAgoKey, { day: 'same', time: '23:59' });
+  const dWfh = computeAutoCheckoutDeadline('wfh', twoDaysAgoKey, { day: 'next', time: '06:00' });
   check('office deadline is same IST day at 23:59', getISTDateInputValue(dOffice) === twoDaysAgoKey);
   const nextKey = getISTDateInputValue(new Date(buildISTTimestampFromDayAndTime(twoDaysAgoKey, '00:00').getTime() + 86400000));
   check('wfh deadline is next IST day at 06:00', getISTDateInputValue(dWfh) === nextKey);
@@ -92,7 +95,7 @@ try {
   // Disabled scenario
   let off = await OfficeSettings.findOne().sort({ updatedAt: -1 });
   if (!off) off = await OfficeSettings.create({ name: 'X', latitude: 1, longitude: 1, radiusMeters: 100, maxAccuracyMeters: 50 });
-  off.autoCheckout = { enabled: false, officeTime: '23:59', wfhTime: '06:00' };
+  off.autoCheckout = { enabled: false, office: { day: 'same', time: '23:59' }, wfh: { day: 'next', time: '06:00' } };
   await off.save();
   const u2 = await User.create({
     email: 'e2e.ac2.' + Date.now() + '@grubpac.com',
@@ -110,11 +113,30 @@ try {
   check('disabled auto-checkout creates nothing', afterDisabled - beforeDisabled === 0 && resDisabled.skipped === true);
 
   // Re-enable with custom office time -> should now process overdue
-  off.autoCheckout = { enabled: true, officeTime: '20:00', wfhTime: '05:00' };
+  off.autoCheckout = { enabled: true, office: { day: 'same', time: '20:00' }, wfh: { day: 'next', time: '05:00' } };
   await off.save();
   const resCustom = await runAutoCheckoutJob(now);
   const afterCustom = await AttendanceRecord.countDocuments({ userId: u2._id, type: 'check_out', autoCheckout: true });
   check('re-enabled auto-checkout processes overdue with custom time', afterCustom - beforeDisabled === 1 && resCustom.processed >= 1);
+
+  // Scenario 5: Concurrent invocation — only one should process
+  const u3 = await User.create({
+    email: 'e2e.ac3.' + Date.now() + '@grubpac.com',
+    passwordHash: bcrypt.hashSync('Password123!', 8), role: 'employee', isActive: true,
+    firstName: 'AC3', name: 'AC3', mobile: '7' + String(Date.now()).slice(-9), employeeCode: 'AC3' + Date.now(),
+  });
+  await AttendanceRecord.create({
+    userId: u3._id, type: 'check_in', attendanceMode: 'office',
+    timestamp: buildISTTimestampFromDayAndTime(twoDaysAgoKey, '09:00'),
+    status: 'allowed', rejectionReasons: [], ...geo,
+  });
+  const beforeConcurrent = await countAutoCheckouts();
+  const [resA, resB] = await Promise.all([runAutoCheckoutJob(now), runAutoCheckoutJob(now)]);
+  const afterConcurrent = await countAutoCheckouts();
+  const totalProcessed = (resA.processed || 0) + (resB.processed || 0);
+  const oneSkipped = resA.skipped || resB.skipped;
+  check('concurrent invocations — only one processes', totalProcessed <= 1 && oneSkipped);
+  check('concurrent invocations — no duplicate records', afterConcurrent - beforeConcurrent <= 1);
 } catch (e) {
   failed++;
   console.error('ERROR', e);

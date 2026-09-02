@@ -20,6 +20,31 @@ const leaveRequestSchema = new mongoose.Schema(
     decidedAt: { type: Date, default: null },
     decisionComment: { type: String, default: null, trim: true, maxlength: 1000 },
     adminException: { type: Boolean, default: false },
+    decisionTokens: [
+      {
+        tokenHash: { type: String, required: true },
+        action: { type: String, enum: ['approve', 'reject', 'decide'], required: true },
+        managerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        expiresAt: { type: Date, required: true },
+        used: { type: Boolean, default: false },
+        usedAt: { type: Date, default: null },
+      },
+    ],
+    notifyAfter: { type: Date, default: null },
+    notificationsSent: { type: Boolean, default: false },
+    /** True once the manager-facing submit notification has been delivered. */
+    submitNotificationsSent: { type: Boolean, default: false },
+    /**
+     * When an admin acts (approve/reject/cancel) but the undo window is still
+     * open, the intended final status is stored here. The actual `status` field
+     * stays unchanged until the undo window expires and the decision is
+     * finalised by the background job.
+     */
+    pendingDecision: {
+      type: String,
+      enum: ['approved', 'rejected', 'cancelled'],
+      default: null,
+    },
   },
   { timestamps: true },
 );
@@ -54,6 +79,8 @@ leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     decidedAt: this.decidedAt,
     decisionComment: this.decisionComment,
     adminException: this.adminException,
+    pendingDecision: this.pendingDecision ?? null,
+    decisionUndoExpiresAt: this.notifyAfter,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

@@ -103,7 +103,7 @@ export const carryForwardSchema = z.object({
 });
 
 export const leaveDecisionSchema = z.object({
-  comment: z.string().trim().max(1000).optional().nullable(),
+  comment: z.string().trim().min(1, 'A remark is required.').max(500),
   adminException: z.boolean().optional(),
 });
 

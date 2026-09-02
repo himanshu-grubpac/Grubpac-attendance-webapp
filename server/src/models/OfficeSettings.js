@@ -36,8 +36,14 @@ const officeSettingsSchema = new mongoose.Schema(
      */
     autoCheckout: {
       enabled: { type: Boolean, default: true },
-      officeTime: { type: String, default: '23:59', trim: true },
-      wfhTime: { type: String, default: '06:00', trim: true },
+      office: {
+        day: { type: String, enum: ['same', 'next'], default: 'same' },
+        time: { type: String, default: '23:59', trim: true },
+      },
+      wfh: {
+        day: { type: String, enum: ['same', 'next'], default: 'next' },
+        time: { type: String, default: '06:00', trim: true },
+      },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },

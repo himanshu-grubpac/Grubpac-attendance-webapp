@@ -31,6 +31,8 @@ import {
 } from '../../../shared/validation/holidays.js';
 import { parseDateInputAsISTDay, getISTYear } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
+import { signToken } from '../middleware/auth.js';
+import { env } from '../config/env.js';
 import {
   getRecurringHolidayRules,
   materializeRecurringHolidaysForYear,
@@ -47,9 +49,18 @@ import {
 } from '../services/leaveBalanceService.js';
 import {
   cancelLeaveRequest,
+  cancelApprovedLeaveByApprover,
   createLeaveRequest,
   decideLeaveRequest,
+  decideLeaveRequestByToken,
+  undoLeaveCancellation,
+  undoLeaveDecision,
   editLeaveRequest,
+  dispatchSubmitNotifications,
+  undoSubmittedLeaveRequest,
+  peekLeaveDecisionToken,
+  autoLoginByDecisionToken,
+  formatLeaveDateText,
   getTeamCalendar,
   listLeaveRequests,
   loadLeaveRequest,
@@ -231,6 +242,34 @@ export async function editLeaveRequestHandler(req, res) {
   res.json({ request });
 }
 
+export async function notifyLeaveRequestHandler(req, res) {
+  await dispatchSubmitNotifications(req.params.id);
+  res.json({ ok: true });
+}
+
+export async function undoSubmittedLeaveRequestHandler(req, res) {
+  const request = await undoSubmittedLeaveRequest(req.params.id, req.user);
+  res.json({ request });
+}
+
+export async function cancelApprovedLeaveByApproverHandler(req, res) {
+  const request = await cancelApprovedLeaveByApprover(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
+
+export async function undoLeaveCancellationHandler(req, res) {
+  const request = await undoLeaveCancellation(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
+
 export async function approveLeaveRequestHandler(req, res) {
   const parsed = leaveDecisionSchema.parse(req.body ?? {});
   const request = await decideLeaveRequest(
@@ -254,7 +293,181 @@ export async function rejectLeaveRequestHandler(req, res) {
   );
   res.json({ request });
 }
+export async function undoLeaveDecisionHandler(req, res) {
+  const request = await undoLeaveDecision(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+  );
+  res.json({ request });
+}
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function decisionLinkHtml(success, message, portalUrl) {
+  const color = success ? '#16a34a' : '#dc2626';
+  const title = success ? 'Action complete' : 'Unable to process';
+  const safeMessage = escapeHtml(message);
+  const safePortalUrl = escapeHtml(portalUrl);
+  const portalLink = success && portalUrl
+    ? `<p style="margin:16px 0 0;font-size:13px;line-height:1.5;"><a href="${safePortalUrl}" style="color:#1d4ed8;text-decoration:none;">Open in Admin Portal &rarr;</a></p>`
+    : '';
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:40px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:32px 24px;">
+            <h1 style="margin:0 0 12px;font-size:20px;color:${color};">${title}</h1>
+            <p style="margin:0;font-size:15px;line-height:1.5;">${safeMessage}</p>
+            ${portalLink}
+            <p style="margin:${success ? '12' : '20'}px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">You can close this tab. If the request was approved or rejected, the employee has been notified by email and SMS.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function decisionConfirmHtml(action, token, requestId, leaveDetails = {}) {
+  const verb = action === 'approve' ? 'APPROVE' : 'REJECT';
+  const color = action === 'approve' ? '#16a34a' : '#dc2626';
+  const { requesterName, leaveTypeName, dateText, reason, portalUrl } = leaveDetails;
+  const safeRequesterName = escapeHtml(requesterName);
+  const safeLeaveTypeName = escapeHtml(leaveTypeName || '—');
+  const safeDateText = escapeHtml(dateText || '—');
+  const safeReason = escapeHtml(reason || '—');
+  const safeRequestId = escapeHtml(requestId);
+  const safeAction = escapeHtml(action);
+  const safeToken = escapeHtml(token);
+  const safePortalUrl = escapeHtml(portalUrl);
+  const detailsHtml = requesterName
+    ? `<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:0 0 20px;">
+        <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Employee:</strong> ${safeRequesterName}</p>
+        <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Leave Type:</strong> ${safeLeaveTypeName}</p>
+        <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${safeDateText}</p>
+        <p style="margin:0;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${safeReason}</p>
+      </div>`
+    : '';
+  const commentField = `<label style="display:block;margin:0 0 16px;font-size:14px;line-height:1.5;font-weight:600;">Remark (required)
+                <textarea name="comment" required maxlength="500" rows="3" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:9px;border:1px solid #d1d5db;border-radius:8px;font:inherit;"></textarea>
+              </label>`;
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:40px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:32px 24px;">
+            <h1 style="margin:0 0 12px;font-size:20px;color:${color};">Confirm: ${verb} leave request</h1>
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.5;">You opened this link from your email. Review the details below and confirm to ${action} this request.</p>
+            ${detailsHtml}
+            <form method="POST" action="/api/leave/decision-link" style="margin:0 0 12px;">
+              <input type="hidden" name="request" value="${safeRequestId}" />
+              <input type="hidden" name="action" value="${safeAction}" />
+              <input type="hidden" name="token" value="${safeToken}" />
+              ${commentField}
+              <button type="submit" style="display:inline-block;background:${color};color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border:0;border-radius:8px;cursor:pointer;">Confirm ${verb}</button>
+            </form>
+            ${portalUrl ? `<p style="margin:0 0 8px;font-size:13px;line-height:1.5;"><a href="${safePortalUrl}" style="color:#1d4ed8;text-decoration:none;">Open in Admin Portal &rarr;</a></p>` : ''}
+            <p style="margin:12px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">If you did not expect this, simply close the tab. Nothing has been changed yet.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export async function leaveDecisionLinkPageHandler(req, res) {
+  const { request, action, token } = req.query;
+  if (!request || !action || !token || (action !== 'approve' && action !== 'reject')) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
+  }
+  const peek = await peekLeaveDecisionToken(request, action, token);
+  if (!peek) {
+    return res.status(410).type('html').send(decisionLinkHtml(false, 'This link is invalid, has already been used, or has expired.'));
+  }
+  if (peek.status !== 'pending') {
+    return res.status(409).type('html').send(decisionLinkHtml(false, 'This leave request has already been decided.'));
+  }
+  let leaveDetails = {};
+  try {
+    const leaveRequest = await loadLeaveRequest(request);
+    if (leaveRequest) {
+      const requester = leaveRequest.userId;
+      const leaveType = leaveRequest.leaveTypeId;
+      leaveDetails = {
+        requesterName: requester?.name || 'An employee',
+        leaveTypeName: leaveType?.name || leaveType?.code || 'leave',
+        dateText: formatLeaveDateText(leaveRequest),
+        reason: leaveRequest.reason || '',
+        portalUrl: `${env.clientOrigin}/admin/leave/approvals?request=${request}`,
+      };
+    }
+  } catch {
+    // If we can't load details, show the page without them.
+  }
+  return res.status(200).type('html').send(decisionConfirmHtml(action, token, request, leaveDetails));
+}
+
+export async function leaveDecisionLinkHandler(req, res) {
+  const { request, action, token, comment } = req.body ?? {};
+  if (!request || !action || !token || (action !== 'approve' && action !== 'reject')) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
+  }
+  const decisionComment = typeof comment === 'string' ? comment.trim() : null;
+  if (!decisionComment) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'A remark is required for this action.'));
+  }
+  try {
+    const { manager } = await decideLeaveRequestByToken(request, action, token, decisionComment);
+    const verb = action === 'approve' ? 'approved' : 'rejected';
+    const by = manager && manager.name ? ` by ${manager.name}` : '';
+    const portalUrl = `${env.clientOrigin}/admin/leave/approvals`;
+    return res.status(200).type('html').send(decisionLinkHtml(true, `Leave request ${verb} successfully${by}.`, portalUrl));
+  } catch (e) {
+    return res.status(e.statusCode || 500).type('html').send(decisionLinkHtml(false, e.message || 'Something went wrong.'));
+  }
+}
+
+export async function leaveDecisionLoginHandler(req, res) {
+  const { request, action, token } = req.query;
+  if (!request || !action || !token || (action !== 'approve' && action !== 'reject' && action !== 'decide')) {
+    return res.status(400).type('html').send(decisionLinkHtml(false, 'This link is missing required parameters.'));
+  }
+  try {
+    const { manager } = await autoLoginByDecisionToken(request, action, token);
+    const jwtToken = signToken(manager);
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('attendance_token', jwtToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? 'strict' : 'lax',
+      maxAge: env.jwtCookieMaxAgeMs,
+      path: '/',
+    });
+    const redirectUrl = action === 'decide'
+      ? `${env.clientOrigin}/admin/leave/approvals?decision=request&requestId=${request}`
+      : `${env.clientOrigin}/admin/leave/approvals?decision=request&requestId=${request}&action=${action}`;
+    return res.redirect(302, redirectUrl);
+  } catch (e) {
+    return res.status(e.statusCode || 500).type('html').send(decisionLinkHtml(false, e.message || 'Something went wrong.'));
+  }
+}
 export async function getTeamCalendarHandler(req, res) {
   const parsed = teamCalendarQuerySchema.parse(req.query);
   const result = await getTeamCalendar(req.user, req.userPermissions, parsed);

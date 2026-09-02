@@ -165,6 +165,7 @@ export default function AdminUsers() {
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
+  const canReadAllAttendance = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
 
   const [employees, setEmployees] = useState([]);
@@ -639,15 +640,17 @@ export default function AdminUsers() {
               }
             />
 
-            <label className="field-inline filter-bar__field employees-toolbar__field">
-              <span className="label">Department</span>
-              <SelectField
-                value={departmentFilter}
-                onChange={handleDepartmentChange}
-                options={departmentOptions}
-                aria-label="Department filter"
-              />
-            </label>
+            {canReadAllAttendance && (
+              <label className="field-inline filter-bar__field employees-toolbar__field">
+                <span className="label">Department</span>
+                <SelectField
+                  value={departmentFilter}
+                  onChange={handleDepartmentChange}
+                  options={departmentOptions}
+                  aria-label="Department filter"
+                />
+              </label>
+            )}
 
             <label className="field-inline filter-bar__field employees-toolbar__field">
               <span className="label">Role</span>

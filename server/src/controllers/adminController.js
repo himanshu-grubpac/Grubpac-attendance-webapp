@@ -199,7 +199,7 @@ export async function listEmployees(req, res) {
   const [employees, total] = await Promise.all([
     User.find(query)
       .populate(USER_POPULATE_FIELDS)
-      .sort({ createdAt: -1 })
+      .sort({ name: 1 })
       .skip(skip)
       .limit(limit),
     User.countDocuments(query),
@@ -585,15 +585,11 @@ export async function updateOfficeSettings(req, res) {
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
   // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
   if (parsed.autoCheckout) {
-    const existing = (settings && settings.autoCheckout) || {
-      enabled: true,
-      officeTime: '23:59',
-      wfhTime: '06:00',
-    };
+    const existing = (settings && settings.autoCheckout) || {};
     parsed.autoCheckout = {
       enabled: parsed.autoCheckout.enabled ?? existing.enabled ?? true,
-      officeTime: parsed.autoCheckout.officeTime ?? existing.officeTime ?? '23:59',
-      wfhTime: parsed.autoCheckout.wfhTime ?? existing.wfhTime ?? '06:00',
+      office: parsed.autoCheckout.office ?? existing.office ?? { day: 'same', time: '23:59' },
+      wfh: parsed.autoCheckout.wfh ?? existing.wfh ?? { day: 'next', time: '06:00' },
     };
   }
 
@@ -603,8 +599,11 @@ export async function updateOfficeSettings(req, res) {
       updatedBy: req.user._id,
     });
   } else {
-    Object.assign(settings, parsed, { updatedBy: req.user._id });
-    await settings.save();
+    await settings.updateOne(
+      { $set: { ...parsed, updatedBy: req.user._id } },
+      { runValidators: true },
+    );
+    settings = await OfficeSettings.findById(settings._id);
   }
 
   auditLog('office_settings_updated', {

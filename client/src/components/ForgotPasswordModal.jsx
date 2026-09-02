@@ -74,6 +74,10 @@ export default function ForgotPasswordModal({ open, onClose }) {
     setSubmitting(true);
     try {
       const result = await authApi.forgotPassword(validation.data.email);
+      if (result?.exists === false) {
+        setError('No account found with that email address. Please check the email and try again.');
+        return;
+      }
       setSent(true);
       showSuccess('If the account exists, a reset link has been sent.');
       // Surface the dev link in non-production for local testing.
@@ -118,8 +122,8 @@ export default function ForgotPasswordModal({ open, onClose }) {
         {sent ? (
           <div className="modal__body">
             <div className="alert alert--success" role="status">
-              If an account exists for that email, we've sent password reset
-              instructions. Check your inbox (and spam folder).
+              We've sent password reset instructions. Check your inbox (and spam
+              folder).
             </div>
           </div>
         ) : (

@@ -10,7 +10,16 @@ function hasAllPermissions(userPermissions, permissions = []) {
 }
 
 export function resolveLoginPortal(loginPortal, user) {
-  if (loginPortal === 'admin' || loginPortal === 'employee') {
+  if (
+    loginPortal === 'admin'
+    && hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)
+  ) {
+    return loginPortal;
+  }
+  if (
+    loginPortal === 'employee'
+    && hasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN)
+  ) {
     return loginPortal;
   }
   if (hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)) {

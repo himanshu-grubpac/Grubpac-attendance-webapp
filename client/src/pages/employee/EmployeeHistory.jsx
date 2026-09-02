@@ -118,7 +118,20 @@ export default function EmployeeHistory() {
                           )}
                         </td>
                         <td data-label="Mode">
-                          <span className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}`}>
+                          <span
+                            className={`attendance-mode-badge attendance-mode-badge--${record.attendanceMode === 'wfh' ? 'wfh' : 'office'}${
+                              record.type === 'check_in' &&
+                              record.leaveStatus === 'pending'
+                                ? ' attendance-mode-badge--wfh-pending'
+                                : ''
+                            }`}
+                            title={
+                              record.type === 'check_in' &&
+                              record.leaveStatus === 'pending'
+                                ? 'WFH approval pending — shown in red until approved'
+                                : undefined
+                            }
+                          >
                             {formatHistoryModeShort(record) ?? attendanceModeLabel(record.attendanceMode)}
                           </span>
                         </td>

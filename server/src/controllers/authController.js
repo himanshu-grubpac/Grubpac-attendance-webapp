@@ -33,7 +33,7 @@ export function getAuthCookieOptions() {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: env.jwtCookieMaxAgeMs,
     path: '/',
   };
@@ -47,7 +47,7 @@ export function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
   });
 }
@@ -340,4 +340,70 @@ export async function setPin(userId, body, auditContext = {}) {
   return {
     message: hasPin ? 'PIN changed successfully.' : 'PIN set successfully.',
   };
+}
+
+/**
+ * Employee self-service PIN removal.
+ * - Only employees may remove their own PIN.
+ * - Requires the current account password (when no PIN is set this is moot) or
+ *   the current PIN to re-verify identity before clearing the credential.
+ */
+export async function deletePin(userId, body = {}, auditContext = {}) {
+  const user = await User.findById(userId);
+
+  if (!user || !user.isActive) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (user.role !== 'employee') {
+    const error = new Error('PIN removal is available for employees only.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
+  if (!hasPin) {
+    return { message: 'No PIN is currently set.' };
+  }
+
+  const currentPin = body.currentPin?.trim();
+  const currentPassword = body.currentPassword?.trim();
+
+  if (!currentPin && !currentPassword) {
+    const error = new Error('Your current PIN or password is required to remove the PIN.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (currentPin) {
+    const currentHash = user.pin4Hash || user.pin6Hash;
+    const currentValid = await bcrypt.compare(currentPin, currentHash);
+    if (!currentValid) {
+      const error = new Error('Current PIN is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  } else if (currentPassword) {
+    const passwordValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!passwordValid) {
+      const error = new Error('Current password is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  }
+
+  user.pin4Hash = null;
+  user.pin6Hash = null;
+  await user.save();
+
+  auditLog('pin_removed', {
+    userId: user._id.toString(),
+    email: user.email,
+    role: user.role,
+    ...auditContext,
+  });
+
+  return { message: 'PIN removed successfully.' };
 }

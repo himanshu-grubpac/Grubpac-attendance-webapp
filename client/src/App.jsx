@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
+import { ActionPopupProvider } from './context/ActionPopupContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
@@ -50,7 +51,8 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AuthProvider>
+        <ActionPopupProvider>
+          <AuthProvider>
           <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
@@ -377,7 +379,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </BrowserRouter>
-        </AuthProvider>
+                  </AuthProvider>
+        </ActionPopupProvider>
       </ToastProvider>
     </ThemeProvider>
   );

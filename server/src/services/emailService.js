@@ -34,6 +34,17 @@ export function isEmailConfigured() {
   return Boolean(getTransport());
 }
 
+/** Close the pooled SMTP transport (test teardown / graceful shutdown). */
+export function closeEmailTransport() {
+  if (cachedTransport) {
+    if (typeof cachedTransport.close === 'function') {
+      cachedTransport.close();
+    }
+    cachedTransport = null;
+    transportResolved = false;
+  }
+}
+
 function buildFrom() {
   const { address, name } = env.emailFrom;
   if (!name) return address;
@@ -139,5 +150,143 @@ If you didn't request this, you can safely ignore this email — your password w
 
 © Grubpac Technologies`;
 
+  return { subject, html, text };
+}
+
+const EXPIRY_MINUTES_LEAVE = Math.max(1, Math.round(env.passwordResetExpiresMs / 60000));
+
+/**
+ * Manager notification when an employee applies for leave.
+ * withActions=false (e.g. auto-approved leave types) omits the Approve/Reject buttons.
+ */
+export function renderLeaveManagerEmail({
+  requesterName,
+  leaveTypeName,
+  reason,
+  dateText,
+  timeText,
+  withActions,
+  actionUrl,
+}) {
+  const subject = `Leave request applied: ${leaveTypeName}`;
+  const actions = withActions
+    ? `<p style="margin:0 0 20px;">
+         <a href="${actionUrl}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 24px;border-radius:8px;">Take Action &rarr;</a>
+       </p>`
+    : `<p style="margin:0 0 20px;font-size:14px;line-height:1.5;color:#6b7280;">This leave type is auto-approved, so no action is required from you.</p>`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">${requesterName} has applied for <strong>${leaveTypeName}</strong>.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${reason || '—'}</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 20px;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+            ${actions}
+            <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">This link is secure, single-use, and expires automatically. If the button does not work, open the approvals page in the admin portal.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${requesterName} applied for ${leaveTypeName}.
+Reason: ${reason || '—'}
+Date: ${dateText}
+Time: ${timeText}
+${withActions ? `Take action here: ${actionUrl}` : 'This leave type is auto-approved; no action required.'}`;
+  return { subject, html, text };
+}
+
+/** Applicant notification when a leave request is approved or rejected. */
+export function renderLeaveApplicantEmail({ leaveTypeName, status, remarks, dateText, timeText }) {
+  const subject = `Leave request ${status}: ${leaveTypeName}`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your <strong>${leaveTypeName}</strong> leave request has been <strong>${status}</strong>.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Remarks:</strong> ${remarks || '—'}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your ${leaveTypeName} leave request has been ${status}.
+Date: ${dateText}
+Time: ${timeText}
+Remarks: ${remarks || '—'}`;
+  return { subject, html, text };
+}
+
+/** Applicant notification when a leave request (approved or pending) is cancelled by the employee. */
+export function renderLeaveCancelledEmail({ leaveTypeName, dateText, timeText, wasApproved }) {
+  const subject = `Leave request cancelled: ${leaveTypeName}`;
+  const balanceNote = wasApproved
+    ? '<p style="margin:0 0 12px;font-size:14px;line-height:1.5;">The approved leave days have been returned to your leave balance.</p>'
+    : '';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your <strong>${leaveTypeName}</strong> leave request has been <strong>cancelled</strong>.</p>
+            ${balanceNote}
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your ${leaveTypeName} leave request has been cancelled.
+Date: ${dateText}
+Time: ${timeText}
+${wasApproved ? 'The approved leave days have been returned to your leave balance.' : ''}`;
+  return { subject, html, text };
+}
+
+/** Approver notification when an employee cancels an approved leave. */
+export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeName, dateText, timeText }) {
+  const subject = `Approved leave cancelled: ${leaveTypeName}`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has cancelled their approved <strong>${leaveTypeName}</strong> leave.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${applicantName} cancelled their approved ${leaveTypeName} leave.
+Date: ${dateText}
+Time: ${timeText}`;
   return { subject, html, text };
 }

@@ -27,7 +27,7 @@ function toParts(value) {
 }
 
 /** A 12-hour-only time control. The API value remains HH:mm for reliable policy evaluation. */
-export default function TimeField({ value, onChange, disabled = false, id, 'aria-label': ariaLabel, className = '' }) {
+export default function TimeField({ value, onChange, disabled = false, id, 'aria-label': ariaLabel, className = '', innerRef, onInvalid }) {
   const parts = toParts(value);
   const [hourText, setHourText] = useState(String(parts.hour));
   const [minuteText, setMinuteText] = useState(String(parts.minute).padStart(2, '0'));
@@ -38,16 +38,31 @@ export default function TimeField({ value, onChange, disabled = false, id, 'aria
     setMinuteText(String(currentParts.minute).padStart(2, '0'));
   }, [value]);
 
+  /**
+   * Flush the current typed hour/minute into the parent value and return the
+   * resulting HH:mm string (or null when the input is invalid). The returned
+   * value lets callers use the committed time immediately — React setState is
+   * async, so reading state right after commit() would still be stale.
+   */
   function commit(hourValue = hourText, minuteValue = minuteText, period = parts.period) {
     const hour = Number(hourValue);
     const minute = Number(minuteValue);
     if (!Number.isInteger(hour) || hour < 1 || hour > 12 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      onInvalid?.();
       setHourText(String(parts.hour));
       setMinuteText(String(parts.minute).padStart(2, '0'));
-      return;
+      return null;
     }
     const hour24 = period === 'PM' ? (hour % 12) + 12 : hour % 12;
-    onChange(`${String(hour24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
+    const committed = `${String(hour24).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    onChange(committed);
+    return committed;
+  }
+
+  // Let a parent form force a commit before reading state (e.g. clicking Save
+  // before the time input has blurred).
+  if (innerRef) {
+    innerRef.current = { commit };
   }
 
   function onTextChange(setter) {

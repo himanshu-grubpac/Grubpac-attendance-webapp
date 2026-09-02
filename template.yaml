@@ -43,6 +43,10 @@ Parameters:
       - 'true'
       - 'false'
     Description: EventBridge ping every 5 min to keep containers warm
+  JobFunctionName:
+    Type: String
+    Default: grubpac-attendance-api-jobs
+    Description: Lambda function name for scheduled background jobs (auto-checkout, leave notify)
 
 Conditions:
   EnableWarmup: !Equals [!Ref EnableWarmupSchedule, 'true']
@@ -137,6 +141,84 @@ Resources:
       FunctionName: !Ref AttendanceFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt WarmupScheduleRule.Arn
+
+  JobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Ref JobFunctionName
+      Handler: server/src/jobs/lambdaJobHandler.handler
+      CodeUri: lambda-package/
+      Timeout: 120
+      MemorySize: 512
+      Environment:
+        Variables:
+          NODE_ENV: production
+          MONGODB_URI: !Ref MongoDbUri
+          JWT_SECRET: !Ref JwtSecret
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  AutoCheckoutScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Run auto-checkout job every 15 minutes
+      ScheduleExpression: rate(15 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt JobFunction.Arn
+          Id: AutoCheckoutTarget
+          Input: '{"jobName":"auto-checkout"}'
+
+  LeaveNotifyScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Run leave decision notify job every 30 minutes
+      ScheduleExpression: rate(30 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt JobFunction.Arn
+          Id: LeaveNotifyTarget
+          Input: '{"jobName":"leave-decision-notify"}'
+
+  AutoCheckoutSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref JobFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AutoCheckoutScheduleRule.Arn
+
+  LeaveNotifySchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref JobFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LeaveNotifyScheduleRule.Arn
+
+  JobFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${JobFunctionName}-errors'
+      AlarmDescription: Job Lambda errors >= 3 in 5 minutes
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref JobFunctionName
 
   LambdaErrorsAlarm:
     Type: AWS::CloudWatch::Alarm

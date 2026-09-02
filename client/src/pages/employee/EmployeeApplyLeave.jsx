@@ -40,7 +40,7 @@ const DURATION_OPTIONS = [
 ];
 
 export default function EmployeeApplyLeave() {
-  const { showSuccess } = useToast();
+  const { showToast, showSuccess } = useToast();
   const [types, setTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [balances, setBalances] = useState([]);
@@ -49,6 +49,7 @@ export default function EmployeeApplyLeave() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const editId = searchParams.get('edit');
@@ -125,6 +126,17 @@ export default function EmployeeApplyLeave() {
     [types],
   );
 
+  const balanceItems = useMemo(
+    () =>
+      balances
+        .filter((b) => types.some((t) => t.id === b.leaveTypeId))
+        .map((b) => {
+          const t = types.find((t) => t.id === b.leaveTypeId);
+          return { code: t?.code ?? '?', available: b.available ?? 0 };
+        }),
+    [balances, types],
+  );
+
   function handleHalfDayChange(value) {
     setForm((current) => {
       const next = { ...current, halfDay: value };
@@ -158,20 +170,22 @@ export default function EmployeeApplyLeave() {
       const response = isEditing
         ? await leaveApi.updateRequest(editId, validation.data)
         : await leaveApi.createRequest(validation.data);
-      const approvedImmediately = response?.request?.status === 'approved';
-      showSuccess(
-        isEditing
-          ? 'Leave request updated.'
-          : approvedImmediately
-            ? 'Sick leave approved.'
-            : 'Leave request submitted. Your manager will be notified.',
-      );
+      const req = response?.request ?? {};
+
       if (isEditing) {
+        showSuccess('Leave request updated.');
         navigate('/employee/leave/requests');
         return;
       }
+
+      const snapshot = { ...form };
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
+      showToast('Leave request submitted.', {
+        variant: 'success',
+        durationMs: UNDO_WINDOW_MS,
+        action: { label: 'Undo', onClick: () => handleUndo(req.id, snapshot) },
+      });
       const year = new Date().getFullYear();
       leaveApi
         .getMyBalances({ year })
@@ -181,6 +195,20 @@ export default function EmployeeApplyLeave() {
       setError(getErrorMessage(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleUndo(id, snapshot) {
+    if (!id) return;
+    try {
+      await leaveApi.withdrawSubmitted(id);
+      if (snapshot) {
+        setForm(snapshot);
+      }
+      showToast('Request reverted. Edit and submit again when ready.', { variant: 'info' });
+    } catch (err) {
+      if (snapshot) setForm(snapshot);
+      showToast(getErrorMessage(err) || 'Could not undo the request.', { variant: 'error' });
     }
   }
 
@@ -228,17 +256,31 @@ export default function EmployeeApplyLeave() {
       <form className="card card--form form-grid form-grid--stacked" onSubmit={handleSubmit}>
         <p className="card__section-title form-grid__full">{isEditing ? 'Edit leave request' : 'Leave details'}</p>
 
-        <label className="form-grid__full">
-          <span className="label">Leave type</span>
-          <SelectField
-            value={form.leaveTypeId}
-            onChange={(value) => setForm({ ...form, leaveTypeId: value })}
-            options={leaveTypeOptions}
-            placeholder="Select leave type"
-            aria-label="Leave type"
-          />
-          <FieldError message={fieldErrors.leaveTypeId} />
-        </label>
+        <div className="form-grid__full leave-type-row">
+          <label className="leave-type-row__type">
+            <span className="label">Leave type</span>
+            <SelectField
+              value={form.leaveTypeId}
+              onChange={(value) => setForm({ ...form, leaveTypeId: value })}
+              options={leaveTypeOptions}
+              placeholder="Select leave type"
+              aria-label="Leave type"
+            />
+            <FieldError message={fieldErrors.leaveTypeId} />
+          </label>
+          {balanceItems.length > 0 && (
+            <div className="leave-type-row__balance">
+              <span className="label">Remaining</span>
+              <span className="leave-balance-summary">
+                {balanceItems.map((item) => (
+                  <span key={item.code} className="leave-balance-pill">
+                    {item.code} - {item.available}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
+        </div>
 
         <div className="form-grid__full form-grid form-grid--dates">
         <label className="form-field--sm">
@@ -364,6 +406,7 @@ export default function EmployeeApplyLeave() {
           </button>
         </div>
       </form>
+
     </div>
   );
 }
