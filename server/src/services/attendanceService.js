@@ -15,6 +15,7 @@ import {
   statusCodeFromRecord,
 } from './attendancePolicyService.js';
 import { getHolidayMapForYear } from './leaveService.js';
+import { hasApprovedWfhForIstDate } from './wfhPolicyService.js';
 import {
   isUserInTeamScope,
   resolveTeamScopedUserIds,
@@ -77,6 +78,38 @@ export function filterSpilloverAutoCheckouts(records) {
       return false;
     }
     return true;
+  });
+}
+
+/**
+ * Drop orphan check-out records from any record list.  A check-out is orphaned
+ * when there is no corresponding allowed check-in on the same IST day for the
+ * same user.  This handles:
+ *  - cross-day WFH auto-checkouts (deadline = next day, so check-out lands on
+ *    a day with no check-in)
+ *  - legacy seed / stale pollution records
+ *  - any future data-integrity edge case
+ *
+ * Works with both populated and unpopulated userId references.
+ */
+export function filterOrphanCheckOuts(records) {
+  if (!records || records.length === 0) return records;
+
+  const checkInDays = new Set();
+  for (const r of records) {
+    if (r.type === 'check_in' && r.status === 'allowed') {
+      const uid = (r.userId?._id ?? r.userId)?.toString();
+      const day = getISTDateInputValue(r.timestamp);
+      if (uid && day) checkInDays.add(`${uid}|${day}`);
+    }
+  }
+
+  return records.filter((r) => {
+    if (r.type !== 'check_out') return true;
+    const uid = (r.userId?._id ?? r.userId)?.toString();
+    const day = getISTDateInputValue(r.timestamp);
+    if (!uid || !day) return true;
+    return checkInDays.has(`${uid}|${day}`);
   });
 }
 
@@ -629,13 +662,15 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
 
 export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) {
   const skip = (page - 1) * limit;
-  const [records, total] = await Promise.all([
+  const [allRecords, total] = await Promise.all([
     AttendanceRecord.find({ userId })
       .sort({ timestamp: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit * 2),
     AttendanceRecord.countDocuments({ userId }),
   ]);
+
+  const records = filterOrphanCheckOuts(allRecords).slice(0, limit);
 
   return {
     records,
@@ -706,17 +741,19 @@ export async function getAdminAttendance({
   }
 
   const skip = (page - 1) * limit;
-  const [records, total] = await Promise.all([
+  const [allRecords, total] = await Promise.all([
     AttendanceRecord.find(query)
       .populate('userId', 'name email mobile employeeCode department')
       .sort({ timestamp: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit * 2),
     AttendanceRecord.countDocuments(query),
   ]);
 
+  const records = filterOrphanCheckOuts(allRecords).slice(0, limit).map(serializeAdminAttendanceListRecord);
+
   return {
-    records: records.map(serializeAdminAttendanceListRecord),
+    records,
     pagination: {
       page,
       limit,
