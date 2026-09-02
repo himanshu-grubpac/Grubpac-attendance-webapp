@@ -4376,8 +4376,8 @@ body::-webkit-scrollbar-thumb {
 
 .select-field__panel {
   position: fixed;
-  /* Align with .date-field__panel (85) for modal stacking consistency. */
-  z-index: 85;
+  /* Must exceed modal backdrop (120) so portalised panels render above modals. */
+  z-index: 130;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -7428,10 +7428,6 @@ body::-webkit-scrollbar-thumb {
 
 [data-theme='dark'] .modal__backdrop {
   background: rgba(0, 0, 0, 0.55);
-}
-
-.modal .select-field__panel {
-  z-index: 130;
 }
 
 .modal {
