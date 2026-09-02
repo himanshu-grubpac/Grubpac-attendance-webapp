@@ -4,6 +4,7 @@ import {
   HeadObjectCommand,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectsCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -50,7 +51,7 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
-function getUploadsBucket() {
+export function getUploadsBucket() {
   const bucket = process.env.UPLOADS_BUCKET;
   if (!bucket) {
     throwError('File uploads are not configured.', 503);
@@ -58,10 +59,20 @@ function getUploadsBucket() {
   return bucket;
 }
 
-function getS3Client() {
-  return new S3Client({
-    region: process.env.AWS_REGION ?? 'ap-south-1',
+let _s3Client = null;
+export function getS3Client() {
+  if (_s3Client) return _s3Client;
+  const region = process.env.AWS_REGION ?? 'ap-south-1';
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) {
+    throwError('AWS credentials are not configured.', 503);
+  }
+  _s3Client = new S3Client({
+    region,
+    credentials: { accessKeyId, secretAccessKey },
   });
+  return _s3Client;
 }
 
 export function sanitizeFilename(fileName) {
@@ -229,7 +240,8 @@ export async function confirmUpload(actor, ticketId, attachmentId, permissions) 
         Key: attachment.s3Key,
       }),
     );
-  } catch {
+  } catch (s3Err) {
+    console.error('[help-attachment] HeadObject failed:', s3Err?.message ?? s3Err);
     throwError('Uploaded file was not found. Please upload again.', 404);
   }
 
@@ -241,6 +253,9 @@ export async function confirmUpload(actor, ticketId, attachmentId, permissions) 
   const actualMime = headResult.ContentType ?? '';
   if (actualMime && actualMime !== attachment.mimeType) {
     throwError('Uploaded file type does not match the declared type.');
+  }
+  if (!actualMime) {
+    console.warn(`[help-attachment] S3 returned empty ContentType for ${attachment.s3Key}`);
   }
 
   attachment.status = 'confirmed';
@@ -274,7 +289,7 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: attachment.s3Key,
-    ResponseContentDisposition: `attachment; filename="${encodeURIComponent(attachment.fileName)}"`,
+    ResponseContentDisposition: `attachment; filename="${attachment.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
     ResponseContentType: attachment.mimeType,
   });
   const downloadUrl = await getSignedUrl(s3Client, command, {
@@ -419,7 +434,8 @@ export async function confirmCommentUpload(actor, ticketId, commentId, attachmen
         Key: attachment.s3Key,
       }),
     );
-  } catch {
+  } catch (s3Err) {
+    console.error('[help-attachment] HeadObject failed:', s3Err?.message ?? s3Err);
     throwError('Uploaded file was not found. Please upload again.', 404);
   }
 
@@ -431,6 +447,9 @@ export async function confirmCommentUpload(actor, ticketId, commentId, attachmen
   const actualMime = headResult.ContentType ?? '';
   if (actualMime && actualMime !== attachment.mimeType) {
     throwError('Uploaded file type does not match the declared type.');
+  }
+  if (!actualMime) {
+    console.warn(`[help-attachment] S3 returned empty ContentType for ${attachment.s3Key}`);
   }
 
   attachment.status = 'confirmed';
@@ -458,4 +477,37 @@ export async function listAttachmentsForComment(commentId) {
     .sort({ createdAt: 1 });
 
   return attachments.map((item) => item.toSafeJSON());
+}
+
+const STALE_PENDING_MAX_AGE_MS = 60 * 60 * 1000;
+
+export async function deleteS3Objects(s3Keys) {
+  if (!s3Keys || s3Keys.length === 0) return;
+  try {
+    const bucket = getUploadsBucket();
+    const s3Client = getS3Client();
+    const objects = s3Keys.map((Key) => ({ Key }));
+    await s3Client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: objects },
+      }),
+    );
+  } catch (err) {
+    console.error('[help-attachment] S3 batch delete failed:', err?.message ?? err);
+  }
+}
+
+export async function cleanupStalePendingAttachments() {
+  const cutoff = new Date(Date.now() - STALE_PENDING_MAX_AGE_MS);
+  const stale = await HelpAttachment.find({
+    status: 'pending',
+    createdAt: { $lt: cutoff },
+  }).select('s3Key');
+
+  if (stale.length === 0) return;
+
+  console.log(`[help-attachment] Cleaning up ${stale.length} stale pending attachment(s)`);
+  await deleteS3Objects(stale.map((a) => a.s3Key));
+  await HelpAttachment.deleteMany({ _id: { $in: stale.map((a) => a._id) } });
 }

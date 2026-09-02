@@ -6,6 +6,7 @@ import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachme
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { createNotification } from './notificationService.js';
+import { deleteS3Objects } from './helpAttachmentService.js';
 import { auditLog } from '../utils/auditLog.js';
 
 function throwError(message, statusCode = 400) {
@@ -378,6 +379,9 @@ export async function deleteHelpTicket(ticketId, actor, permissions) {
     throwError('You are not authorized to delete this ticket.', 403);
   }
 
+  const attachments = await HelpAttachment.find({ ticketId: ticket._id }).select('s3Key');
+  await deleteS3Objects(attachments.map((a) => a.s3Key));
+
   await HelpAttachment.deleteMany({ ticketId: ticket._id });
   await HelpComment.deleteMany({ ticketId: ticket._id });
   await HelpTicket.findByIdAndDelete(ticket._id);
@@ -407,6 +411,9 @@ export async function deleteHelpComment(ticketId, commentId, actor, permissions)
   if (commentCreatorId !== actor._id.toString() && !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
     throwError('You can only delete your own comments.', 403);
   }
+
+  const commentAttachments = await HelpAttachment.find({ commentId: comment._id }).select('s3Key');
+  await deleteS3Objects(commentAttachments.map((a) => a.s3Key));
 
   await HelpAttachment.deleteMany({ commentId: comment._id });
   await HelpComment.findByIdAndDelete(comment._id);

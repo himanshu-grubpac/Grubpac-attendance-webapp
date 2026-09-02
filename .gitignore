@@ -48,6 +48,9 @@ login*.json
 reqs.json
 check_esbuild.cjs
 *.plan.md
+server/scripts/check-requests.js
+server/scripts/check-state.mjs
+server/scripts/copy-atlas-to-local.mjs
 # Optional local plan scratch
 web_attendance_app_mvp.plan.md
 

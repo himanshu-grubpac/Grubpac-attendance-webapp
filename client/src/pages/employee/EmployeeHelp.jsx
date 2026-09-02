@@ -117,6 +117,7 @@ function uploadFileToS3(uploadUrl, file, headers = {}, onProgress) {
         onProgress?.(Math.round((event.loaded / event.total) * 100));
       }
     };
+    xhr.timeout = 120_000;
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
@@ -125,6 +126,7 @@ function uploadFileToS3(uploadUrl, file, headers = {}, onProgress) {
       reject(new Error(`Upload failed (${xhr.status})`));
     };
     xhr.onerror = () => reject(new Error('Upload failed.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out.'));
     xhr.send(file);
   });
 }

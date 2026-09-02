@@ -20,6 +20,7 @@ import demoFaqRoutes from './routes/demoFaqRoutes.js';
 import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
 import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
 import { startLeaveDecisionNotifyScheduler } from './jobs/leaveJobs.js';
+import { cleanupStalePendingAttachments } from './services/helpAttachmentService.js';
 
 export const app = express();
 
@@ -106,6 +107,8 @@ export async function startServer() {
   if (mongoose.connection.readyState === 0) {
     await connectDatabase();
   }
+  cleanupStalePendingAttachments().catch(() => {});
+  setInterval(() => { cleanupStalePendingAttachments().catch(() => {}); }, 30 * 60 * 1000);
   return new Promise((resolve) => {
     const server = app.listen(env.port, () => {
       console.log(`Server listening on http://localhost:${env.port}`);

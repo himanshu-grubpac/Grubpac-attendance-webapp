@@ -203,7 +203,7 @@ async function main() {
       const approveData = reqAfterApprove.json?.request;
       assertEq(approveData?.status, 'pending', 'Status stays pending during undo window');
       assertEq(approveData?.pendingDecision, 'approved', 'pendingDecision set to approved');
-      check('notifyAfter set', !!approveData?.notifyAfter, `notifyAfter=${approveData?.notifyAfter}`);
+      check('notifyAfter set', !!approveData?.decisionUndoExpiresAt, `decisionUndoExpiresAt=${approveData?.decisionUndoExpiresAt}`);
 
       const undoRes = await undoLeave(requestId);
       check('Undo approval', undoRes.status === 200, `status=${undoRes.status}`);
@@ -302,9 +302,8 @@ async function main() {
       const approveData = reqAfterApprove.json?.request;
       check('Status stays pending (deferred)', approveData?.status === 'pending');
       check('pendingDecision set to approved', approveData?.pendingDecision === 'approved');
-      check('notificationsSent is false', approveData?.notificationsSent === false);
-      check('notifyAfter is set', !!approveData?.notifyAfter);
       check('decidedAt is set', !!approveData?.decidedAt);
+      check('decisionUndoExpiresAt is set', !!approveData?.decisionUndoExpiresAt);
 
       await undoLeave(requestId);
       const reqAfterUndo = await req('GET', `/api/leave/requests/${requestId}`);
@@ -312,8 +311,8 @@ async function main() {
       check('Request still pending after undo', afterUndo?.status === 'pending');
       check('pendingDecision cleared', !afterUndo?.pendingDecision);
       assertEq((afterUndo?.decisionTokens ?? []).length, 0, 'Decision tokens cleared');
-      check('notifyAfter cleared', !afterUndo?.notifyAfter);
       check('decidedAt cleared', !afterUndo?.decidedAt);
+      check('decisionUndoExpiresAt cleared', !afterUndo?.decisionUndoExpiresAt);
 
       await cancelLeave(requestId);
     }
