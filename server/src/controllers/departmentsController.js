@@ -34,6 +34,8 @@ export async function createDepartment(req, res) {
     departmentId: department._id.toString(),
     code: department.code,
     name: department.name,
+    leadUserId: department.leadUserId?.toString() || null, 
+    deputyUserId: department.deputyUserId?.toString() || null,
   });
 
   res.status(201).json({ department: department.toSafeJSON() });

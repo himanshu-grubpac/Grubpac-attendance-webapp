@@ -331,6 +331,13 @@ export const leaveApi = {
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
 };
 
+export const preferencesApi = {
+  getTablePreference: (tableKey) =>
+    api.get(`/preferences/tables/${tableKey}`).then((r) => r.data),
+  updateTablePreference: (tableKey, payload) =>
+    api.put(`/preferences/tables/${tableKey}`, payload).then((r) => r.data),
+};
+
 export const helpApi = {
   listTickets: (params = {}) => api.get('/help/tickets', { params }).then((r) => r.data),
   createTicket: (payload) => api.post('/help/tickets', payload).then((r) => r.data),
