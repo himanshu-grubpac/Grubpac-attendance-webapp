@@ -17,6 +17,7 @@ import leaveRoutes from './routes/leaveRoutes.js';
 import helpRoutes from './routes/helpRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
+import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
 import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
 import { startLeaveDecisionNotifyScheduler } from './jobs/leaveJobs.js';
 
@@ -97,6 +98,7 @@ app.use('/api/leave', leaveRoutes);
 app.use('/api/help', helpRoutes);
 app.use('/api/salary', salaryRoutes);
 app.use('/api/demo-faq', demoFaqRoutes);
+app.use('/api/preferences', tablePreferenceRoutes);
 
 app.use(errorHandler);
 

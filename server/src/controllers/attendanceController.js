@@ -3,6 +3,7 @@ import {
   getEmployeeHistory,
   getMonthDayStatusSummary,
   getTodayStatus,
+  getTeamTodayStatusService,
   markAttendance,
   resolveMonthSummaryTargetUserId,
   undoAttendance,
@@ -111,5 +112,10 @@ export async function undoAttendanceAction(req, res) {
   };
   const result = await undoAttendance(token, req.user._id, auditContext);
   res.status(200).json({ success: true, ...result });
+}
+
+export async function getTeamTodayStatus(req, res) {
+  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
+  res.json({ teamStatus: status });
 }
 

@@ -9,6 +9,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachment.js';
 import { HelpTicket, HELP_TICKET_POPULATE } from '../models/HelpTicket.js';
+import { HelpComment, HELP_COMMENT_POPULATE } from '../models/HelpComment.js';
 import { canViewTicket } from './helpService.js';
 import { auditLog } from '../utils/auditLog.js';
 
@@ -38,6 +39,7 @@ export const ALLOWED_MIME_TYPES = new Set([
 
 export const MAX_BYTES = Number(process.env.UPLOAD_MAX_BYTES ?? 5_242_880);
 export const MAX_FILES_PER_TICKET = 5;
+export const MAX_FILES_PER_COMMENT = 3;
 const UPLOADS_PREFIX = process.env.UPLOADS_PREFIX ?? 'help-tickets';
 const PRESIGN_EXPIRES_SECONDS = 900;
 const DOWNLOAD_EXPIRES_SECONDS = 300;
@@ -292,4 +294,168 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
     mimeType: attachment.mimeType,
     expiresIn: DOWNLOAD_EXPIRES_SECONDS,
   };
+}
+
+async function loadComment(ticketId, commentId) {
+  if (!mongoose.isValidObjectId(commentId)) {
+    throwError('Comment not found.', 404);
+  }
+
+  const comment = await HelpComment.findOne({
+    _id: commentId,
+    ticketId,
+  }).populate(HELP_COMMENT_POPULATE);
+
+  if (!comment) {
+    throwError('Comment not found.', 404);
+  }
+  return comment;
+}
+
+async function countActiveCommentAttachments(commentId) {
+  return HelpAttachment.countDocuments({
+    commentId,
+    status: { $in: ['pending', 'confirmed'] },
+  });
+}
+
+export async function presignCommentUpload(actor, ticketId, commentId, permissions, payload) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to view this ticket.', 403);
+  }
+
+  const comment = await loadComment(ticketId, commentId);
+
+  if (!isAllowedMimeType(payload.mimeType)) {
+    throwError('File type is not allowed. Use JPEG, PNG, WebP, or PDF.');
+  }
+  if (payload.sizeBytes > MAX_BYTES) {
+    throwError(`File exceeds the ${Math.floor(MAX_BYTES / (1024 * 1024))} MB limit.`);
+  }
+
+  const activeCount = await countActiveCommentAttachments(comment._id);
+  if (activeCount >= MAX_FILES_PER_COMMENT) {
+    throwError(`Maximum ${MAX_FILES_PER_COMMENT} attachments per comment.`);
+  }
+
+  const bucket = getUploadsBucket();
+  const s3Key = buildS3Key(ticket._id.toString(), payload.fileName, `${UPLOADS_PREFIX}/${ticket._id.toString()}/comments/${comment._id.toString()}`);
+
+  const attachment = await HelpAttachment.create({
+    ticketId: ticket._id,
+    commentId: comment._id,
+    uploadedBy: actor._id,
+    fileName: sanitizeFilename(payload.fileName),
+    mimeType: payload.mimeType,
+    sizeBytes: payload.sizeBytes,
+    s3Key,
+    status: 'pending',
+  });
+
+  const s3Client = getS3Client();
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: s3Key,
+    ContentType: payload.mimeType,
+    ContentLength: payload.sizeBytes,
+  });
+  const uploadUrl = await getSignedUrl(s3Client, command, {
+    expiresIn: PRESIGN_EXPIRES_SECONDS,
+  });
+
+  auditLog('help_comment_attachment_presigned', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: comment._id.toString(),
+    attachmentId: attachment._id.toString(),
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+  });
+
+  return {
+    attachment: attachment.toSafeJSON(),
+    uploadUrl,
+    uploadHeaders: {
+      'Content-Type': payload.mimeType,
+    },
+    expiresIn: PRESIGN_EXPIRES_SECONDS,
+  };
+}
+
+export async function confirmCommentUpload(actor, ticketId, commentId, attachmentId, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to view this ticket.', 403);
+  }
+
+  await loadComment(ticketId, commentId);
+
+  const attachment = await HelpAttachment.findOne({
+    _id: attachmentId,
+    ticketId,
+    commentId,
+    status: 'pending',
+  }).populate(HELP_ATTACHMENT_POPULATE);
+
+  if (!attachment) {
+    throwError('Attachment not found.', 404);
+  }
+
+  if (attachment.uploadedBy?._id?.toString() !== actor._id.toString() &&
+      attachment.uploadedBy?.toString?.() !== actor._id.toString()) {
+    throwError('You can only confirm attachments you uploaded.', 403);
+  }
+
+  const bucket = getUploadsBucket();
+  const s3Client = getS3Client();
+
+  let headResult;
+  try {
+    headResult = await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: attachment.s3Key,
+      }),
+    );
+  } catch {
+    throwError('Uploaded file was not found. Please upload again.', 404);
+  }
+
+  const actualSize = Number(headResult.ContentLength ?? 0);
+  if (actualSize !== attachment.sizeBytes) {
+    throwError('Uploaded file size does not match the declared size.');
+  }
+
+  const actualMime = headResult.ContentType ?? '';
+  if (actualMime && actualMime !== attachment.mimeType) {
+    throwError('Uploaded file type does not match the declared type.');
+  }
+
+  attachment.status = 'confirmed';
+  await attachment.save();
+  await attachment.populate(HELP_ATTACHMENT_POPULATE);
+
+  auditLog('help_comment_attachment_confirmed', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: commentId,
+    attachmentId: attachment._id.toString(),
+    fileName: attachment.fileName,
+    sizeBytes: actualSize,
+  });
+
+  return attachment.toSafeJSON();
+}
+
+export async function listAttachmentsForComment(commentId) {
+  const attachments = await HelpAttachment.find({
+    commentId,
+    status: 'confirmed',
+  })
+    .populate(HELP_ATTACHMENT_POPULATE)
+    .sort({ createdAt: 1 });
+
+  return attachments.map((item) => item.toSafeJSON());
 }

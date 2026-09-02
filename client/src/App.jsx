@@ -11,6 +11,7 @@ import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import AdminAttendance from './pages/admin/AdminAttendance.jsx';
+import AdminTodayPresent from './pages/admin/AdminTodayPresent.jsx';
 import AdminBulkUpload from './pages/admin/AdminBulkUpload.jsx';
 import AdminDashboard from './pages/admin/AdminDashboard.jsx';
 import AdminDepartments from './pages/admin/AdminDepartments.jsx';
@@ -146,6 +147,20 @@ export default function App() {
                     ]}
                   >
                     <AdminAttendance />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/attendance/today-present"
+                element={
+                  <ProtectedRoute
+                    portal="admin"
+                    anyPermission={[
+                      PERMISSIONS.ATTENDANCE_READ_ALL,
+                      PERMISSIONS.ATTENDANCE_READ_TEAM,
+                    ]}
+                  >
+                    <AdminTodayPresent />
                   </ProtectedRoute>
                 }
               />

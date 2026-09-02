@@ -14,6 +14,44 @@ import StatusBadge from '../../components/StatusBadge.jsx';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
+const COLUMN_STORAGE_KEY = 'attendance.adminEmployeeColumns';
+
+const ALL_COLUMNS = [
+  { key: 'name', label: 'Name', always: true },
+  { key: 'email', label: 'Email' },
+  { key: 'mobile', label: 'Mobile' },
+  { key: 'department', label: 'Department' },
+  { key: 'designation', label: 'Designation' },
+  { key: 'role', label: 'Role' },
+  { key: 'joiningDate', label: 'Joining date' },
+  { key: 'dateOfBirth', label: 'Date of birth' },
+  { key: 'endingDate', label: 'Ending date' },
+  { key: 'salary', label: 'Salary' },
+  { key: 'reportingManager', label: 'Reporting manager' },
+  { key: 'managerDepartments', label: 'Manager dept (Team scope)' },
+  { key: 'status', label: 'Status' },
+  { key: 'lastLogin', label: 'Last login' },
+];
+
+const DEFAULT_VISIBLE_COLUMNS = ['name', 'email', 'mobile', 'department', 'status', 'lastLogin'];
+
+function loadVisibleColumns() {
+  try {
+    const stored = localStorage.getItem(COLUMN_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_VISIBLE_COLUMNS;
+}
+
+function saveVisibleColumns(columns) {
+  try {
+    localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columns));
+  } catch { /* ignore */ }
+}
+
 const STATUS_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'true', label: 'Active' },
@@ -74,6 +112,30 @@ function lastLoginLabel(value) {
   }).format(new Date(value));
 }
 
+function shortDate(value) {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(value));
+}
+
+function salaryLabel(value) {
+  if (value == null) return '—';
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function managerDepartmentsLabel(employee, managerDeptMap) {
+  const depts = managerDeptMap?.get(employee.reportingManagerId);
+  if (!Array.isArray(depts) || depts.length === 0) return '—';
+  return depts.map((d) => d.name || d.code || '—').join(', ');
+}
+
 function StatCardSkeleton() {
   return (
     <div className="employees-stat card employees-stat--skeleton" aria-hidden="true">
@@ -110,12 +172,15 @@ export default function AdminUsers() {
   const [stats, setStats] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [managers, setManagers] = useState([]);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [newThisMonthFilter, setNewThisMonthFilter] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(loadVisibleColumns);
+  const [showColumnEditor, setShowColumnEditor] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef(null);
   const debouncedSearch = useDebouncedValue(search, 350);
@@ -153,6 +218,14 @@ export default function AdminUsers() {
     ],
     [departments],
   );
+
+  const managerDeptMap = useMemo(() => {
+    const map = new Map();
+    for (const mgr of managers) {
+      map.set(mgr.id, mgr.managedDepartments ?? []);
+    }
+    return map;
+  }, [managers]);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -229,6 +302,10 @@ export default function AdminUsers() {
     adminApi
       .listRoles()
       .then((data) => setRoles(data.roles ?? []))
+      .catch(() => { });
+    adminApi
+      .listManagers()
+      .then((data) => setManagers(data.managers ?? []))
       .catch(() => { });
     loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '', nextRole: '' });
   }, [loadEmployees, loadStats]);
@@ -462,6 +539,20 @@ export default function AdminUsers() {
     event.stopPropagation();
   }
 
+  function isColumnVisible(key) {
+    return visibleColumns.includes(key);
+  }
+
+  function handleColumnToggle(key) {
+    const column = ALL_COLUMNS.find((c) => c.key === key);
+    if (column?.always) return;
+    setVisibleColumns((prev) => {
+      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
+      saveVisibleColumns(next);
+      return next;
+    });
+  }
+
   const hasActiveFilters = Boolean(
     search || statusFilter || departmentFilter || roleFilter || newThisMonthFilter,
   );
@@ -590,11 +681,28 @@ export default function AdminUsers() {
 
           {canWriteUsers ? (
             <div className="employees-toolbar__actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowColumnEditor(true)}
+              >
+                Edit columns
+              </button>
               <Link to="/admin/users/register" className="btn btn-primary btn-sm">
                 + Add Employee
               </Link>
             </div>
-          ) : null}
+          ) : (
+            <div className="employees-toolbar__actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowColumnEditor(true)}
+              >
+                Edit columns
+              </button>
+            </div>
+          )}
         </div>
 
         {listError ? <div className="alert alert--error">{listError}</div> : null}
@@ -647,12 +755,20 @@ export default function AdminUsers() {
                     <th scope="col" className="employees-table__col-row-num">
                       #
                     </th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Mobile</th>
-                    <th>Department</th>
-                    <th>Status</th>
-                    <th>Last login</th>
+                    {isColumnVisible('name') && <th>Name</th>}
+                    {isColumnVisible('email') && <th>Email</th>}
+                    {isColumnVisible('mobile') && <th>Mobile</th>}
+                    {isColumnVisible('department') && <th>Department</th>}
+                    {isColumnVisible('designation') && <th>Designation</th>}
+                    {isColumnVisible('role') && <th>Role</th>}
+                    {isColumnVisible('joiningDate') && <th>Joining date</th>}
+                    {isColumnVisible('dateOfBirth') && <th>Date of birth</th>}
+                    {isColumnVisible('endingDate') && <th>Ending date</th>}
+                    {isColumnVisible('salary') && <th>Salary</th>}
+                    {isColumnVisible('reportingManager') && <th>Reporting manager</th>}
+                    {isColumnVisible('managerDepartments') && <th>Manager dept</th>}
+                    {isColumnVisible('status') && <th>Status</th>}
+                    {isColumnVisible('lastLogin') && <th>Last login</th>}
                     <th className="cell-actions-col cell-actions-col--text">Actions</th>
                   </tr>
                 </thead>
@@ -677,30 +793,66 @@ export default function AdminUsers() {
                         >
                           {rowNumber}
                         </td>
-                        <td data-label="Name" className="employees-table__name">
-                          <Link
-                            to={`/admin/users/${employee.id}`}
-                            className="table-link employees-table__name-link"
-                            onClick={(event) => event.stopPropagation()}
+                        {isColumnVisible('name') && (
+                          <td data-label="Name" className="employees-table__name">
+                            <Link
+                              to={`/admin/users/${employee.id}`}
+                              className="table-link employees-table__name-link"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {employee.name}
+                            </Link>
+                          </td>
+                        )}
+                        {isColumnVisible('email') && (
+                          <td
+                            data-label="Email"
+                            className="cell-ellipsis"
+                            title={employee.email || undefined}
                           >
-                            {employee.name}
-                          </Link>
-                        </td>
-                        <td
-                          data-label="Email"
-                          className="cell-ellipsis"
-                          title={employee.email || undefined}
-                        >
-                          {employee.email || '—'}
-                        </td>
-                        <td data-label="Mobile">{employee.mobile || '—'}</td>
-                        <td data-label="Department">{departmentLabel(employee)}</td>
-                        <td data-label="Status">
-                          <StatusBadge active={employee.isActive} />
-                        </td>
-                        <td data-label="Last login" className="cell-datetime">
-                          {lastLoginLabel(employee.lastLoginAt)}
-                        </td>
+                            {employee.email || '—'}
+                          </td>
+                        )}
+                        {isColumnVisible('mobile') && (
+                          <td data-label="Mobile">{employee.mobile || '—'}</td>
+                        )}
+                        {isColumnVisible('department') && (
+                          <td data-label="Department">{departmentLabel(employee)}</td>
+                        )}
+                        {isColumnVisible('designation') && (
+                          <td data-label="Designation">{employee.designation || '—'}</td>
+                        )}
+                        {isColumnVisible('role') && (
+                          <td data-label="Role">{employee.roleName || '—'}</td>
+                        )}
+                        {isColumnVisible('joiningDate') && (
+                          <td data-label="Joining date">{shortDate(employee.joiningDate)}</td>
+                        )}
+                        {isColumnVisible('dateOfBirth') && (
+                          <td data-label="Date of birth">{shortDate(employee.dateOfBirth)}</td>
+                        )}
+                        {isColumnVisible('endingDate') && (
+                          <td data-label="Ending date">{shortDate(employee.endingDate)}</td>
+                        )}
+                        {isColumnVisible('salary') && (
+                          <td data-label="Salary">{salaryLabel(employee.monthlySalary)}</td>
+                        )}
+                        {isColumnVisible('reportingManager') && (
+                          <td data-label="Reporting manager">{employee.reportingManagerName || '—'}</td>
+                        )}
+                        {isColumnVisible('managerDepartments') && (
+                          <td data-label="Manager dept">{managerDepartmentsLabel(employee, managerDeptMap)}</td>
+                        )}
+                        {isColumnVisible('status') && (
+                          <td data-label="Status">
+                            <StatusBadge active={employee.isActive} />
+                          </td>
+                        )}
+                        {isColumnVisible('lastLogin') && (
+                          <td data-label="Last login" className="cell-datetime">
+                            {lastLoginLabel(employee.lastLoginAt)}
+                          </td>
+                        )}
                         <td
                           data-label="Actions"
                           className="cell-actions cell-actions--text employees-table__actions"
@@ -736,6 +888,74 @@ export default function AdminUsers() {
           </>
         )}
       </section>
+
+      {showColumnEditor ? (
+        <>
+          <div
+            className="slide-panel-backdrop"
+            onClick={() => setShowColumnEditor(false)}
+            onKeyDown={(e) => e.key === 'Escape' && setShowColumnEditor(false)}
+          />
+          <div
+            className="slide-panel"
+            role="dialog"
+            aria-label="Edit columns"
+            style={{ width: '20rem' }}
+            onKeyDown={(e) => e.key === 'Escape' && setShowColumnEditor(false)}
+          >
+            <div className="slide-panel__header">
+              <div className="slide-panel__titles">
+                <h2 className="slide-panel__title">Edit columns</h2>
+                <p className="slide-panel__subtitle">
+                  Choose which columns to display in the table.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowColumnEditor(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="slide-panel__body">
+              <ul className="column-editor-list">
+                {ALL_COLUMNS.map((col) => (
+                  <li key={col.key} className="column-editor-list__item">
+                    <label
+                      className={`column-editor-list__label${col.always ? ' column-editor-list__label--locked' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="column-editor-list__checkbox"
+                        checked={isColumnVisible(col.key)}
+                        onChange={() => handleColumnToggle(col.key)}
+                        disabled={col.always}
+                      />
+                      <span className="column-editor-list__text">{col.label}</span>
+                      {col.always ? (
+                        <span className="column-editor-list__badge">Always shown</span>
+                      ) : null}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="slide-panel__footer">
+              <div className="slide-panel__actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setShowColumnEditor(false)}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       {confirmDialog}
     </div>

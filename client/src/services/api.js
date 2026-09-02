@@ -203,10 +203,12 @@ export const adminApi = {
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
+  getTeamTodayStatus: () => api.get('/admin/attendance/team-today').then((r) => r.data),
 };
 
 export const attendanceApi = {
   getToday: () => api.get('/attendance/today').then((r) => r.data),
+  getTeamToday: () => api.get('/attendance/team-today').then((r) => r.data),
   checkIn: (payload, lateNote) => {
     const { deviceId } = getDeviceFingerprint();
     return api
@@ -343,6 +345,15 @@ export const helpApi = {
     api
       .get(`/help/tickets/${ticketId}/attachments/${attachmentId}/download`)
       .then((r) => r.data),
+  presignCommentAttachment: (ticketId, commentId, payload) =>
+    api.post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/presign`, payload).then((r) => r.data),
+  confirmCommentAttachment: (ticketId, commentId, attachmentId) =>
+    api
+      .post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/${attachmentId}/confirm`)
+      .then((r) => r.data),
+  deleteTicket: (id) => api.delete(`/help/tickets/${id}`).then((r) => r.data),
+  deleteComment: (ticketId, commentId) =>
+    api.delete(`/help/tickets/${ticketId}/comments/${commentId}`).then((r) => r.data),
 };
 
 export const salaryApi = {

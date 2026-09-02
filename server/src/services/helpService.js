@@ -221,14 +221,37 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
     HelpComment.find({ ticketId: ticket._id })
       .populate(HELP_COMMENT_POPULATE)
       .sort({ createdAt: 1 }),
-    HelpAttachment.find({ ticketId: ticket._id, status: 'confirmed' })
+    HelpAttachment.find({ ticketId: ticket._id, status: 'confirmed', commentId: null })
       .populate(HELP_ATTACHMENT_POPULATE)
       .sort({ createdAt: 1 }),
   ]);
 
+  const commentIds = comments.map((c) => c._id);
+  const commentAttachments = commentIds.length > 0
+    ? await HelpAttachment.find({
+        ticketId: ticket._id,
+        commentId: { $in: commentIds },
+        status: 'confirmed',
+      })
+        .populate(HELP_ATTACHMENT_POPULATE)
+        .sort({ createdAt: 1 })
+    : [];
+
+  const attachmentsByComment = {};
+  for (const att of commentAttachments) {
+    const cId = att.commentId?.toString?.() ?? att.commentId?.toString?.() ?? null;
+    if (cId) {
+      if (!attachmentsByComment[cId]) attachmentsByComment[cId] = [];
+      attachmentsByComment[cId].push(att.toSafeJSON());
+    }
+  }
+
   return {
     ticket: ticket.toSafeJSON(),
-    comments: comments.map((item) => item.toSafeJSON()),
+    comments: comments.map((item) => ({
+      ...item.toSafeJSON(),
+      attachments: attachmentsByComment[item._id.toString()] ?? [],
+    })),
     attachments: attachmentDocs.map((item) => item.toSafeJSON()),
   };
 }
@@ -347,4 +370,50 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
   });
 
   return comment.toSafeJSON();
+}
+
+export async function deleteHelpTicket(ticketId, actor, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canManageTicket(actor, ticket, permissions)) {
+    throwError('You are not authorized to delete this ticket.', 403);
+  }
+
+  await HelpAttachment.deleteMany({ ticketId: ticket._id });
+  await HelpComment.deleteMany({ ticketId: ticket._id });
+  await HelpTicket.findByIdAndDelete(ticket._id);
+
+  auditLog('help_ticket_deleted', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+  });
+}
+
+export async function deleteHelpComment(ticketId, commentId, actor, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to delete this comment.', 403);
+  }
+
+  if (!mongoose.isValidObjectId(commentId)) {
+    throwError('Comment not found.', 404);
+  }
+
+  const comment = await HelpComment.findOne({ _id: commentId, ticketId: ticket._id });
+  if (!comment) {
+    throwError('Comment not found.', 404);
+  }
+
+  const commentCreatorId = comment.userId?.toString?.() ?? comment.userId?._id?.toString?.() ?? null;
+  if (commentCreatorId !== actor._id.toString() && !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
+    throwError('You can only delete your own comments.', 403);
+  }
+
+  await HelpAttachment.deleteMany({ commentId: comment._id });
+  await HelpComment.findByIdAndDelete(comment._id);
+
+  auditLog('help_ticket_comment_deleted', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: comment._id.toString(),
+  });
 }

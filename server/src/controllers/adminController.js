@@ -12,7 +12,7 @@ import {
   importEmployeesFromRows,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
-import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay } from '../services/attendanceService.js';
+import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay, getTeamTodayStatusService } from '../services/attendanceService.js';
 import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
@@ -210,13 +210,18 @@ export async function listEmployees(req, res) {
       ...employee.toSafeJSON(),
       lastLoginAt: employee.lastLoginAt ?? null,
     })),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 1,
-    },
-  });
+pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  }
+
+export async function getTeamTodayStatusAdmin(req, res) {
+  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
+  res.json({ teamStatus: status });
 }
 
 export async function getEmployeeStats(req, res) {

@@ -105,6 +105,10 @@ export default function EmployeeDashboard() {
   const { getPosition, loading: geoLoading, error: geoError, position, sampleInfo } =
     useGeolocation();
 
+  const [teamStatus, setTeamStatus] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(true);
+  const [teamError, setTeamError] = useState('');
+
   useEscapeKey(lateNoteOpen && !actionLoading, () => setLateNoteOpen(false));
 
   useEffect(() => {
@@ -150,12 +154,26 @@ export default function EmployeeDashboard() {
     }
   }, []);
 
+  const loadTeamStatus = useCallback(async () => {
+    setTeamLoading(true);
+    setTeamError('');
+    try {
+      const data = await attendanceApi.getTeamToday();
+      setTeamStatus(data.teamStatus ?? []);
+    } catch (err) {
+      setTeamError(getErrorMessage(err));
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     refreshToday().catch((err) => setError(getErrorMessage(err)));
     loadQuarterWarnings();
+    loadTeamStatus();
     const timer = setInterval(() => setClock(getCurrentISTClock()), 1000);
     return () => clearInterval(timer);
-  }, [refreshToday, loadQuarterWarnings]);
+  }, [refreshToday, loadQuarterWarnings, loadTeamStatus]);
 
   useEffect(() => {
     loadCalendar(calendarMonth);
@@ -464,6 +482,77 @@ export default function EmployeeDashboard() {
             onNext={() => setCalendarMonth((value) => nextISTMonthInput(value))}
             onToday={() => setCalendarMonth(getISTMonthInputValue())}
           />
+
+          <div className="dash-calendar-team" aria-label="Team attendance today">
+            <h3 className="dash-calendar-team__title">Team Attendance Today</h3>
+            {teamLoading && <p className="muted small">Loading team…</p>}
+            {teamError && <div className="alert alert--error">{teamError}</div>}
+            {!teamLoading && !teamError && (
+              <div className="dash-calendar-team__scroll">
+                <table className="dash-team-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Employee</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamStatus.length === 0 ? (
+                      <tr>
+                        <td colSpan={2} className="muted small dash-team-table__empty">
+                          No team members found.
+                        </td>
+                      </tr>
+                    ) : (
+                      teamStatus.map((member) => {
+                        const present =
+                          member.status === 'checked_in' || member.status === 'wfh';
+                        const statusDetail =
+                          member.status === 'checked_in'
+                            ? member.attendanceMode === 'wfh'
+                              ? 'WFH'
+                              : 'In Office'
+                            : member.status === 'wfh'
+                              ? 'WFH'
+                              : member.status === 'on_leave'
+                                ? 'On Leave'
+                                : 'Not Checked In';
+                        return (
+                          <tr key={member.userId}>
+                            <td className="dash-team-table__name">
+                              <span>
+                                {member.firstName ||
+                                  member.name?.split(' ')[0] ||
+                                  'Team Member'}
+                              </span>
+                              {member.roleName && (
+                                <span className="dash-team-table__code muted small">
+                                  {' '}
+                                  ({member.roleName})
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span
+                                className={`dash-team-table__badge dash-team-table__badge--${
+                                  present ? 'present' : 'absent'
+                                }`}
+                              >
+                                {present ? 'Present' : 'Absent'}
+                              </span>
+                              <span className="dash-team-table__detail muted small">
+                                {statusDetail}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 

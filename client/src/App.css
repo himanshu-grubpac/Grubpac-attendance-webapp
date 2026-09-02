@@ -2216,6 +2216,70 @@ textarea:disabled {
   color: var(--text-h);
 }
 
+.comment-attachments {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.comment-attachments__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+}
+
+.comment-attachments__name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.comment-upload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.comment-upload__file-input {
+  display: none;
+}
+
+.comment-upload__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.comment-upload__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.35rem 0.5rem;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+}
+
+.comment-upload__name {
+  color: var(--text);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Login page (mobile-first) ────────────────────────────────────── */
 
 .login-page {
@@ -5207,6 +5271,84 @@ body::-webkit-scrollbar-thumb {
   align-self: start;
 }
 
+.dash-calendar-team {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.dash-calendar-team__title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.dash-calendar-team__scroll {
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.dash-team-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.dash-team-table th,
+.dash-team-table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.dash-team-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground, var(--text-muted, #6b7280));
+  z-index: 1;
+}
+
+.dash-team-table__name {
+  font-weight: 500;
+}
+
+.dash-team-table__code {
+  font-weight: 400;
+}
+
+.dash-team-table__badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.dash-team-table__badge--present {
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+  color: var(--success, #15803d);
+}
+
+.dash-team-table__badge--absent {
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #b91c1c);
+}
+
+.dash-team-table__detail {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.dash-team-table__empty {
+  text-align: center;
+}
+
 .employee-history__quarter {
   margin: 0;
   padding: var(--space-3) var(--space-4) 0;
@@ -5653,6 +5795,316 @@ body::-webkit-scrollbar-thumb {
 .location-panel-compact__geo-issues {
   margin: 0.35rem 0 0;
   padding-left: 1.1rem;
+}
+
+/* ── Team status (dashboard) ─────────────────────────────────────────── */
+
+.dash-team-status__title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.dash-team-status__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.dash-team-status__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--interaction), box-shadow var(--interaction);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dash-team-status__item:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.dash-team-status__item--checked_in {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.dash-team-status__item--on_leave {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+}
+
+.dash-team-status__item--wfh {
+  border-color: color-mix(in srgb, #06b6d4 35%, var(--border));
+}
+
+.dash-team-status__item--not_checked_in {
+  border-color: var(--border);
+  opacity: 0.85;
+}
+
+.dash-team-status__avatar {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.dash-team-status__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-team-status__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-team-status__code {
+  margin-left: 0.35rem;
+}
+
+.dash-team-status__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  margin-top: 0.1rem;
+}
+
+.dash-team-status__status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dash-team-status__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.dash-team-status__badge--checked_in {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.dash-team-status__badge--on_leave {
+  background: var(--info-bg);
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+  color: var(--info);
+}
+
+.dash-team-status__badge--wfh {
+  background: color-mix(in srgb, #06b6d4 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #06b6d4 35%, var(--border));
+  color: #0891b2;
+}
+
+.dash-team-status__badge--not_checked_in {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.status-icon {
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+.dash-team-status__time {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.dash-team-status__leave-type {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.dash-team-status__pending-leave {
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+}
+
+/* Admin team status */
+.admin-home__team-status {
+  margin-top: var(--space-3);
+}
+
+.admin-home__team-status-title {
+  margin: 0 0 var(--space-3);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-h);
+}
+
+.admin-home__team-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-2);
+}
+
+.admin-home__team-status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--interaction), box-shadow var(--interaction);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .admin-home__team-status-item:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    box-shadow: var(--shadow-sm);
+  }
+}
+
+.admin-home__team-status-item--checked_in {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.admin-home__team-status-item--on_leave {
+  border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+}
+
+.admin-home__team-status-item--wfh {
+  border-color: color-mix(in srgb, #06b6d4 35%, var(--border));
+}
+
+.admin-home__team-status-item--not_checked_in {
+  border-color: var(--border);
+  opacity: 0.85;
+}
+
+.admin-home__team-status-avatar {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.admin-home__team-status-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-home__team-status-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-home__team-status-code {
+  margin-left: 0.35rem;
+}
+
+.admin-home__team-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  margin-top: 0.1rem;
+}
+
+.admin-home__team-status-badge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.admin-home__team-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.admin-home__team-status-badge--checked_in {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.admin-home__team-status-badge--on_leave {
+  background: var(--info-bg);
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+  color: var(--info);
+}
+
+.admin-home__team-status-badge--wfh {
+  background: color-mix(in srgb, #06b6d4 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #06b6d4 35%, var(--border));
+  color: #0891b2;
+}
+
+.admin-home__team-status-badge--not_checked_in {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.admin-home__team-status-time {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.admin-home__team-status-leave-type {
+  font-size: 0.62rem;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.admin-home__team-status-pending-leave {
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
 }
 
 .check-in-map {
@@ -10313,6 +10765,68 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
+/* ── Column editor panel (employees) ────────────────────────────── */
+
+.column-editor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.column-editor-list__item {
+  min-width: 0;
+}
+
+.column-editor-list__label {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--interaction);
+  user-select: none;
+}
+
+.column-editor-list__label:hover {
+  background: var(--surface-hover, var(--surface-2));
+}
+
+.column-editor-list__label--locked {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.column-editor-list__label--locked:hover {
+  background: transparent;
+}
+
+.column-editor-list__checkbox {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+}
+
+.column-editor-list__text {
+  flex: 1 1 auto;
+  font-size: 0.875rem;
+  color: var(--text);
+  min-width: 0;
+}
+
+.column-editor-list__badge {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
 /* ── Register employee (mobile-first) ───────────────────────────── */
 
 .page--register-employee {
@@ -12990,6 +13504,7 @@ body::-webkit-scrollbar-thumb {
 
 .auto-checkout-summary { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
 .auto-checkout-summary span { background: rgba(255,255,255,0.08); padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.1); }
+
 /* Action confirmation popup (distinct from toasts) */
 .action-popup-stack {
   position: fixed;
@@ -13070,4 +13585,110 @@ body::-webkit-scrollbar-thumb {
   margin: 0;
   color: var(--text-h, #0f172a);
   word-break: break-word;
+}
+
+/* ── Admin: Today Present ── */
+.today-present-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.today-present-summary__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 12px);
+}
+
+.today-present-summary__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.today-present-summary__label {
+  font-size: 0.8rem;
+  color: var(--muted-foreground, #6b7280);
+}
+
+.today-present-summary__card--present .today-present-summary__value {
+  color: var(--success, #16a34a);
+}
+
+.today-present-summary__card--absent .today-present-summary__value {
+  color: var(--danger, #dc2626);
+}
+
+.today-present-summary__card--leave .today-present-summary__value {
+  color: var(--info, #2563eb);
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.today-present-search {
+  max-width: 18rem;
+}
+
+.today-present-table__col-num {
+  width: 2.5rem;
+}
+
+.today-present-table__employee {
+  font-weight: 500;
+}
+
+.today-present-table__code {
+  font-weight: 400;
+}
+
+.today-present-table__badge {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.today-present-table__badge--present {
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+  color: var(--success, #15803d);
+}
+
+.today-present-table__badge--absent {
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #b91c1c);
+}
+
+.today-present-table__time {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+.today-present-table__empty {
+  text-align: center;
+}
+
+.employees-table-skeleton {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
 }
