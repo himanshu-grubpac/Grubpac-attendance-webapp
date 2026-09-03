@@ -11,7 +11,19 @@ export async function listDepartments(req, res) {
     .populate('leadUserId', 'name email')
     .populate('deputyUserId', 'name email')
     .sort({ name: 1 });
-  res.json({ departments: departments.map((dept) => dept.toSafeJSON()) });
+
+  const counts = await User.aggregate([
+    { $match: { departmentId: { $ne: null } } },
+    { $group: { _id: '$departmentId', count: { $sum: 1 } } },
+  ]);
+  const countMap = Object.fromEntries(counts.map((c) => [c._id.toString(), c.count]));
+
+  res.json({
+    departments: departments.map((dept) => ({
+      ...dept.toSafeJSON(),
+      employeeCount: countMap[dept._id.toString()] ?? 0,
+    })),
+  });
 }
 
 export async function createDepartment(req, res) {
@@ -34,6 +46,8 @@ export async function createDepartment(req, res) {
     departmentId: department._id.toString(),
     code: department.code,
     name: department.name,
+    leadUserId: department.leadUserId?.toString() || null, 
+    deputyUserId: department.deputyUserId?.toString() || null,
   });
 
   res.status(201).json({ department: department.toSafeJSON() });

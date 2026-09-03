@@ -475,6 +475,7 @@ function AppLayoutShell() {
                   end={
                     link.to === '/employee/dashboard' ||
                     link.to === '/admin/dashboard' ||
+                    link.to === '/admin/attendance' ||
                     link.to === '/admin/users/register' ||
                     link.to === '/admin/users/bulk-upload'
                   }

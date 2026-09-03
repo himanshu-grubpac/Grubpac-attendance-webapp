@@ -38,7 +38,7 @@ export function ToastProvider({ children }) {
       options.durationMs ??
       (variant === 'error' ? ERROR_TOAST_DURATION_MS : SUCCESS_TOAST_DURATION_MS);
 
-    setToasts((items) => [...items, { id, message, variant }]);
+    setToasts((items) => [...items, { id, message, variant, durationMs, action: options.action ?? null }]);
 
     if (durationMs > 0) {
       const timeoutId = window.setTimeout(() => dismissToast(id), durationMs);
@@ -63,26 +63,63 @@ export function ToastProvider({ children }) {
       {createPortal(
         <div className="toast-stack" aria-live="polite" aria-relevant="additions">
           {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className={`toast toast--${toast.variant}`}
-              role={toast.variant === 'error' ? 'alert' : 'status'}
-            >
-              <span>{toast.message}</span>
-              <button
-                type="button"
-                className="toast__close"
-                aria-label="Dismiss notification"
-                onClick={() => dismissToast(toast.id)}
-              >
-                ×
-              </button>
-            </div>
+            <ToastCard key={toast.id} toast={toast} onDismiss={dismissToast} />
           ))}
         </div>,
         document.body,
       )}
     </ToastContext.Provider>
+  );
+}
+
+function ToastCard({ toast, onDismiss }) {
+  const [remaining, setRemaining] = useState(toast.durationMs);
+
+  useEffect(() => {
+    if (toast.durationMs <= 0) return undefined;
+    const startedAt = Date.now();
+    const intervalId = window.setInterval(() => {
+      const left = Math.max(0, toast.durationMs - (Date.now() - startedAt));
+      setRemaining(left);
+      if (left <= 0) window.clearInterval(intervalId);
+    }, 100);
+    return () => window.clearInterval(intervalId);
+  }, [toast.durationMs]);
+
+  const progress = toast.durationMs > 0 ? (remaining / toast.durationMs) * 100 : 0;
+
+  return (
+    <div
+      className={`toast toast--${toast.variant}`}
+      role={toast.variant === 'error' ? 'alert' : 'status'}
+    >
+      <span>{toast.message}</span>
+      {toast.action ? (
+        <button
+          type="button"
+          className="toast__action"
+          onClick={() => {
+            toast.action.onClick?.();
+            onDismiss(toast.id);
+          }}
+        >
+          {toast.action.label}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="toast__close"
+        aria-label="Dismiss notification"
+        onClick={() => onDismiss(toast.id)}
+      >
+        ×
+      </button>
+      {toast.durationMs > 0 ? (
+        <div className="toast__progress" aria-hidden="true">
+          <span className="toast__progress-bar" style={{ width: `${progress}%` }} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

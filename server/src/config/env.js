@@ -10,6 +10,11 @@ function required(name, fallback) {
   return value;
 }
 
+function bool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return value === 'true' || value === '1' || value === 'yes';
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 5000),
   mongoUri: required('MONGODB_URI', 'mongodb://127.0.0.1:27017/attendance_web'),
@@ -18,13 +23,54 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '2h',
   jwtCookieMaxAgeMs: Number(process.env.JWT_COOKIE_MAX_AGE_MS ?? 2 * 60 * 60 * 1000),
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
+  apiOrigin: process.env.API_ORIGIN ?? process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
+  adminPin: process.env.ADMIN_PIN ?? '123456',
   adminName: process.env.ADMIN_NAME ?? 'System Admin',
   /** Window for login/check-in device or IP conflict detection (default 24h). */
   deviceConflictWindowMs: Number(
     process.env.DEVICE_CONFLICT_WINDOW_MS ?? 24 * 60 * 60 * 1000,
   ),
+  /** Outbound email (password reset magic links, etc.). SMTP transport via nodemailer. */
+  smtp: {
+    host: process.env.SMTP_HOST ?? '',
+    port: Number(process.env.SMTP_PORT ?? (bool(process.env.SMTP_SECURE) ? 465 : 587)),
+    secure: bool(process.env.SMTP_SECURE),
+    user: process.env.SMTP_USER ?? '',
+    pass: process.env.SMTP_PASS ?? '',
+    /** Pool connections for throughput; safe to leave on. */
+    pool: bool(process.env.SMTP_POOL, true),
+  },
+  emailFrom: {
+    address: process.env.EMAIL_FROM ?? 'jha.piyush@grubpac.com',
+    name: process.env.EMAIL_FROM_NAME ?? 'Grubpac Attendance',
+  },
+  /** Lifetime of a password-reset magic link (default 5 minutes). */
+  passwordResetExpiresMs: Number(process.env.PASSWORD_RESET_EXPIRES_MS ?? 5 * 60 * 1000),
+  /** Brevo API key - used for transactional SMS via Brevo. Distinct from the SMTP password. */
+  brevoApiKey: process.env.BREVO_API_KEY ?? '',
+  /** Sender ID for outgoing SMS (Brevo). Alphanumeric up to 11 chars, or a verified sender. */
+  smsSender: process.env.SMS_SENDER ?? 'GRUBPAC',
+  /** Country code prepended to local phone numbers lacking one (e.g. '91' for India). */
+  smsDefaultCountryCode: process.env.SMS_DEFAULT_COUNTRY_CODE ?? '91',
+  /**
+   * WhatsApp (open-wa / WhatsApp Web) integration. Sends from the app's own
+   * WhatsApp number via WhatsApp Web. OFF by default; only used when enabled AND
+   * the @open-wa/wa-automate package is installed AND the user has opted in.
+   */
+  whatsapp: {
+    enabled: bool(process.env.WHATSAPP_ENABLED ?? 'false'),
+    /** Persistent session name (folder) so the QR need only be scanned once. */
+    sessionName: process.env.WHATSAPP_SESSION_NAME ?? 'grubpac-wa',
+    /** Optional custom Chromium executable path (leave empty to use bundled). */
+    executablePath: process.env.WHATSAPP_CHROME_PATH ?? '',
+  },
+  /** TTL (ms) for single-use email action tokens used to approve/reject leave from email links. */
+  leaveDecisionTokenTtlMs: Number(process.env.LEAVE_DECISION_TOKEN_TTL_MS ?? 48 * 60 * 60 * 1000),
+  /** Window (ms) during which an approve/reject leave decision can be undone before the applicant is emailed. */
+  leaveDecisionUndoMs: Number(process.env.LEAVE_DECISION_UNDO_MS ?? 15000),
+
   defaultOffice: {
     name: process.env.DEFAULT_OFFICE_NAME ?? 'Grubpac Technologies - Jhandewalan Office',
     /** Jhandewalan, New Delhi — not Bangalore (legacy placeholder caused ~1740 km geofence misses). */
@@ -37,5 +83,16 @@ export const env = {
     graceThresholdTime: process.env.DEFAULT_WARNING_THRESHOLD_TIME ?? '09:00',
     halfDayThresholdTime: process.env.DEFAULT_HALF_DAY_THRESHOLD_TIME ?? '10:00',
     warningsPerQuarter: Number(process.env.DEFAULT_WARNINGS_PER_QUARTER ?? 3),
+    autoCheckout: {
+      enabled: bool(process.env.AUTO_CHECKOUT_ENABLED ?? 'true'),
+      office: {
+        day: process.env.AUTO_CHECKOUT_OFFICE_DAY ?? 'same',
+        time: process.env.AUTO_CHECKOUT_OFFICE_TIME ?? '23:59',
+      },
+      wfh: {
+        day: process.env.AUTO_CHECKOUT_WFH_DAY ?? 'next',
+        time: process.env.AUTO_CHECKOUT_WFH_TIME ?? '06:00',
+      },
+    },
   },
 };

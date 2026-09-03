@@ -46,8 +46,8 @@ export async function getAdminReportsSummary() {
     }),
     LeaveRequest.distinct('userId', {
       status: 'approved',
-      startDate: { $lte: todayDay },
-      endDate: { $gte: todayDay },
+      startDate: { $lte: todayEnd },
+      endDate: { $gte: todayStart },
     }),
   ]);
 

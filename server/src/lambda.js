@@ -2,20 +2,9 @@ import serverlessExpress from '@codegenie/serverless-express';
 import { app } from './index.js';
 import { ensureMongoConnection } from './config/db.js';
 import { lambdaBinarySettings } from './config/lambdaBinarySettings.js';
+import { DB_UNAVAILABLE_RESPONSE } from './config/lambdaResponses.js';
 
 let serverlessHandler;
-
-const DB_UNAVAILABLE_RESPONSE = {
-  statusCode: 503,
-  headers: {
-    'Content-Type': 'application/json',
-    'Retry-After': '2',
-  },
-  body: JSON.stringify({
-    message: 'Database temporarily unavailable.',
-    code: 'DB_UNAVAILABLE',
-  }),
-};
 
 // Warm connect on cold init — does not block first request if it fails.
 ensureMongoConnection().catch(() => {});

@@ -3,8 +3,10 @@ import {
   getEmployeeHistory,
   getMonthDayStatusSummary,
   getTodayStatus,
+  getTeamTodayStatusService,
   markAttendance,
   resolveMonthSummaryTargetUserId,
+  undoAttendance,
 } from '../services/attendanceService.js';
 import { getQuarterWarningSummaryForUsers } from '../services/attendancePolicyService.js';
 import { attendancePayloadSchema } from '../../../shared/validation/attendance.js';
@@ -96,3 +98,24 @@ export async function getMyQuarterWarnings(req, res) {
     remaining: row.remaining,
   });
 }
+
+export async function undoAttendanceAction(req, res) {
+  const { token } = req.body ?? {};
+  if (!token || typeof token !== 'string') {
+    const error = new Error('An undo token is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const auditContext = {
+    ...getRequestAuditContext(req),
+    email: req.user.email,
+  };
+  const result = await undoAttendance(token, req.user._id, auditContext);
+  res.status(200).json({ success: true, ...result });
+}
+
+export async function getTeamTodayStatus(req, res) {
+  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
+  res.json({ teamStatus: status });
+}
+

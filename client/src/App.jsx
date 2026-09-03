@@ -5,10 +5,13 @@ import ProtectedRoute from './components/ProtectedRoute.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
+import { ActionPopupProvider } from './context/ActionPopupContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
+import ResetPasswordPage from './pages/ResetPasswordPage.jsx';
 import ChangePassword from './pages/ChangePassword.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import AdminAttendance from './pages/admin/AdminAttendance.jsx';
+import AdminTodayPresent from './pages/admin/AdminTodayPresent.jsx';
 import AdminBulkUpload from './pages/admin/AdminBulkUpload.jsx';
 import AdminDashboard from './pages/admin/AdminDashboard.jsx';
 import AdminDepartments from './pages/admin/AdminDepartments.jsx';
@@ -48,10 +51,12 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <AuthProvider>
+        <ActionPopupProvider>
+          <AuthProvider>
           <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route element={<AuthenticatedShell />}>
               <Route
                 path="admin/dashboard"
@@ -142,6 +147,20 @@ export default function App() {
                     ]}
                   >
                     <AdminAttendance />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/attendance/today-present"
+                element={
+                  <ProtectedRoute
+                    portal="admin"
+                    anyPermission={[
+                      PERMISSIONS.ATTENDANCE_READ_ALL,
+                      PERMISSIONS.ATTENDANCE_READ_TEAM,
+                    ]}
+                  >
+                    <AdminTodayPresent />
                   </ProtectedRoute>
                 }
               />
@@ -360,7 +379,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </BrowserRouter>
-        </AuthProvider>
+                  </AuthProvider>
+        </ActionPopupProvider>
       </ToastProvider>
     </ThemeProvider>
   );

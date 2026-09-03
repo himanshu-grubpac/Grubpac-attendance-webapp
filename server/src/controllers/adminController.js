@@ -12,14 +12,14 @@ import {
   importEmployeesFromRows,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
-import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay } from '../services/attendanceService.js';
+import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay, getTeamTodayStatusService } from '../services/attendanceService.js';
 import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
 } from '../services/attendancePolicyService.js';
-import { officeSchema } from '../../../shared/validation/office.js';
+import { officeSchema, officeUpdateSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
-import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
+import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
   adminAttendanceEditSchema,
   adminAttendanceUpsertSchema,
@@ -199,7 +199,7 @@ export async function listEmployees(req, res) {
   const [employees, total] = await Promise.all([
     User.find(query)
       .populate(USER_POPULATE_FIELDS)
-      .sort({ createdAt: -1 })
+      .sort({ name: 1 })
       .skip(skip)
       .limit(limit),
     User.countDocuments(query),
@@ -210,13 +210,18 @@ export async function listEmployees(req, res) {
       ...employee.toSafeJSON(),
       lastLoginAt: employee.lastLoginAt ?? null,
     })),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 1,
-    },
-  });
+pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  }
+
+export async function getTeamTodayStatusAdmin(req, res) {
+  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
+  res.json({ teamStatus: status });
 }
 
 export async function getEmployeeStats(req, res) {
@@ -495,6 +500,9 @@ export async function resetEmployeePassword(req, res) {
   }
 
   employee.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  // Resetting the password also revokes the employee's PIN credential.
+  employee.pin4Hash = null;
+  employee.pin6Hash = null;
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
@@ -505,6 +513,33 @@ export async function resetEmployeePassword(req, res) {
   });
 
   res.json({ message: 'Employee password reset successfully.' });
+}
+
+export async function resetEmployeePin(req, res) {
+  const parsed = adminResetPinSchema.parse(req.body);
+  const employee = await User.findById(req.params.id);
+
+  if (!employee) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
+  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+    return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
+  }
+
+  employee.pin4Hash = await bcrypt.hash(parsed.newPin, 12);
+  employee.pin6Hash = await bcrypt.hash(parsed.newPin, 12);
+  employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
+  await employee.save();
+
+  auditLog('pin_reset_by_admin', {
+    adminId: req.user._id.toString(),
+    employeeId: employee._id.toString(),
+    email: employee.email,
+  });
+
+  res.json({ message: 'Employee PIN reset successfully.' });
 }
 
 export async function downloadEmployeeTemplate(req, res) {
@@ -546,8 +581,17 @@ export async function getOfficeSettingsHandler(req, res) {
 }
 
 export async function updateOfficeSettings(req, res) {
-  const parsed = officeSchema.parse(req.body);
+  const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
+  if (parsed.autoCheckout) {
+    const existing = (settings && settings.autoCheckout) || {};
+    parsed.autoCheckout = {
+      enabled: parsed.autoCheckout.enabled ?? existing.enabled ?? true,
+      office: parsed.autoCheckout.office ?? existing.office ?? { day: 'same', time: '23:59' },
+      wfh: parsed.autoCheckout.wfh ?? existing.wfh ?? { day: 'next', time: '06:00' },
+    };
+  }
 
   if (!settings) {
     settings = await OfficeSettings.create({
@@ -555,8 +599,11 @@ export async function updateOfficeSettings(req, res) {
       updatedBy: req.user._id,
     });
   } else {
-    Object.assign(settings, parsed, { updatedBy: req.user._id });
-    await settings.save();
+    await settings.updateOne(
+      { $set: { ...parsed, updatedBy: req.user._id } },
+      { runValidators: true },
+    );
+    settings = await OfficeSettings.findById(settings._id);
   }
 
   auditLog('office_settings_updated', {

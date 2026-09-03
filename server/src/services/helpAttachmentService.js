@@ -4,11 +4,13 @@ import {
   HeadObjectCommand,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectsCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachment.js';
 import { HelpTicket, HELP_TICKET_POPULATE } from '../models/HelpTicket.js';
+import { HelpComment, HELP_COMMENT_POPULATE } from '../models/HelpComment.js';
 import { canViewTicket } from './helpService.js';
 import { auditLog } from '../utils/auditLog.js';
 
@@ -38,6 +40,7 @@ export const ALLOWED_MIME_TYPES = new Set([
 
 export const MAX_BYTES = Number(process.env.UPLOAD_MAX_BYTES ?? 5_242_880);
 export const MAX_FILES_PER_TICKET = 5;
+export const MAX_FILES_PER_COMMENT = 3;
 const UPLOADS_PREFIX = process.env.UPLOADS_PREFIX ?? 'help-tickets';
 const PRESIGN_EXPIRES_SECONDS = 900;
 const DOWNLOAD_EXPIRES_SECONDS = 300;
@@ -48,7 +51,7 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
-function getUploadsBucket() {
+export function getUploadsBucket() {
   const bucket = process.env.UPLOADS_BUCKET;
   if (!bucket) {
     throwError('File uploads are not configured.', 503);
@@ -56,10 +59,20 @@ function getUploadsBucket() {
   return bucket;
 }
 
-function getS3Client() {
-  return new S3Client({
-    region: process.env.AWS_REGION ?? 'ap-south-1',
+let _s3Client = null;
+export function getS3Client() {
+  if (_s3Client) return _s3Client;
+  const region = process.env.AWS_REGION ?? 'ap-south-1';
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) {
+    throwError('AWS credentials are not configured.', 503);
+  }
+  _s3Client = new S3Client({
+    region,
+    credentials: { accessKeyId, secretAccessKey },
   });
+  return _s3Client;
 }
 
 export function sanitizeFilename(fileName) {
@@ -227,7 +240,8 @@ export async function confirmUpload(actor, ticketId, attachmentId, permissions) 
         Key: attachment.s3Key,
       }),
     );
-  } catch {
+  } catch (s3Err) {
+    console.error('[help-attachment] HeadObject failed:', s3Err?.message ?? s3Err);
     throwError('Uploaded file was not found. Please upload again.', 404);
   }
 
@@ -239,6 +253,9 @@ export async function confirmUpload(actor, ticketId, attachmentId, permissions) 
   const actualMime = headResult.ContentType ?? '';
   if (actualMime && actualMime !== attachment.mimeType) {
     throwError('Uploaded file type does not match the declared type.');
+  }
+  if (!actualMime) {
+    console.warn(`[help-attachment] S3 returned empty ContentType for ${attachment.s3Key}`);
   }
 
   attachment.status = 'confirmed';
@@ -269,10 +286,25 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
 
   const bucket = getUploadsBucket();
   const s3Client = getS3Client();
+
+  try {
+    await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: attachment.s3Key,
+      }),
+    );
+  } catch (s3Err) {
+    console.error('[help-attachment] Download HEAD check failed:', s3Err?.message ?? s3Err);
+    attachment.status = 'deleted';
+    await attachment.save();
+    throwError('Attachment file not found on server.', 404);
+  }
+
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: attachment.s3Key,
-    ResponseContentDisposition: `attachment; filename="${encodeURIComponent(attachment.fileName)}"`,
+    ResponseContentDisposition: `attachment; filename="${attachment.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}"`,
     ResponseContentType: attachment.mimeType,
   });
   const downloadUrl = await getSignedUrl(s3Client, command, {
@@ -292,4 +324,205 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
     mimeType: attachment.mimeType,
     expiresIn: DOWNLOAD_EXPIRES_SECONDS,
   };
+}
+
+async function loadComment(ticketId, commentId) {
+  if (!mongoose.isValidObjectId(commentId)) {
+    throwError('Comment not found.', 404);
+  }
+
+  const comment = await HelpComment.findOne({
+    _id: commentId,
+    ticketId,
+  }).populate(HELP_COMMENT_POPULATE);
+
+  if (!comment) {
+    throwError('Comment not found.', 404);
+  }
+  return comment;
+}
+
+async function countActiveCommentAttachments(commentId) {
+  return HelpAttachment.countDocuments({
+    commentId,
+    status: { $in: ['pending', 'confirmed'] },
+  });
+}
+
+export async function presignCommentUpload(actor, ticketId, commentId, permissions, payload) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to view this ticket.', 403);
+  }
+
+  const comment = await loadComment(ticketId, commentId);
+
+  if (!isAllowedMimeType(payload.mimeType)) {
+    throwError('File type is not allowed. Use JPEG, PNG, WebP, or PDF.');
+  }
+  if (payload.sizeBytes > MAX_BYTES) {
+    throwError(`File exceeds the ${Math.floor(MAX_BYTES / (1024 * 1024))} MB limit.`);
+  }
+
+  const activeCount = await countActiveCommentAttachments(comment._id);
+  if (activeCount >= MAX_FILES_PER_COMMENT) {
+    throwError(`Maximum ${MAX_FILES_PER_COMMENT} attachments per comment.`);
+  }
+
+  const bucket = getUploadsBucket();
+  const s3Key = buildS3Key(ticket._id.toString(), payload.fileName, `${UPLOADS_PREFIX}/${ticket._id.toString()}/comments/${comment._id.toString()}`);
+
+  const attachment = await HelpAttachment.create({
+    ticketId: ticket._id,
+    commentId: comment._id,
+    uploadedBy: actor._id,
+    fileName: sanitizeFilename(payload.fileName),
+    mimeType: payload.mimeType,
+    sizeBytes: payload.sizeBytes,
+    s3Key,
+    status: 'pending',
+  });
+
+  const s3Client = getS3Client();
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: s3Key,
+    ContentType: payload.mimeType,
+    ContentLength: payload.sizeBytes,
+  });
+  const uploadUrl = await getSignedUrl(s3Client, command, {
+    expiresIn: PRESIGN_EXPIRES_SECONDS,
+  });
+
+  auditLog('help_comment_attachment_presigned', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: comment._id.toString(),
+    attachmentId: attachment._id.toString(),
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+  });
+
+  return {
+    attachment: attachment.toSafeJSON(),
+    uploadUrl,
+    uploadHeaders: {
+      'Content-Type': payload.mimeType,
+    },
+    expiresIn: PRESIGN_EXPIRES_SECONDS,
+  };
+}
+
+export async function confirmCommentUpload(actor, ticketId, commentId, attachmentId, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to view this ticket.', 403);
+  }
+
+  await loadComment(ticketId, commentId);
+
+  const attachment = await HelpAttachment.findOne({
+    _id: attachmentId,
+    ticketId,
+    commentId,
+    status: 'pending',
+  }).populate(HELP_ATTACHMENT_POPULATE);
+
+  if (!attachment) {
+    throwError('Attachment not found.', 404);
+  }
+
+  if (attachment.uploadedBy?._id?.toString() !== actor._id.toString() &&
+      attachment.uploadedBy?.toString?.() !== actor._id.toString()) {
+    throwError('You can only confirm attachments you uploaded.', 403);
+  }
+
+  const bucket = getUploadsBucket();
+  const s3Client = getS3Client();
+
+  let headResult;
+  try {
+    headResult = await s3Client.send(
+      new HeadObjectCommand({
+        Bucket: bucket,
+        Key: attachment.s3Key,
+      }),
+    );
+  } catch (s3Err) {
+    console.error('[help-attachment] HeadObject failed:', s3Err?.message ?? s3Err);
+    throwError('Uploaded file was not found. Please upload again.', 404);
+  }
+
+  const actualSize = Number(headResult.ContentLength ?? 0);
+  if (actualSize !== attachment.sizeBytes) {
+    throwError('Uploaded file size does not match the declared size.');
+  }
+
+  const actualMime = headResult.ContentType ?? '';
+  if (actualMime && actualMime !== attachment.mimeType) {
+    throwError('Uploaded file type does not match the declared type.');
+  }
+  if (!actualMime) {
+    console.warn(`[help-attachment] S3 returned empty ContentType for ${attachment.s3Key}`);
+  }
+
+  attachment.status = 'confirmed';
+  await attachment.save();
+  await attachment.populate(HELP_ATTACHMENT_POPULATE);
+
+  auditLog('help_comment_attachment_confirmed', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: commentId,
+    attachmentId: attachment._id.toString(),
+    fileName: attachment.fileName,
+    sizeBytes: actualSize,
+  });
+
+  return attachment.toSafeJSON();
+}
+
+export async function listAttachmentsForComment(commentId) {
+  const attachments = await HelpAttachment.find({
+    commentId,
+    status: 'confirmed',
+  })
+    .populate(HELP_ATTACHMENT_POPULATE)
+    .sort({ createdAt: 1 });
+
+  return attachments.map((item) => item.toSafeJSON());
+}
+
+const STALE_PENDING_MAX_AGE_MS = 60 * 60 * 1000;
+
+export async function deleteS3Objects(s3Keys) {
+  if (!s3Keys || s3Keys.length === 0) return;
+  try {
+    const bucket = getUploadsBucket();
+    const s3Client = getS3Client();
+    const objects = s3Keys.map((Key) => ({ Key }));
+    await s3Client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: { Objects: objects },
+      }),
+    );
+  } catch (err) {
+    console.error('[help-attachment] S3 batch delete failed:', err?.message ?? err);
+  }
+}
+
+export async function cleanupStalePendingAttachments() {
+  const cutoff = new Date(Date.now() - STALE_PENDING_MAX_AGE_MS);
+  const stale = await HelpAttachment.find({
+    status: 'pending',
+    createdAt: { $lt: cutoff },
+  }).select('s3Key');
+
+  if (stale.length === 0) return;
+
+  console.log(`[help-attachment] Cleaning up ${stale.length} stale pending attachment(s)`);
+  await deleteS3Objects(stale.map((a) => a.s3Key));
+  await HelpAttachment.deleteMany({ _id: { $in: stale.map((a) => a._id) } });
 }

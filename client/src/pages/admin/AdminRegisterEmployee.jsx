@@ -13,6 +13,8 @@ import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
 import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import { COMPANY_START_DATE } from "../../config/company.js";
+
 
 const emptyForm = {
   firstName: '',
@@ -375,6 +377,7 @@ export default function AdminRegisterEmployee() {
               <RegisterLabel required>Joining date</RegisterLabel>
               <DateField
                 value={form.joiningDate}
+                min={COMPANY_START_DATE}
                 onChange={(value) =>
                   setForm((current) => ({
                     ...current,

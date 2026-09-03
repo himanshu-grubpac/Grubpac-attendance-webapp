@@ -912,6 +912,7 @@ export async function seedDatabase({ wipe = false } = {}) {
       designation: 'System Administrator',
       joiningDate: new Date(),
       passwordHash: await bcrypt.hash(env.adminPassword, 12),
+      pinHash: await bcrypt.hash(env.adminPin, 12),
       isActive: true,
     });
     console.log(`Seeded admin: ${adminEmail}`);
@@ -921,6 +922,7 @@ export async function seedDatabase({ wipe = false } = {}) {
     admin.name = env.adminName;
     admin.email = adminEmail;
     admin.passwordHash = await bcrypt.hash(env.adminPassword, 12);
+    admin.pinHash = await bcrypt.hash(env.adminPin, 12);
     admin.isActive = true;
     admin.role = 'admin';
     admin.roleId = adminRole._id;

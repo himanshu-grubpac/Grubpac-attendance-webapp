@@ -7,12 +7,16 @@ import {
 } from '../../../shared/validation/help.js';
 import {
   confirmUpload,
+  confirmCommentUpload,
   getDownloadUrl,
   presignUpload,
+  presignCommentUpload,
 } from '../services/helpAttachmentService.js';
 import {
   addHelpComment,
   createHelpTicket,
+  deleteHelpComment,
+  deleteHelpTicket,
   getHelpTicketById,
   listHelpTickets,
   updateHelpTicketStatus,
@@ -86,4 +90,37 @@ export async function downloadAttachmentHandler(req, res) {
     req.userPermissions,
   );
   res.json(result);
+}
+
+export async function presignCommentAttachmentHandler(req, res) {
+  const parsed = presignHelpAttachmentSchema.parse(req.body);
+  const result = await presignCommentUpload(
+    req.user,
+    req.params.id,
+    req.params.commentId,
+    req.userPermissions,
+    parsed,
+  );
+  res.status(201).json(result);
+}
+
+export async function confirmCommentAttachmentHandler(req, res) {
+  const attachment = await confirmCommentUpload(
+    req.user,
+    req.params.id,
+    req.params.commentId,
+    req.params.attachmentId,
+    req.userPermissions,
+  );
+  res.json({ attachment });
+}
+
+export async function deleteTicketHandler(req, res) {
+  await deleteHelpTicket(req.params.id, req.user, req.userPermissions);
+  res.status(204).end();
+}
+
+export async function deleteCommentHandler(req, res) {
+  await deleteHelpComment(req.params.id, req.params.commentId, req.user, req.userPermissions);
+  res.status(204).end();
 }

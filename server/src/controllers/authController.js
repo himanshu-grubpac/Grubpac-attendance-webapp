@@ -21,6 +21,7 @@ import {
   changePasswordSchema,
   detectIdentifierType,
   loginSchema,
+  setPinSchema,
   updateProfileSchema,
 } from '../../../shared/validation/auth.js';
 import { normalizeMobile } from '../../../shared/validation/common.js';
@@ -32,7 +33,7 @@ export function getAuthCookieOptions() {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: env.jwtCookieMaxAgeMs,
     path: '/',
   };
@@ -46,7 +47,7 @@ export function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
   });
 }
@@ -122,7 +123,25 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
-  const valid = await bcrypt.compare(parsed.password, user.passwordHash);
+  // A login secret is either the account password OR a 4/6-digit PIN. We detect
+  // the format so a 4-digit PIN is tried against the PIN hash (when set) and
+  // anything else falls through to a normal password comparison. This avoids
+  // comparing against a null hash, which would throw.
+  const secret = parsed.password;
+  let valid = false;
+  const isFourDigit = /^\d{4}$/.test(secret);
+  const isSixDigit = /^\d{6}$/.test(secret);
+
+  if (isFourDigit && user.pin4Hash) {
+    valid = await bcrypt.compare(secret, user.pin4Hash);
+  }
+  if (!valid && isSixDigit && user.pin6Hash) {
+    valid = await bcrypt.compare(secret, user.pin6Hash);
+  }
+  if (!valid) {
+    valid = await bcrypt.compare(secret, user.passwordHash);
+  }
+
   if (!valid) {
     auditLog('login_failed', {
       identifier: parsed.identifier,
@@ -251,4 +270,140 @@ export async function changePassword(userId, body) {
   });
 
   return { message: 'Password changed successfully.' };
+}
+
+/**
+ * Employee self-service PIN setup and change.
+ * - Only employees may set a PIN (admins use the admin reset endpoint).
+ * - Setting a PIN for the first time requires no current PIN.
+ * - Changing an existing PIN requires the current PIN to be supplied and correct.
+ * - Self-service PINs are stored strictly as 4-digit (pin4Hash); any legacy
+ *   6-digit hash is cleared so the account has a single, predictable credential.
+ */
+export async function setPin(userId, body, auditContext = {}) {
+  const parsed = setPinSchema.parse(body);
+  const user = await User.findById(userId);
+
+  if (!user || !user.isActive) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (user.role !== 'employee') {
+    const error = new Error('PIN setup is available for employees only.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
+  if (hasPin) {
+    // Changing an existing PIN requires the current PIN.
+    if (!parsed.currentPin) {
+      const error = new Error('Current PIN is required to change your PIN.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const currentHash = user.pin4Hash || user.pin6Hash;
+    const currentValid = await bcrypt.compare(parsed.currentPin, currentHash);
+    if (!currentValid) {
+      const error = new Error('Current PIN is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  } else {
+    // Setting a PIN for the first time requires the current account password.
+    if (!parsed.currentPassword) {
+      const error = new Error('Current password is required to set a PIN.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const passwordValid = await bcrypt.compare(parsed.currentPassword, user.passwordHash);
+    if (!passwordValid) {
+      const error = new Error('Current password is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  }
+
+  user.pin4Hash = await bcrypt.hash(parsed.pin, 12);
+  user.pin6Hash = null;
+  await user.save();
+
+  auditLog(hasPin ? 'pin_changed' : 'pin_set', {
+    userId: user._id.toString(),
+    email: user.email,
+    role: user.role,
+    ...auditContext,
+  });
+
+  return {
+    message: hasPin ? 'PIN changed successfully.' : 'PIN set successfully.',
+  };
+}
+
+/**
+ * Employee self-service PIN removal.
+ * - Only employees may remove their own PIN.
+ * - Requires the current account password (when no PIN is set this is moot) or
+ *   the current PIN to re-verify identity before clearing the credential.
+ */
+export async function deletePin(userId, body = {}, auditContext = {}) {
+  const user = await User.findById(userId);
+
+  if (!user || !user.isActive) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (user.role !== 'employee') {
+    const error = new Error('PIN removal is available for employees only.');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
+  if (!hasPin) {
+    return { message: 'No PIN is currently set.' };
+  }
+
+  const currentPin = body.currentPin?.trim();
+  const currentPassword = body.currentPassword?.trim();
+
+  if (!currentPin && !currentPassword) {
+    const error = new Error('Your current PIN or password is required to remove the PIN.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (currentPin) {
+    const currentHash = user.pin4Hash || user.pin6Hash;
+    const currentValid = await bcrypt.compare(currentPin, currentHash);
+    if (!currentValid) {
+      const error = new Error('Current PIN is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  } else if (currentPassword) {
+    const passwordValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!passwordValid) {
+      const error = new Error('Current password is incorrect.');
+      error.statusCode = 401;
+      throw error;
+    }
+  }
+
+  user.pin4Hash = null;
+  user.pin6Hash = null;
+  await user.save();
+
+  auditLog('pin_removed', {
+    userId: user._id.toString(),
+    email: user.email,
+    role: user.role,
+    ...auditContext,
+  });
+
+  return { message: 'PIN removed successfully.' };
 }

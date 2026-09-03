@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
 import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
@@ -8,25 +9,40 @@ import SelectField from '../../components/SelectField.jsx';
 import { getTodayMonthIst } from '../../components/MonthField.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
+import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 
 const APPROVALS_PAGE_SIZE = 20;
+
+// Mirrors the server undo window (LEAVE_DECISION_UNDO_MS). The applicant email
+// is only sent once this window expires, so the popup countdown must match.
+const DECISION_UNDO_MS = 15000;
+
+function decisionUndoDurationMs(request) {
+  const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
+  if (!Number.isFinite(expiresAt)) return DECISION_UNDO_MS;
+  return Math.max(0, expiresAt - Date.now());
+}
 
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
 
 const QUEUE_STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
+  { value: 'cancelled', label: 'Cancelled' },
 ];
 
 function statCardsForQueue(queueStatus) {
-  const isPending = queueStatus === 'pending';
+  const labels = {
+    pending: { label: 'PENDING REQUESTS', hint: 'Awaiting your decision', icon: '⏳', tone: 'warning' },
+    approved: { label: 'APPROVED REQUESTS', hint: 'Decisions recorded in your scope', icon: '✓', tone: 'info' },
+    cancelled: { label: 'CANCELLED REQUESTS', hint: 'Cancelled leave requests', icon: '✕', tone: 'muted' },
+  };
+  const config = labels[queueStatus] ?? labels.pending;
   return [
     {
       key: 'count',
-      label: isPending ? 'PENDING REQUESTS' : 'APPROVED REQUESTS',
-      hint: isPending ? 'Awaiting your decision' : 'Decisions recorded in your scope',
-      icon: isPending ? '⏳' : '✓',
-      tone: isPending ? 'warning' : 'info',
+      ...config,
     },
     {
       key: 'days',
@@ -228,8 +244,10 @@ async function fetchActiveEmployees() {
 }
 
 export default function AdminLeaveApprovals() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
 
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -247,6 +265,10 @@ export default function AdminLeaveApprovals() {
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
   const [queueStatus, setQueueStatus] = useState('pending');
+
+  const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
+  const [cancelModal, setCancelModal] = useState({ open: false, item: null, comment: '' });
+  const deepLinkRef = useRef(null);
 
   const employeeFilterRef = useRef(employeeFilter);
   const yearFilterRef = useRef(yearFilter);
@@ -288,6 +310,8 @@ export default function AdminLeaveApprovals() {
     nextYear = yearFilterRef.current,
     nextMonthPart = monthPartFilterRef.current,
     nextQueueStatus = queueStatusRef.current,
+
+
   } = {}) => {
     const nextMonth = toMonthFilterValue(nextYear, nextMonthPart);
     setLoading(true);
@@ -299,9 +323,10 @@ export default function AdminLeaveApprovals() {
         page: nextPage,
         limit: 20,
       };
-      if (nextEmployee) params.userId = nextEmployee;
-      if (nextMonth) params.month = nextMonth;
 
+      if (nextEmployee) params.userId = nextEmployee;
+      if (nextYear) params.year = nextYear;
+      if (nextMonthPart) params.month = `${nextYear}-${nextMonthPart}`;
       const data = await leaveApi.listRequests(params);
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);
@@ -335,6 +360,50 @@ export default function AdminLeaveApprovals() {
       })
       .finally(() => setEmployeesLoading(false));
   }, []);
+
+  useEffect(() => {
+    const decision = searchParams.get('decision');
+    const requestId = searchParams.get('requestId');
+    if (decision !== 'request' || !requestId) {
+      deepLinkRef.current = null;
+      return undefined;
+    }
+
+    const deepLinkKey = `${decision}:${requestId}`;
+    if (deepLinkRef.current === deepLinkKey) return undefined;
+    deepLinkRef.current = deepLinkKey;
+
+    let cancelled = false;
+    async function openDeepLinkedRequest() {
+      let target = requests.find((item) => item.id === requestId);
+      if (!target) {
+        try {
+          const data = await leaveApi.getRequest(requestId);
+          target = data.request ?? data;
+        } catch (err) {
+          if (!cancelled) {
+            showError(getErrorMessage(err));
+            setSearchParams({}, { replace: true });
+          }
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      if (target?.status === 'pending') {
+        setDecisionModal({ open: true, item: target, comment: '' });
+        setExpandedIds((prev) => ({ ...prev, [requestId]: true }));
+      } else {
+        showError('This leave request is no longer pending.');
+      }
+      setSearchParams({}, { replace: true });
+    }
+
+    openDeepLinkedRequest();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, requests, setSearchParams, showError]);
 
   function setCommentFor(id, value) {
     setComments((prev) => ({ ...prev, [id]: value }));
@@ -376,50 +445,123 @@ export default function AdminLeaveApprovals() {
   }
 
   async function handleDecision(id, decision) {
-    const item = requests.find((request) => request.id === id);
-    const note = (comments[id] ?? '').trim();
-    const payload = note ? { comment: note } : {};
+    const item = decisionModal.item || requests.find((r) => r.id === id);
+    const note = (decisionModal.comment || (comments[id] ?? '')).trim();
+    if (!note) {
+      showError('A remark is required for this action.');
+      return;
+    }
+    const payload = { comment: note };
 
     if (decision === 'reject') {
-      await requestConfirm({
-        title: 'Decline leave request?',
-        message: item
-          ? `Decline ${item.userName}'s request for ${leaveTypeLabel(item)} (${dateRangeLabel(item)}). The employee will be notified. This action cannot be reversed from this screen.`
-          : 'Decline this leave request? The employee will be notified. This action cannot be reversed from this screen.',
-        confirmLabel: 'Decline request',
-        variant: 'danger',
-        onConfirm: async () => {
-          setActingId(id);
-          setError('');
-          try {
-            await leaveApi.rejectRequest(id, payload);
-            showSuccess('Leave request declined. The employee has been notified.');
-            setComments((prev) => {
-              const next = { ...prev };
-              delete next[id];
-              return next;
-            });
-            await loadRequests({ nextPage: page });
-          } catch (err) {
-            showError(getErrorMessage(err));
-          } finally {
-            setActingId(null);
-          }
-        },
-      });
+      setActingId(id);
+      setError('');
+      try {
+        const response = await leaveApi.rejectRequest(id, payload);
+        const durationMs = decisionUndoDurationMs(response?.request);
+        setDecisionModal({ open: false, item: null, comment: '' });
+        if (durationMs > 0) {
+          showActionPopup({
+            message: 'Leave request declined. If done by mistake, click Undo to revert it.',
+            undoLabel: 'Undo',
+            onUndo: async () => {
+              try {
+                await leaveApi.undoDecision(id);
+                showSuccess('Leave decision undone.');
+                await loadRequests({ nextPage: page });
+                setDecisionModal({ open: true, item: item, comment: note });
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
+            durationMs,
+          });
+        } else {
+          showSuccess('Leave request declined.');
+        }
+        setComments((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        await loadRequests({ nextPage: page });
+      } catch (err) {
+        showError(getErrorMessage(err));
+      } finally {
+        setActingId(null);
+      }
       return;
     }
 
     setActingId(id);
     setError('');
     try {
-      await leaveApi.approveRequest(id, payload);
-      showSuccess('Leave request approved. The employee has been notified.');
+      const response = await leaveApi.approveRequest(id, payload);
+      const durationMs = decisionUndoDurationMs(response?.request);
+      setDecisionModal({ open: false, item: null, comment: '' });
+      if (durationMs > 0) {
+        showActionPopup({
+          message: 'Leave request approved. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: async () => {
+            try {
+              await leaveApi.undoDecision(id);
+              showSuccess('Leave decision undone.');
+              await loadRequests({ nextPage: page });
+              setDecisionModal({ open: true, item: item, comment: note });
+            } catch (err) {
+              showError(getErrorMessage(err));
+            }
+          },
+          durationMs,
+        });
+      } else {
+        showSuccess('Leave request approved.');
+      }
       setComments((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
+      await loadRequests({ nextPage: page });
+    } catch (err) {
+      showError(getErrorMessage(err));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function handleCancelApproved() {
+    const item = cancelModal.item;
+    const note = (cancelModal.comment || '').trim();
+    if (!note) {
+      showError('A remark is required to cancel this leave.');
+      return;
+    }
+    setActingId(item.id);
+    setError('');
+    try {
+      const response = await leaveApi.cancelApproved(item.id, { comment: note });
+      const durationMs = decisionUndoDurationMs(response?.request);
+      setCancelModal({ open: false, item: null, comment: '' });
+      if (durationMs > 0) {
+        showActionPopup({
+          message: 'Approved leave cancelled. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+            onUndo: async () => {
+              try {
+                await leaveApi.undoCancellation(item.id);
+                showSuccess('Cancellation undone. Leave restored.');
+                await loadRequests({ nextPage: page });
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
+          durationMs,
+        });
+      } else {
+        showSuccess('Approved leave cancelled.');
+      }
       await loadRequests({ nextPage: page });
     } catch (err) {
       showError(getErrorMessage(err));
@@ -445,28 +587,28 @@ export default function AdminLeaveApprovals() {
           {loading && !pagination
             ? statCards.map((card) => <StatCardSkeleton key={card.key} />)
             : statCards.map((card) => (
-                <article
-                  key={card.key}
-                  className={`approvals-stat card approvals-stat--${card.tone}`}
-                >
-                  <div className="approvals-stat__head">
-                    <span className="approvals-stat__label">{card.label}</span>
-                    <span className="approvals-stat__icon" aria-hidden="true">
-                      {card.icon}
-                    </span>
-                  </div>
-                  <strong className="approvals-stat__value">
-                    {statValues[card.key] == null ? '—' : statValues[card.key]}
-                  </strong>
-                  <p className="approvals-stat__hint muted small">{card.hint}</p>
-                </article>
-              ))}
+              <article
+                key={card.key}
+                className={`approvals-stat card approvals-stat--${card.tone}`}
+              >
+                <div className="approvals-stat__head">
+                  <span className="approvals-stat__label">{card.label}</span>
+                  <span className="approvals-stat__icon" aria-hidden="true">
+                    {card.icon}
+                  </span>
+                </div>
+                <strong className="approvals-stat__value">
+                  {statValues[card.key] == null ? '—' : statValues[card.key]}
+                </strong>
+                <p className="approvals-stat__hint muted small">{card.hint}</p>
+              </article>
+            ))}
         </div>
       </section>
 
       <section
         className="approvals-panel card card--table"
-        aria-label={isPendingQueue ? 'Pending leave requests' : 'Approved leave requests'}
+        aria-label={`${queueStatus.charAt(0).toUpperCase() + queueStatus.slice(1)} leave requests`}
       >
         <div className="approvals-toolbar card__toolbar">
           <div className="approvals-toolbar__filters filter-bar">
@@ -528,17 +670,21 @@ export default function AdminLeaveApprovals() {
             icon={EMPTY_ICONS.leave}
             title={
               hasActiveFilters
-                ? `No ${isPendingQueue ? 'pending' : 'approved'} requests match these filters`
-                : isPendingQueue
+                ? `No ${queueStatus} requests match these filters`
+                : queueStatus === 'pending'
                   ? 'No leave requests pending approval'
-                  : 'No approved leave requests in this period'
+                  : queueStatus === 'approved'
+                    ? 'No approved leave requests in this period'
+                    : 'No cancelled leave requests'
             }
             description={
               hasActiveFilters
                 ? 'Try a different employee or month, or clear filters to see the full queue.'
-                : isPendingQueue
+                : queueStatus === 'pending'
                   ? 'New leave requests that require your decision will appear in this queue.'
-                  : 'Approved requests in your scope will appear here after decisions are recorded.'
+                  : queueStatus === 'approved'
+                    ? 'Approved requests in your scope will appear here after decisions are recorded.'
+                    : 'Cancelled leave requests will appear here.'
             }
             action={
               hasActiveFilters ? (
@@ -563,6 +709,7 @@ export default function AdminLeaveApprovals() {
                     <th>Period</th>
                     <th>Days</th>
                     <th>Status</th>
+                    <th className="approvals-table__actions-col">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -579,9 +726,8 @@ export default function AdminLeaveApprovals() {
                     return (
                       <Fragment key={item.id}>
                         <tr
-                          className={`approval-row approval-row--summary${
-                            isExpanded ? ' approval-row--expanded' : ''
-                          }`}
+                          className={`approval-row approval-row--summary${isExpanded ? ' approval-row--expanded' : ''
+                            }`}
                           role="button"
                           tabIndex={0}
                           aria-expanded={isExpanded}
@@ -654,11 +800,40 @@ export default function AdminLeaveApprovals() {
                           <td data-label="Status" className="approval-row__status">
                             <LeaveStatusBadge status={item.status} />
                           </td>
+
+                          {!isExpanded ? (
+                            <td
+                              className="approvals-table__actions-cell"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {isPendingQueue ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={busy || Boolean(item.pendingDecision)}
+                                  onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
+                                >
+                                  Take Action
+                                </button>
+                              ) : queueStatus === 'approved' ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  disabled={busy || Boolean(item.pendingDecision)}
+                                  onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                >
+                                  Cancel
+                                </button>
+                              ) : null}
+                            </td>
+                          ) : (
+                            <td className="approvals-table__actions-cell" />
+                          )}
                         </tr>
 
                         {isExpanded ? (
                           <tr className="approval-row__detail-row">
-                            <td colSpan={7}>
+                            <td colSpan={8}>
                               <div id={detailId} className="approval-row__detail">
                                 {item.userEmail ? (
                                   <p className="approval-row__email muted small" title={item.userEmail}>
@@ -725,39 +900,34 @@ export default function AdminLeaveApprovals() {
                                   </div>
                                 ) : null}
 
-                                {isPendingQueue ? (
-                                  <>
-                                    <label className="approval-row__comment field">
-                                      <span className="label">Approver comment (optional)</span>
-                                      <input
-                                        type="text"
-                                        value={comments[item.id] ?? ''}
-                                        onChange={(event) => setCommentFor(item.id, event.target.value)}
-                                        placeholder="Shared with the employee after your decision"
-                                        disabled={busy}
-                                        maxLength={500}
-                                      />
-                                    </label>
+                                {item.pendingDecision ? (
+                                  <div className="approval-row__pending-decision" style={{ padding: '8px 12px', marginBottom: 8, background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 6, fontSize: 13, color: '#92400e' }}>
+                                    A <strong>{item.pendingDecision}</strong> decision is pending. Undo it first before making a new decision.
+                                  </div>
+                                ) : null}
 
-                                    <div className="approval-row__actions">
-                                      <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        disabled={busy}
-                                        onClick={() => handleDecision(item.id, 'approve')}
-                                      >
-                                        {busy ? 'Submitting…' : 'Approve'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-danger"
-                                        disabled={busy}
-                                        onClick={() => handleDecision(item.id, 'reject')}
-                                      >
-                                        Decline
-                                      </button>
-                                    </div>
-                                  </>
+                                {isPendingQueue ? (
+                                  <div className="approval-row__actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary"
+                                      disabled={busy || Boolean(item.pendingDecision)}
+                                      onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
+                                    >
+                                      Take Action
+                                    </button>
+                                  </div>
+                                ) : queueStatus === 'approved' ? (
+                                  <div className="approval-row__actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger"
+                                      disabled={busy || Boolean(item.pendingDecision)}
+                                      onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
                                 ) : null}
                               </div>
                             </td>
@@ -776,6 +946,30 @@ export default function AdminLeaveApprovals() {
       </section>
 
       {confirmDialog}
+
+      <LeaveDecisionModal
+        open={decisionModal.open}
+        item={decisionModal.item}
+        initialComment={decisionModal.comment}
+        busy={actingId === decisionModal.item?.id}
+        error={error}
+        onCommentChange={(value) => setDecisionModal((prev) => ({ ...prev, comment: value }))}
+        onApprove={() => handleDecision(decisionModal.item.id, 'approve')}
+        onReject={() => handleDecision(decisionModal.item.id, 'reject')}
+        onCancel={() => setDecisionModal({ open: false, item: null, comment: '' })}
+      />
+
+      <LeaveDecisionModal
+        open={cancelModal.open}
+        item={cancelModal.item}
+        action="cancel"
+        initialComment={cancelModal.comment}
+        busy={actingId === cancelModal.item?.id}
+        error={error}
+        onCommentChange={(value) => setCancelModal((prev) => ({ ...prev, comment: value }))}
+        onApprove={handleCancelApproved}
+        onReject={() => setCancelModal({ open: false, item: null, comment: '' })}
+      />
     </div>
   );
 }

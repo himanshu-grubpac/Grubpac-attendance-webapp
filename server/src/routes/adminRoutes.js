@@ -7,6 +7,7 @@ import {
   bulkUploadEmployees,
   downloadEmployeeTemplate,
   getOfficeSettingsHandler,
+  getTeamTodayStatusAdmin,
   listAttendance,
   editAttendanceRecord,
   upsertAttendanceRecord,
@@ -22,6 +23,7 @@ import {
   listManagers,
   registerEmployee,
   resetEmployeePassword,
+  resetEmployeePin,
   updateEmployee,
   updateOfficeSettings,
 } from '../controllers/adminController.js';
@@ -113,6 +115,11 @@ router.patch(
   requirePermission(PERMISSIONS.USERS_WRITE),
   asyncHandler(resetEmployeePassword),
 );
+router.patch(
+  '/users/:id/pin',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  asyncHandler(resetEmployeePin),
+);
 router.patch('/users/:id', requirePermission(PERMISSIONS.USERS_WRITE), asyncHandler(updateEmployee));
 router.post(
   '/users/bulk-upload',
@@ -181,6 +188,11 @@ router.get(
   '/reports/summary',
   requirePermission(PERMISSIONS.USERS_READ),
   asyncHandler(getReportsSummaryHandler),
+);
+router.get(
+  '/attendance/team-today',
+  requirePermission(PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM),
+  asyncHandler(getTeamTodayStatusAdmin),
 );
 
 export default router;

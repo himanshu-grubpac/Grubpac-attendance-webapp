@@ -122,6 +122,16 @@ export const authApi = {
     api.patch('/auth/me', payload).then((r) => r.data),
   changePassword: (payload) =>
     api.post('/auth/change-password', payload).then((r) => r.data),
+  setPin: (payload) =>
+    api.post('/auth/set-pin', payload).then((r) => r.data),
+  deletePin: (payload) =>
+    api.post('/auth/delete-pin', payload).then((r) => r.data),
+  forgotPassword: (email) =>
+    api.post('/auth/forgot-password', { email }).then((r) => r.data),
+  verifyResetToken: (token) =>
+    api.post('/auth/reset-password/verify', { token }).then((r) => r.data),
+  resetPassword: (payload) =>
+    api.post('/auth/reset-password', payload).then((r) => r.data),
 };
 
 export const adminApi = {
@@ -193,10 +203,12 @@ export const adminApi = {
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
+  getTeamTodayStatus: () => api.get('/admin/attendance/team-today').then((r) => r.data),
 };
 
 export const attendanceApi = {
   getToday: () => api.get('/attendance/today').then((r) => r.data),
+  getTeamToday: () => api.get('/attendance/team-today').then((r) => r.data),
   checkIn: (payload, lateNote) => {
     const { deviceId } = getDeviceFingerprint();
     return api
@@ -227,6 +239,7 @@ export const attendanceApi = {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
       })
       .then((r) => r.data),
+  undo: (token) => api.post('/attendance/undo', { token }).then((r) => r.data),
 };
 
 export const notificationsApi = {
@@ -288,11 +301,21 @@ export const leaveApi = {
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
   createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
+  getRequest: (id) => api.get(`/leave/requests/${id}`).then((r) => r.data),
+  updateRequest: (id, payload) => api.put(`/leave/requests/${id}`, payload).then((r) => r.data),
   cancelRequest: (id) => api.post(`/leave/requests/${id}/cancel`).then((r) => r.data),
+  notify: (id) => api.post(`/leave/requests/${id}/notify`).then((r) => r.data),
+  withdrawSubmitted: (id) => api.post(`/leave/requests/${id}/withdraw`).then((r) => r.data),
   approveRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/approve`, payload).then((r) => r.data),
   rejectRequest: (id, payload = {}) =>
     api.post(`/leave/requests/${id}/reject`, payload).then((r) => r.data),
+  undoDecision: (id) =>
+    api.post(`/leave/requests/${id}/undo`).then((r) => r.data),
+  cancelApproved: (id, payload = {}) =>
+    api.post(`/leave/requests/${id}/cancel-approval`, payload).then((r) => r.data),
+  undoCancellation: (id) =>
+    api.post(`/leave/requests/${id}/undo-cancel`).then((r) => r.data),
   getTeamCalendar: (params = {}) => api.get('/leave/team-calendar', { params }).then((r) => r.data),
   listHolidays: (params = {}) => api.get('/leave/holidays', { params }).then((r) => r.data),
   listHolidayCategories: () => api.get('/leave/holiday-categories').then((r) => r.data),
@@ -306,6 +329,13 @@ export const leaveApi = {
   updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
   materializeRecurringHolidays: (payload) =>
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
+};
+
+export const preferencesApi = {
+  getTablePreference: (tableKey) =>
+    api.get(`/preferences/tables/${tableKey}`).then((r) => r.data),
+  updateTablePreference: (tableKey, payload) =>
+    api.put(`/preferences/tables/${tableKey}`, payload).then((r) => r.data),
 };
 
 export const helpApi = {
@@ -326,6 +356,15 @@ export const helpApi = {
     api
       .get(`/help/tickets/${ticketId}/attachments/${attachmentId}/download`)
       .then((r) => r.data),
+  presignCommentAttachment: (ticketId, commentId, payload) =>
+    api.post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/presign`, payload).then((r) => r.data),
+  confirmCommentAttachment: (ticketId, commentId, attachmentId) =>
+    api
+      .post(`/help/tickets/${ticketId}/comments/${commentId}/attachments/${attachmentId}/confirm`)
+      .then((r) => r.data),
+  deleteTicket: (id) => api.delete(`/help/tickets/${id}`).then((r) => r.data),
+  deleteComment: (ticketId, commentId) =>
+    api.delete(`/help/tickets/${ticketId}/comments/${commentId}`).then((r) => r.data),
 };
 
 export const salaryApi = {

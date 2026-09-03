@@ -15,12 +15,19 @@
     "wipe:keep-holidays-geo": "node src/wipeKeepHolidaysGeo.js",
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
-    "test": "node --test src/**/*.test.js"
+    "test": "node --test src/**/*.test.js",
+    "test:e2e": "node scripts/e2e-password-reset.mjs",
+    "test:e2e:auto-checkout": "node scripts/e2e-auto-checkout.mjs",
+    "test:e2e:job-lock": "node scripts/e2e-job-lock.mjs",
+    "test:e2e:leave-reject-email": "node scripts/e2e-leave-reject-email.mjs",
+    "test:e2e:attendance-flow": "node scripts/e2e-attendance-flow.mjs",
+    "jobs:auto-checkout": "node scripts/autoCheckoutJob.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1102.0",
     "@aws-sdk/s3-request-presigner": "^3.1102.0",
     "@codegenie/serverless-express": "^5.0.0",
+    "@internationalized/date": "^3.12.3",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -32,6 +39,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
     "multer": "^2.2.0",
+    "nodemailer": "^6.10.0",
     "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },

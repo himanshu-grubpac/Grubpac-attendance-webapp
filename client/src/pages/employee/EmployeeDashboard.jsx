@@ -6,6 +6,7 @@ import LocationPanel from '../../components/LocationPanel.jsx';
 import MonthCalendar from '../../components/MonthCalendar.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { attendanceApi, getErrorMessage } from '../../services/api.js';
@@ -45,7 +46,11 @@ function greetingForHour() {
 
 function todayStatusLabel(today) {
   if (today?.checkOut) return 'Checked out';
-  if (today?.checkIn) return 'Checked in';
+  if (today?.checkIn) {
+    return today.checkIn.leaveStatus === 'pending'
+      ? 'Checked in (WFH pending)'
+      : 'Checked in';
+  }
   return 'Not checked in';
 }
 
@@ -79,7 +84,8 @@ const OFFICE_GEO_REJECTION_FALLBACK =
 
 export default function EmployeeDashboard() {
   const { user } = useAuth();
-  const { showError } = useToast();
+  const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
   const [today, setToday] = useState(null);
   const [office, setOffice] = useState(null);
   const [result, setResult] = useState(null);
@@ -98,6 +104,10 @@ export default function EmployeeDashboard() {
   const [lateNoteText, setLateNoteText] = useState('');
   const { getPosition, loading: geoLoading, error: geoError, position, sampleInfo } =
     useGeolocation();
+
+  const [teamStatus, setTeamStatus] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(true);
+  const [teamError, setTeamError] = useState('');
 
   useEscapeKey(lateNoteOpen && !actionLoading, () => setLateNoteOpen(false));
 
@@ -144,12 +154,26 @@ export default function EmployeeDashboard() {
     }
   }, []);
 
+  const loadTeamStatus = useCallback(async () => {
+    setTeamLoading(true);
+    setTeamError('');
+    try {
+      const data = await attendanceApi.getTeamToday();
+      setTeamStatus(data.teamStatus ?? []);
+    } catch (err) {
+      setTeamError(getErrorMessage(err));
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     refreshToday().catch((err) => setError(getErrorMessage(err)));
     loadQuarterWarnings();
+    loadTeamStatus();
     const timer = setInterval(() => setClock(getCurrentISTClock()), 1000);
     return () => clearInterval(timer);
-  }, [refreshToday, loadQuarterWarnings]);
+  }, [refreshToday, loadQuarterWarnings, loadTeamStatus]);
 
   useEffect(() => {
     loadCalendar(calendarMonth);
@@ -161,7 +185,7 @@ export default function EmployeeDashboard() {
 
   const effectiveAttendanceMode = today?.checkIn
     ? today.checkIn.attendanceMode ?? 'office'
-    : today?.wfhApprovedToday
+    : today?.wfhApprovedToday || today?.wfhPendingToday
       ? 'wfh'
       : 'office';
 
@@ -172,8 +196,13 @@ export default function EmployeeDashboard() {
     try {
       const coords = await getPosition({ fresh: true });
       const todayCheckInMode = today?.checkIn?.attendanceMode ?? 'office';
+      // With a pending WFH request the employee may check in from anywhere; the
+      // mode is decided by location (inside office → office, elsewhere → wfh).
+      const hasPendingWfh = Boolean(today?.wfhPendingToday);
       const requiresOfficeGeo =
-        type === 'check_in' ? !today?.wfhApprovedToday : todayCheckInMode !== 'wfh';
+        type === 'check_in'
+          ? !today?.wfhApprovedToday && !hasPendingWfh
+          : todayCheckInMode !== 'wfh';
 
       if (requiresOfficeGeo && office) {
         const preview = evaluateOfficeGeoPreview(coords, office);
@@ -185,8 +214,20 @@ export default function EmployeeDashboard() {
         }
       }
 
+      let checkInPayload = coords;
+      if (type === 'check_in' && hasPendingWfh) {
+        // Decide the mode by current location: inside the office radius → office (OFC*),
+        // outside → wfh (WFH*). Both stay red until the WFH request is approved.
+        const preview = office ? evaluateOfficeGeoPreview(coords, office) : null;
+        const insideOffice = preview ? preview.isWithinOffice : false;
+        checkInPayload = {
+          ...coords,
+          attendanceMode: insideOffice ? 'office' : 'wfh',
+        };
+      }
+
       const data = type === 'check_in'
-        ? await attendanceApi.checkIn(coords, lateNote)
+        ? await attendanceApi.checkIn(checkInPayload, lateNote)
         : await attendanceApi.checkOut(coords);
       setResult(data);
       if (data.quarterWarnings) {
@@ -197,11 +238,43 @@ export default function EmployeeDashboard() {
       await loadCalendar(calendarMonth);
       setLateNoteOpen(false);
       setLateNoteText('');
+      if (data.undoToken) {
+        showActionPopup({
+          message:
+            type === 'check_in'
+              ? 'Checked in. If done by mistake, click Undo to revert it.'
+              : 'Checked out. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: () => performUndo(data.undoToken),
+          durationMs: 15000,
+        });
+      } else {
+        showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
+      }
     } catch (err) {
       const response = err?.response?.data;
       if (response?.record) {
         setResult(response);
       }
+      const message = getErrorMessage(err);
+      setError(message);
+      showError(message);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function performUndo(token) {
+    if (!token) return;
+    setActionLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      await attendanceApi.undo(token);
+      await refreshToday();
+      await loadCalendar(calendarMonth);
+      showSuccess('Action undone.');
+    } catch (err) {
       const message = getErrorMessage(err);
       setError(message);
       showError(message);
@@ -226,8 +299,12 @@ export default function EmployeeDashboard() {
   }
 
   const displayName = user?.name?.split(' ')[0] || 'there';
+
+  const isCheckedIn = Boolean(today?.checkIn) && !today?.checkOut;
+  const primaryAction = isCheckedIn ? 'check_out' : 'check_in';
   const todayModeLabel = buildTodayAttendanceModeLabel({
     wfhApprovedToday: today?.wfhApprovedToday,
+    wfhApprovalPendingToday: today?.wfhApprovalPendingToday,
     approvedLeaveToday: today?.approvedLeaveToday,
     checkIn: today?.checkIn,
   });
@@ -257,7 +334,11 @@ export default function EmployeeDashboard() {
           <span
             className={`dash-status-badge${
               today?.checkIn ? ' dash-status-badge--in' : ''
-            }${today?.checkOut ? ' dash-status-badge--out' : ''}`}
+            }${today?.checkOut ? ' dash-status-badge--out' : ''}${
+              today?.checkIn?.leaveStatus === 'pending'
+                ? ' dash-status-badge--pending-wfh'
+                : ''
+            }`}
           >
             {todayStatusLabel(today)}
           </span>
@@ -266,7 +347,13 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__times">
           <div>
             <span className="label">Check-in</span>
-            <strong>
+            <strong
+              className={
+                today?.checkIn?.leaveStatus === 'pending'
+                  ? 'dash-checkin-time--pending-wfh'
+                  : undefined
+              }
+            >
               {today?.checkIn ? formatISTDateTime(today.checkIn.timestamp) : '—'}
             </strong>
           </div>
@@ -298,28 +385,43 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__actions">
           <button
             type="button"
-            className="btn btn-primary btn-lg dash-hero__cta"
-            disabled={!today?.canCheckIn || actionLoading || geoLoading}
-            onClick={requestCheckIn}
+            className={`btn btn-lg dash-hero__cta ${
+              primaryAction === 'check_out' ? 'btn-secondary' : 'btn-primary'
+            }`}
+            disabled={
+              (primaryAction === 'check_in'
+                ? !today?.canCheckIn
+                : !today?.canCheckOut) ||
+              actionLoading ||
+              geoLoading
+            }
+            onClick={
+              primaryAction === 'check_in'
+                ? requestCheckIn
+                : () => handleAttendance('check_out')
+            }
+            aria-label={primaryAction === 'check_in' ? 'Check in' : 'Check out'}
           >
             {actionLoading ? (
               <>
                 <span className="spinner spinner--sm" aria-hidden="true" />
                 Capturing…
               </>
-            ) : (
+            ) : primaryAction === 'check_in' ? (
               'Check in'
+            ) : (
+              'Check out'
             )}
           </button>
-          <button
-            type="button"
-            className="btn btn-lg dash-hero__cta"
-            disabled={!today?.canCheckOut || actionLoading || geoLoading}
-            onClick={() => handleAttendance('check_out')}
-          >
-            Check out
-          </button>
         </div>
+
+        {primaryAction === 'check_in' && !today?.canCheckIn && !actionLoading && !geoLoading ? (
+          <p className="dash-action-hint muted small" role="status">
+            {today?.checkOut
+              ? 'You have completed your attendance for today. Check in will be available tomorrow.'
+              : 'Check-in is not available right now (approved leave covers today).'}
+          </p>
+        ) : null}
 
         {error ? <div className="alert alert--error">{error}</div> : null}
 
@@ -380,6 +482,77 @@ export default function EmployeeDashboard() {
             onNext={() => setCalendarMonth((value) => nextISTMonthInput(value))}
             onToday={() => setCalendarMonth(getISTMonthInputValue())}
           />
+
+          <div className="dash-calendar-team" aria-label="Team attendance today">
+            <h3 className="dash-calendar-team__title">Team Attendance Today</h3>
+            {teamLoading && <p className="muted small">Loading team…</p>}
+            {teamError && <div className="alert alert--error">{teamError}</div>}
+            {!teamLoading && !teamError && (
+              <div className="dash-calendar-team__scroll">
+                <table className="dash-team-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Employee</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamStatus.length === 0 ? (
+                      <tr>
+                        <td colSpan={2} className="muted small dash-team-table__empty">
+                          No team members found.
+                        </td>
+                      </tr>
+                    ) : (
+                      teamStatus.map((member) => {
+                        const present =
+                          member.status === 'checked_in' || member.status === 'wfh';
+                        const statusDetail =
+                          member.status === 'checked_in'
+                            ? member.attendanceMode === 'wfh'
+                              ? 'WFH'
+                              : 'In Office'
+                            : member.status === 'wfh'
+                              ? 'WFH'
+                              : member.status === 'on_leave'
+                                ? 'On Leave'
+                                : 'Not Checked In';
+                        return (
+                          <tr key={member.userId}>
+                            <td className="dash-team-table__name">
+                              <span>
+                                {member.firstName ||
+                                  member.name?.split(' ')[0] ||
+                                  'Team Member'}
+                              </span>
+                              {member.roleName && (
+                                <span className="dash-team-table__code muted small">
+                                  {' '}
+                                  ({member.roleName})
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span
+                                className={`dash-team-table__badge dash-team-table__badge--${
+                                  present ? 'present' : 'absent'
+                                }`}
+                              >
+                                {present ? 'Present' : 'Absent'}
+                              </span>
+                              <span className="dash-team-table__detail muted small">
+                                {statusDetail}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </aside>
       </div>
 

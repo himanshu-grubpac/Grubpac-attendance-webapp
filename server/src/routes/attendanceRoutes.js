@@ -9,7 +9,9 @@ import {
   getHistory,
   getMonthSummary,
   getMyQuarterWarnings,
+  getTeamTodayStatus,
   getToday,
+  undoAttendanceAction,
 } from '../controllers/attendanceController.js';
 
 const router = Router();
@@ -19,9 +21,10 @@ router.get('/month-summary', authenticate, asyncHandler(getMonthSummary));
 router.use(authenticate, requireEmployeePortalAccess);
 
 router.get('/today', asyncHandler(getToday));
+router.get('/team-today', asyncHandler(getTeamTodayStatus));
 router.post('/check-in', attendanceLimiter, idempotencyMiddleware, asyncHandler(checkIn));
-router.post('/check-out', attendanceLimiter, asyncHandler(checkOut));
+router.post('/check-out', attendanceLimiter, idempotencyMiddleware, asyncHandler(checkOut));
 router.get('/history', asyncHandler(getHistory));
 router.get('/quarter-warnings', asyncHandler(getMyQuarterWarnings));
-
+router.post('/undo', asyncHandler(undoAttendanceAction));
 export default router;
