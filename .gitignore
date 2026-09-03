@@ -49,7 +49,6 @@ reqs.json
 check_esbuild.cjs
 *.plan.md
 # Dev-only scripts (e2e, seed, patch, verify)
-server/scripts/dev/
 server/scripts/check-requests.js
 server/scripts/check-state.mjs
 server/scripts/copy-atlas-to-local.mjs
