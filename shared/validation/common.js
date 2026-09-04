@@ -31,6 +31,13 @@ export const indianMobileSchema = z
     'Mobile must be a valid 10-digit Indian number.',
   );
 
+export const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email('Enter a valid email address.')
+  .max(254, 'Email is too long.');
+
 export const latitudeSchema = z
   .number()
   .finite()

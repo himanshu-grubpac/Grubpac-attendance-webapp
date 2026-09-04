@@ -9,7 +9,8 @@ confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = false
 image_repositories = []
-parameter_overrides = "ClientOrigin=\"https://d1qk2thz664f5x.cloudfront.net\" HelpUploadsBucketName=\"grubpac-attendance-help-uploads-662252246711\" ReservedConcurrency=0 EnableWarmupSchedule=true"
+# Fill Smtp*/BrevoApiKey/EmailFrom before deploying or notification email/SMS stays disabled.
+parameter_overrides = "ClientOrigin=\"https://d1qk2thz664f5x.cloudfront.net\" HelpUploadsBucketName=\"grubpac-attendance-help-uploads-662252246711\" ReservedConcurrency=0 EnableWarmupSchedule=true JwtExpiresIn=\"12h\" JwtCookieMaxAgeMs=\"43200000\" SmtpHost=\"\" SmtpPort=\"587\" SmtpSecure=\"false\" SmtpUser=\"\" SmtpPass=\"\" EmailFrom=\"\" EmailFromName=\"Grubpac Attendance\" BrevoApiKey=\"\" SmsSender=\"GRUBPAC\" SmsDefaultCountryCode=\"91\" LeaveDecisionUndoMs=\"15000\" AutoCheckoutEnabled=\"true\" AutoCheckoutOfficeDay=\"same\" AutoCheckoutOfficeTime=\"23:59\" AutoCheckoutWfhDay=\"next\" AutoCheckoutWfhTime=\"06:00\""
 
 [default.global.parameters]
 region = "ap-south-1"

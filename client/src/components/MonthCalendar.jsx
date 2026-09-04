@@ -7,6 +7,7 @@ const STATUS_LABELS = {
   half_day: 'Half day',
   leave: 'Leave',
   leave_future: 'Approved leave (upcoming)',
+  wfh_pending: 'WFH pending approval',
   wfh: 'WFH',
   wfh_future: 'Approved WFH (upcoming)',
   holiday: 'Holiday',
@@ -18,6 +19,7 @@ const STATUS_LABELS = {
 
 /** Short in-cell tags (leave stays color-only; WFH is labeled explicitly). */
 const STATUS_CELL_TAGS = {
+  wfh_pending: 'WFH',
   wfh: 'WFH',
   wfh_future: 'WFH',
 };
@@ -181,7 +183,7 @@ export default function MonthCalendar({
       )}
 
       <div className="month-calendar__legend" aria-label="Calendar legend">
-        {['present', 'half_day', 'leave', 'leave_future', 'wfh', 'wfh_future', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
+        {['present', 'half_day', 'leave', 'leave_future', 'wfh_pending', 'wfh', 'wfh_future', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
           <span key={status} className="month-calendar__legend-item">
             <span className={`month-calendar__swatch month-calendar__swatch--${status}`} aria-hidden="true" />
             {STATUS_LABELS[status]}

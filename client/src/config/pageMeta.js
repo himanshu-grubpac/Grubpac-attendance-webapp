@@ -3,8 +3,8 @@ const PAGE_META = [
   { match: '/admin/dashboard', title: 'Dashboard', subtitle: '' },
   {
     match: '/admin/users/bulk-upload',
-    title: 'Bulk Employee Registration',
-    subtitle: 'Download the spreadsheet template, fill employee rows, and upload to register accounts in bulk.',
+    title: 'Bulk Employee Sync',
+    subtitle: 'Download the employee directory, make changes, and upload to sync employee records.',
   },
   {
     match: '/admin/users/register',
@@ -27,8 +27,8 @@ const PAGE_META = [
   { match: '/admin/attendance', title: 'Attendance history', subtitle: 'View and manage team attendance records.' },
   {
     match: '/admin/audit-logs',
-    title: 'Login Audit Logs',
-    subtitle: 'Review successful and failed login attempts across the system.',
+    title: 'Audit Logs',
+    subtitle: 'Login events, bulk uploads, employee registrations, and other admin actions.',
   },
   {
     match: '/admin/leave/approvals',
@@ -36,7 +36,7 @@ const PAGE_META = [
     subtitle: 'Review and action team leave requests awaiting approval.',
   },
   { match: '/admin/leave/team-calendar', title: 'Calendar management', subtitle: '' },
-  { match: '/admin/leave/streaks', title: 'Streaks', subtitle: 'Quarterly warning usage per employee.' },
+  { match: '/admin/leave/streaks', title: 'Late Warning', subtitle: 'Quarterly warning usage per employee.' },
   {
     match: '/admin/leave/policies',
     title: 'Leave policies',

@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
-import { SYSTEM_ROLE_SLUGS } from '../../shared/permissions.js';
+import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '../.env') });
@@ -151,3 +151,4 @@ main().catch(async (error) => {
   }
   process.exit(1);
 });
+

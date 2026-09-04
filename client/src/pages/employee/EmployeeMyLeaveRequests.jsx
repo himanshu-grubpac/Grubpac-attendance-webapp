@@ -1,16 +1,25 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { formatISTDate } from '../../utils/datetime.js';
+import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
-import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
-import { useToast } from '../../context/ToastContext.jsx';
+
+/** True when the leave request can still be cancelled (end date has not passed, IST). */
+function canCancelLeaveRequest(item) {
+  if (item.status !== 'pending' && item.status !== 'approved') return false;
+  const todayKey = getISTDateInputValue();
+  const endKey = typeof item.endDate === 'string' ? item.endDate.slice(0, 10) : null;
+  if (!endKey) return false;
+  return endKey >= todayKey;
+}
 
 export default function EmployeeMyLeaveRequests() {
-  const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess, showError } = useToast();
+  const { showActionPopup } = useActionPopup();
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -35,18 +44,45 @@ export default function EmployeeMyLeaveRequests() {
     loadRequests(page);
   }, [page]);
 
-  async function handleCancel(id) {
-    await requestConfirm({
-      title: 'Cancel leave request?',
-      message: 'Cancel this pending leave request? Your manager will no longer see it as pending.',
-      confirmLabel: 'Cancel request',
-      variant: 'danger',
-      onConfirm: async () => {
-        await leaveApi.cancelRequest(id);
+  async function handleCancel(item) {
+    const isApproved = item.status === 'approved';
+    const message = isApproved
+      ? 'Cancel this approved leave? The leave days will be returned to your balance.'
+      : 'Cancel this leave request? It will be removed.';
+    if (!window.confirm(message)) {
+      return;
+    }
+    try {
+      const response = await leaveApi.cancelRequest(item.id);
+      if (isApproved) {
+        const durationMs = response?.request?.decisionUndoExpiresAt
+          ? Math.max(0, new Date(response.request.decisionUndoExpiresAt).getTime() - Date.now())
+          : 0;
+        if (durationMs > 0) {
+          showActionPopup({
+            message: 'Approved leave cancelled. If done by mistake, click Undo to revert.',
+            undoLabel: 'Undo',
+            onUndo: async () => {
+              try {
+                await leaveApi.undoCancellation(item.id);
+                showSuccess('Cancellation undone. Leave restored.');
+                loadRequests(page);
+              } catch (err) {
+                showError(getErrorMessage(err));
+              }
+            },
+            durationMs,
+          });
+        } else {
+          showSuccess('Approved leave cancelled. The days were returned to your balance.');
+        }
+      } else {
         showSuccess('Leave request cancelled.');
-        await loadRequests(page);
-      },
-    });
+      }
+      loadRequests(page);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   }
 
   return (
@@ -96,8 +132,8 @@ export default function EmployeeMyLeaveRequests() {
                         <LeaveStatusBadge status={item.status} />
                       </td>
                       <td data-label="Action" className="cell-actions">
-                        {item.status === 'pending' && (
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item.id)}>
+                        {canCancelLeaveRequest(item) && (
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleCancel(item)}>
                             Cancel
                           </button>
                         )}
@@ -110,8 +146,6 @@ export default function EmployeeMyLeaveRequests() {
         )}
         <PaginationBar pagination={pagination} onPageChange={setPage} />
       </div>
-
-      {confirmDialog}
     </div>
   );
 }

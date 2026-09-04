@@ -7,19 +7,21 @@ import { Department } from '../models/Department.js';
 import { OfficeSettings } from '../models/OfficeSettings.js';
 import { WeekAttendanceConfirmation } from '../models/WeekAttendanceConfirmation.js';
 import {
+  buildEmployeeDirectoryWorkbook,
   buildEmployeeTemplateWorkbook,
   createEmployee,
   importEmployeesFromRows,
+  importEmployeesFromRowsUpsert,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
-import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay } from '../services/attendanceService.js';
+import { getAdminAttendance, adminEditAttendanceRecord, adminUpsertAttendanceForDay, getTeamTodayStatusService } from '../services/attendanceService.js';
 import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
 } from '../services/attendancePolicyService.js';
-import { officeSchema } from '../../../shared/validation/office.js';
+import { officeSchema, officeUpdateSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
-import { adminResetPasswordSchema } from '../../../shared/validation/auth.js';
+import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
   adminAttendanceEditSchema,
   adminAttendanceUpsertSchema,
@@ -75,7 +77,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
     field: 'endingDate',
   };
 }
-import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
+import { auditLog, auditLogSync, getRequestAuditContext } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 
@@ -199,7 +201,7 @@ export async function listEmployees(req, res) {
   const [employees, total] = await Promise.all([
     User.find(query)
       .populate(USER_POPULATE_FIELDS)
-      .sort({ createdAt: -1 })
+      .sort({ name: 1 })
       .skip(skip)
       .limit(limit),
     User.countDocuments(query),
@@ -210,13 +212,18 @@ export async function listEmployees(req, res) {
       ...employee.toSafeJSON(),
       lastLoginAt: employee.lastLoginAt ?? null,
     })),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 1,
-    },
-  });
+pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
+  }
+
+export async function getTeamTodayStatusAdmin(req, res) {
+  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
+  res.json({ teamStatus: status });
 }
 
 export async function getEmployeeStats(req, res) {
@@ -314,16 +321,49 @@ export async function listManagers(req, res) {
 export async function updateEmployee(req, res) {
   const parsed = updateEmployeeOrgSchema.parse(req.body);
 
-  if (isProfileOrgUpdate(req.body)) {
-    const role = await resolveRole(req.body.roleId);
-    const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
-    buildEmployeeProfileUpdateSchema({ roleSlug: role.slug, hasDepartments }).parse(req.body);
-  }
-
   const employee = await User.findById(req.params.id).populate(USER_POPULATE_FIELDS);
 
   if (!employee) {
     return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  if (isProfileOrgUpdate(req.body)) {
+    // Validate the merged profile (stored values + patch), not the raw patch:
+    // PATCH may carry a subset (e.g. { departmentId, roleId }) while org rules
+    // (reporting manager for employees, managed departments for leads) must be
+    // evaluated against the effective record. Unknown/extra keys are stripped
+    // by the schema; writes below still apply only the provided fields.
+    const role = req.body.roleId
+      ? await resolveRole(req.body.roleId)
+      : await resolveRole(refId(employee.roleId));
+    const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
+    const mergedProfile = {
+      firstName: employee.firstName,
+      lastName: employee.lastName ?? undefined,
+      email: employee.email,
+      mobile: employee.mobile,
+      designation: employee.designation,
+      joiningDate: employee.joiningDate
+        ? toEmployeeDateInputValue(employee.joiningDate)
+        : undefined,
+      dateOfBirth: employee.dateOfBirth
+        ? toEmployeeDateInputValue(employee.dateOfBirth)
+        : undefined,
+      endingDate: employee.endingDate
+        ? toEmployeeDateInputValue(employee.endingDate)
+        : undefined,
+      roleId: refId(employee.roleId),
+      departmentId: employee.departmentId ? refId(employee.departmentId) : undefined,
+      reportingManagerId: employee.reportingManagerId
+        ? refId(employee.reportingManagerId)
+        : null,
+      delegateApproverId: employee.delegateApproverId
+        ? refId(employee.delegateApproverId)
+        : null,
+      managedDepartmentIds: (employee.managedDepartmentIds ?? []).map((id) => refId(id)),
+      ...req.body,
+    };
+    buildEmployeeProfileUpdateSchema({ roleSlug: role.slug, hasDepartments }).parse(mergedProfile);
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
@@ -495,6 +535,8 @@ export async function resetEmployeePassword(req, res) {
   }
 
   employee.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  // Resetting the password also revokes the employee's PIN credential.
+  employee.pin4Hash = null;
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
@@ -507,17 +549,43 @@ export async function resetEmployeePassword(req, res) {
   res.json({ message: 'Employee password reset successfully.' });
 }
 
+export async function resetEmployeePin(req, res) {
+  const parsed = adminResetPinSchema.parse(req.body);
+  const employee = await User.findById(req.params.id);
+
+  if (!employee) {
+    return res.status(404).json({ message: 'Employee not found.' });
+  }
+
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
+  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+    return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
+  }
+
+  employee.pin4Hash = await bcrypt.hash(parsed.newPin, 12);
+  employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
+  await employee.save();
+
+  auditLog('pin_reset_by_admin', {
+    adminId: req.user._id.toString(),
+    employeeId: employee._id.toString(),
+    email: employee.email,
+  });
+
+  res.json({ message: 'Employee PIN reset successfully.' });
+}
+
 export async function downloadEmployeeTemplate(req, res) {
-  const buffer = buildEmployeeTemplateWorkbook();
+  const buffer = await buildEmployeeDirectoryWorkbook();
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   );
   res.setHeader(
     'Content-Disposition',
-    'attachment; filename="employee-registration-template.xlsx"',
+    'attachment; filename="employee-directory-export.xlsx"',
   );
-  res.setHeader('Content-Length', buffer.length);
+  res.setHeader('Content-Length', buffer.byteLength ?? buffer.length);
   res.end(buffer);
 }
 
@@ -531,11 +599,28 @@ export async function bulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
-  const result = await importEmployeesFromRows(rows, req.user._id);
-  auditLog('employee_bulk_upload', {
+  const result = await importEmployeesFromRowsUpsert(rows, req.user._id);
+
+  const changes = result.results
+    .filter((item) => item.status === 'updated' || item.status === 'created')
+    .map((item) => ({
+      rowNumber: item.rowNumber,
+      id: item.id || null,
+      email: item.email || null,
+      status: item.status,
+      changedFields: item.changedFields ?? [],
+      ignoredFields: item.ignoredFields ?? [],
+    }));
+
+  auditLogSync('employee_bulk_upsert', {
     adminId: req.user._id.toString(),
+    email: req.user.email,
     summary: result.summary,
+    fileName: req.file.originalname,
+    changes,
+    ...getRequestAuditContext(req),
   });
+
   res.status(201).json(result);
 }
 
@@ -546,8 +631,17 @@ export async function getOfficeSettingsHandler(req, res) {
 }
 
 export async function updateOfficeSettings(req, res) {
-  const parsed = officeSchema.parse(req.body);
+  const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
+  if (parsed.autoCheckout) {
+    const existing = (settings && settings.autoCheckout) || {};
+    parsed.autoCheckout = {
+      enabled: parsed.autoCheckout.enabled ?? existing.enabled ?? true,
+      office: parsed.autoCheckout.office ?? existing.office ?? { day: 'same', time: '23:59' },
+      wfh: parsed.autoCheckout.wfh ?? existing.wfh ?? { day: 'next', time: '06:00' },
+    };
+  }
 
   if (!settings) {
     settings = await OfficeSettings.create({
@@ -555,8 +649,11 @@ export async function updateOfficeSettings(req, res) {
       updatedBy: req.user._id,
     });
   } else {
-    Object.assign(settings, parsed, { updatedBy: req.user._id });
-    await settings.save();
+    await settings.updateOne(
+      { $set: { ...parsed, updatedBy: req.user._id } },
+      { runValidators: true },
+    );
+    settings = await OfficeSettings.findById(settings._id);
   }
 
   auditLog('office_settings_updated', {
@@ -843,6 +940,8 @@ export async function unconfirmWeekAttendance(req, res) {
 }
 
 const LOGIN_AUDIT_ACTIONS = ['login_success', 'login_failed'];
+const BULK_UPLOAD_AUDIT_ACTIONS = ['employee_bulk_upsert', 'employee_bulk_upload'];
+const ALL_AUDIT_ACTIONS = [...LOGIN_AUDIT_ACTIONS, ...BULK_UPLOAD_AUDIT_ACTIONS];
 const CONFLICT_FILTER_SCAN_LIMIT = 500;
 
 function mapAuditLogResponse(log, conflict) {
@@ -866,9 +965,10 @@ function mapAuditLogResponse(log, conflict) {
 
 export async function listAuditLogs(req, res) {
   const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
-  const query = {
-    action: action ?? { $in: LOGIN_AUDIT_ACTIONS },
-  };
+  const query = {};
+  if (action) {
+    query.action = action;
+  }
 
   if (search) {
     query.email = { $regex: escapeRegex(search), $options: 'i' };

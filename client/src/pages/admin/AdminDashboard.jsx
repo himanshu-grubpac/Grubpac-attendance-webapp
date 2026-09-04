@@ -59,6 +59,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [reportsError, setReportsError] = useState('');
 
+
   useEffect(() => {
     setLoading(true);
     setReportsError('');
@@ -71,6 +72,8 @@ export default function AdminDashboard() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+
 
   return (
     <div className="page page--admin-home">
@@ -113,6 +116,8 @@ export default function AdminDashboard() {
           })}
         </div>
       ) : null}
+
+
     </div>
   );
 }

@@ -17,6 +17,10 @@ import leaveRoutes from './routes/leaveRoutes.js';
 import helpRoutes from './routes/helpRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
+import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
+import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
+import { startLeaveDecisionNotifyScheduler } from './jobs/leaveJobs.js';
+import { cleanupStalePendingAttachments } from './services/helpAttachmentService.js';
 
 export const app = express();
 
@@ -95,6 +99,7 @@ app.use('/api/leave', leaveRoutes);
 app.use('/api/help', helpRoutes);
 app.use('/api/salary', salaryRoutes);
 app.use('/api/demo-faq', demoFaqRoutes);
+app.use('/api/preferences', tablePreferenceRoutes);
 
 app.use(errorHandler);
 
@@ -102,9 +107,13 @@ export async function startServer() {
   if (mongoose.connection.readyState === 0) {
     await connectDatabase();
   }
+  cleanupStalePendingAttachments().catch(() => {});
+  setInterval(() => { cleanupStalePendingAttachments().catch(() => {}); }, 30 * 60 * 1000);
   return new Promise((resolve) => {
     const server = app.listen(env.port, () => {
       console.log(`Server listening on http://localhost:${env.port}`);
+      startAutoCheckoutScheduler();
+      startLeaveDecisionNotifyScheduler();
       resolve(server);
     });
   });

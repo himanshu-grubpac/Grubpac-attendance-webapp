@@ -130,6 +130,42 @@ export function applyDateOfBirthRules(data, ctx) {
       message: 'Date of birth must be today or earlier.',
     });
   }
+
+  const joiningDate = new Date(data.joiningDate);
+  const dobDate = new Date(data.dateOfBirth);
+
+  if (Number.isNaN(joiningDate.getTime())) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['joiningDate'],
+      message: 'Invalid joining date.',
+    });
+    return;
+  }
+
+  let age =
+    joiningDate.getFullYear() -
+    dobDate.getFullYear();
+
+  const monthDiff =
+    joiningDate.getMonth() -
+    dobDate.getMonth();
+
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 &&
+      joiningDate.getDate() < data.dateOfBirth.getDate())
+  ) {
+    age -= 1;
+  }
+
+  if (age < 18) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dateOfBirth'],
+      message: 'Employee must be at least 18 years old on the joining date.',
+    });
+  }
 }
 
 /** Shared org/profile conditional rules (role slug + department availability). */

@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { officeSchema } from '@shared/validation/office.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { validateForm } from '../../utils/validation.js';
 import FieldError from '../../components/FieldError.jsx';
-import TimeField from '../../components/TimeField.jsx';
+import TimeField, { formatTimeDisplay } from '../../components/TimeField.jsx';
+import AutoCheckoutModal from '../../components/AutoCheckoutModal.jsx';
 
 const WEEKDAY_OPTIONS = [
   { value: 0, label: 'Sunday' },
@@ -30,6 +31,11 @@ const emptyOffice = {
   halfDayThresholdTime: '10:00',
   warningsPerQuarter: 3,
   weekendDays: [0, 6],
+  autoCheckout: {
+    enabled: true,
+    office: { day: 'same', time: '23:59' },
+    wfh: { day: 'next', time: '06:00' },
+  },
 };
 
 export default function AdminOfficeSettings() {
@@ -39,7 +45,12 @@ export default function AdminOfficeSettings() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
   const { getPosition, loading: geoLoading, error: geoError } = useGeolocation();
+  const officeStartTimeRef = useRef(null);
+  const officeEndTimeRef = useRef(null);
+  const graceThresholdTimeRef = useRef(null);
+  const halfDayThresholdTimeRef = useRef(null);
 
   useEffect(() => {
     adminApi
@@ -59,6 +70,13 @@ export default function AdminOfficeSettings() {
             halfDayThresholdTime: settings.halfDayThresholdTime ?? '10:00',
             warningsPerQuarter: settings.warningsPerQuarter ?? 3,
             weekendDays: Array.isArray(settings.weekendDays) ? settings.weekendDays : [0, 6],
+            autoCheckout: settings.autoCheckout
+              ? {
+                  enabled: settings.autoCheckout.enabled ?? true,
+                  office: settings.autoCheckout.office ?? { day: 'same', time: '23:59' },
+                  wfh: settings.autoCheckout.wfh ?? { day: 'next', time: '06:00' },
+                }
+              : { enabled: true, office: { day: 'same', time: '23:59' }, wfh: { day: 'next', time: '06:00' } },
           });
         }
       })
@@ -88,6 +106,16 @@ export default function AdminOfficeSettings() {
     setError('');
     setFieldErrors({});
 
+    // Commit any pending time inputs (TimeField only commits on blur/period
+    // click) so the submitted values are what the user actually typed.
+    const officeStartTime =
+      officeStartTimeRef.current?.commit?.() ?? form.officeStartTime;
+    const officeEndTime = officeEndTimeRef.current?.commit?.() ?? form.officeEndTime;
+    const graceThresholdTime =
+      graceThresholdTimeRef.current?.commit?.() ?? form.graceThresholdTime;
+    const halfDayThresholdTime =
+      halfDayThresholdTimeRef.current?.commit?.() ?? form.halfDayThresholdTime;
+
     const payload = {
       name: form.name.trim(),
       latitude: Number(form.latitude),
@@ -95,12 +123,13 @@ export default function AdminOfficeSettings() {
       radiusMeters: Number(form.radiusMeters),
       maxAccuracyMeters: Number(form.maxAccuracyMeters),
       sandwichLeaveEnabled: Boolean(form.sandwichLeaveEnabled),
-      officeStartTime: form.officeStartTime,
-      officeEndTime: form.officeEndTime,
-      graceThresholdTime: form.graceThresholdTime,
-      halfDayThresholdTime: form.halfDayThresholdTime,
+      officeStartTime,
+      officeEndTime,
+      graceThresholdTime,
+      halfDayThresholdTime,
       warningsPerQuarter: Number(form.warningsPerQuarter),
       weekendDays: form.weekendDays,
+      autoCheckout: form.autoCheckout,
     };
 
     const validation = validateForm(officeSchema, payload);
@@ -119,6 +148,7 @@ export default function AdminOfficeSettings() {
         officeEndTime: updatedSettings.officeEndTime,
         graceThresholdTime: updatedSettings.graceThresholdTime,
         halfDayThresholdTime: updatedSettings.halfDayThresholdTime,
+        autoCheckout: validation.data.autoCheckout ?? updatedSettings.autoCheckout ?? current.autoCheckout,
       }));
       window.dispatchEvent(
         new CustomEvent('attendance:office-policy-updated', { detail: updatedSettings }),
@@ -136,6 +166,17 @@ export default function AdminOfficeSettings() {
     }
   }
 
+  async function handleAutoCheckoutSave(data) {
+    const result = await adminApi.updateOfficeSettings({ autoCheckout: data });
+    const saved = result.settings?.autoCheckout ?? data;
+    setForm((prev) => ({ ...prev, autoCheckout: saved }));
+    showSuccess('Auto-checkout timings saved.');
+    setAutoOpen(false);
+  }
+
+  function handleAutoClose() {
+    setAutoOpen(false);
+  }
   if (loading) {
     return (
       <div className="page page--form">
@@ -230,22 +271,22 @@ export default function AdminOfficeSettings() {
           </div>
           <label className="form-field--sm">
             Office start (Mon–Fri)
-            <TimeField value={form.officeStartTime} onChange={(officeStartTime) => setForm({ ...form, officeStartTime })} aria-label="Office start time" />
+            <TimeField value={form.officeStartTime} onChange={(officeStartTime) => setForm({ ...form, officeStartTime })} aria-label="Office start time" innerRef={officeStartTimeRef} />
             <FieldError message={fieldErrors.officeStartTime} />
           </label>
           <label className="form-field--sm">
             Office end (Mon–Fri)
-            <TimeField value={form.officeEndTime} onChange={(officeEndTime) => setForm({ ...form, officeEndTime })} aria-label="Office end time" />
+            <TimeField value={form.officeEndTime} onChange={(officeEndTime) => setForm({ ...form, officeEndTime })} aria-label="Office end time" innerRef={officeEndTimeRef} />
             <FieldError message={fieldErrors.officeEndTime} />
           </label>
           <label className="form-field--sm">
             Grace / warning threshold
-            <TimeField value={form.graceThresholdTime} onChange={(graceThresholdTime) => setForm({ ...form, graceThresholdTime })} aria-label="Warning threshold time" />
+            <TimeField value={form.graceThresholdTime} onChange={(graceThresholdTime) => setForm({ ...form, graceThresholdTime })} aria-label="Warning threshold time" innerRef={graceThresholdTimeRef} />
             <FieldError message={fieldErrors.graceThresholdTime} />
           </label>
           <label className="form-field--sm">
             Half-day threshold
-            <TimeField value={form.halfDayThresholdTime} onChange={(halfDayThresholdTime) => setForm({ ...form, halfDayThresholdTime })} aria-label="Half-day threshold time" />
+            <TimeField value={form.halfDayThresholdTime} onChange={(halfDayThresholdTime) => setForm({ ...form, halfDayThresholdTime })} aria-label="Half-day threshold time" innerRef={halfDayThresholdTimeRef} />
             <FieldError message={fieldErrors.halfDayThresholdTime} />
           </label>
           <fieldset className="form-grid__full office-weekend-fieldset">
@@ -283,6 +324,22 @@ export default function AdminOfficeSettings() {
             />
             <FieldError message={fieldErrors.warningsPerQuarter} />
           </label>
+          <div className="form-grid__full">
+            <p className="card__section-title">Auto-checkout</p>
+            <p className="muted small">
+              Employees still checked in are automatically checked out by a background job. Office
+              check-ins close the same day; WFH check-ins close the next day (IST).
+            </p>
+            <div className="auto-checkout-summary">
+              <span>Enabled: {form.autoCheckout?.enabled ? 'Yes' : 'No'}</span>
+              <span>Office: {form.autoCheckout?.office ? `${form.autoCheckout.office.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.office.time) ?? form.autoCheckout.office.time}` : 'Same day at 11:59 PM'}</span>
+              <span>WFH: {form.autoCheckout?.wfh ? `${form.autoCheckout.wfh.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.wfh.time) ?? form.autoCheckout.wfh.time}` : 'Next day at 6:00 AM'}</span>
+            </div>
+            <button type="button" className="btn" onClick={() => setAutoOpen(true)}>
+              Set Auto-Checkout Timings
+            </button>
+            <AutoCheckoutModal open={autoOpen} initial={form.autoCheckout} onClose={handleAutoClose} onSave={handleAutoCheckoutSave} />
+          </div>
           <div className="form-actions form-actions--sticky">
             <button
               type="button"

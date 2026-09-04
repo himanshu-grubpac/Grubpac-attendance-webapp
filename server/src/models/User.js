@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
     mobile: { type: String, required: true, unique: true, trim: true },
+    /** Whether the user has opted in to receive WhatsApp notifications. */
+    whatsappOptIn: { type: Boolean, default: false },
+    /** When the user opted in to WhatsApp notifications (null if not opted in). */
+    whatsappOptInAt: { type: Date, default: null },
     employeeCode: { type: String, trim: true, sparse: true, unique: true },
     /** @deprecated Use departmentId — kept for migration and bulk import compat. */
     department: { type: String, trim: true },
@@ -52,6 +56,8 @@ const userSchema = new mongoose.Schema(
     /** Null while employed; set when the employee separates. */
     endingDate: { type: Date, default: null },
     passwordHash: { type: String, required: true },
+    /** 4-digit PIN hash (bcrypt). 6-digit PINs were retired — see unset-pin6 migration. */
+    pin4Hash: { type: String, default: null },
     /** Monthly gross salary in INR — admin/HR only. */
     monthlySalary: { type: Number, default: null, min: 0 },
     salaryEffectiveFrom: { type: Date, default: null },
@@ -122,6 +128,8 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     monthlySalary: this.monthlySalary ?? null,
     salaryEffectiveFrom: this.salaryEffectiveFrom ?? null,
     salaryCurrency: 'INR',
+    hasPassword: Boolean(this.passwordHash),
+    hasPin: Boolean(this.pin4Hash),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

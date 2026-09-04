@@ -6,6 +6,7 @@ import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachme
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { createNotification } from './notificationService.js';
+import { deleteS3Objects } from './helpAttachmentService.js';
 import { auditLog } from '../utils/auditLog.js';
 
 function throwError(message, statusCode = 400) {
@@ -91,12 +92,13 @@ export function canManageTicket(actor, ticket, permissions) {
   return managerId === actorId;
 }
 
-export async function createHelpTicket(actor, payload) {
+export async function createHelpTicket(actor, payload, permissions = []) {
+  const canSetPriority = hasPermission(permissions, PERMISSIONS.HELP_MANAGE);
   const ticket = await HelpTicket.create({
     title: payload.title,
     category: payload.category,
     description: payload.description,
-    priority: payload.priority ?? 'medium',
+    priority: canSetPriority && payload.priority ? payload.priority : 'medium',
     status: 'open',
     createdBy: actor._id,
   });
@@ -221,14 +223,37 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
     HelpComment.find({ ticketId: ticket._id })
       .populate(HELP_COMMENT_POPULATE)
       .sort({ createdAt: 1 }),
-    HelpAttachment.find({ ticketId: ticket._id, status: 'confirmed' })
+    HelpAttachment.find({ ticketId: ticket._id, status: 'confirmed', commentId: null })
       .populate(HELP_ATTACHMENT_POPULATE)
       .sort({ createdAt: 1 }),
   ]);
 
+  const commentIds = comments.map((c) => c._id);
+  const commentAttachments = commentIds.length > 0
+    ? await HelpAttachment.find({
+        ticketId: ticket._id,
+        commentId: { $in: commentIds },
+        status: 'confirmed',
+      })
+        .populate(HELP_ATTACHMENT_POPULATE)
+        .sort({ createdAt: 1 })
+    : [];
+
+  const attachmentsByComment = {};
+  for (const att of commentAttachments) {
+    const cId = att.commentId?.toString?.() ?? att.commentId?.toString?.() ?? null;
+    if (cId) {
+      if (!attachmentsByComment[cId]) attachmentsByComment[cId] = [];
+      attachmentsByComment[cId].push(att.toSafeJSON());
+    }
+  }
+
   return {
     ticket: ticket.toSafeJSON(),
-    comments: comments.map((item) => item.toSafeJSON()),
+    comments: comments.map((item) => ({
+      ...item.toSafeJSON(),
+      attachments: attachmentsByComment[item._id.toString()] ?? [],
+    })),
     attachments: attachmentDocs.map((item) => item.toSafeJSON()),
   };
 }
@@ -240,7 +265,15 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
   }
 
   const previousStatus = ticket.status;
-  ticket.status = payload.status;
+  const previousPriority = ticket.priority;
+
+  if (payload.status !== undefined) {
+    ticket.status = payload.status;
+  }
+
+  if (payload.priority !== undefined) {
+    ticket.priority = payload.priority;
+  }
 
   if (payload.assignedTo !== undefined) {
     if (payload.assignedTo) {
@@ -261,21 +294,33 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
 
   const creatorId = getCreatorId(ticket);
   if (creatorId && creatorId !== actor._id.toString()) {
-    await createNotification({
-      userId: creatorId,
-      type: 'help.status',
-      title: 'Help ticket updated',
-      body: `Your ticket "${ticket.title}" is now ${payload.status.replace('_', ' ')}.`,
-      link: `/employee/help/${ticket._id.toString()}`,
-      metadata: { ticketId: ticket._id.toString(), status: payload.status },
-    });
+    const changed = [];
+    if (payload.status !== undefined && payload.status !== previousStatus) {
+      changed.push(`status to ${payload.status.replace('_', ' ')}`);
+    }
+    if (payload.priority !== undefined && payload.priority !== previousPriority) {
+      changed.push(`priority to ${payload.priority}`);
+    }
+
+    if (changed.length > 0) {
+      await createNotification({
+        userId: creatorId,
+        type: 'help.status',
+        title: 'Help ticket updated',
+        body: `Your ticket "${ticket.title}" — ${changed.join(' and ')}.`,
+        link: `/employee/help/${ticket._id.toString()}`,
+        metadata: { ticketId: ticket._id.toString(), status: payload.status, priority: payload.priority },
+      });
+    }
   }
 
   auditLog('help_ticket_status_updated', {
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
     previousStatus,
-    status: payload.status,
+    status: payload.status ?? ticket.status,
+    previousPriority,
+    priority: ticket.priority,
   });
 
   return ticket.toSafeJSON();
@@ -347,4 +392,56 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
   });
 
   return comment.toSafeJSON();
+}
+
+export async function deleteHelpTicket(ticketId, actor, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canManageTicket(actor, ticket, permissions)) {
+    throwError('You are not authorized to delete this ticket.', 403);
+  }
+
+  const attachments = await HelpAttachment.find({ ticketId: ticket._id }).select('s3Key');
+  await deleteS3Objects(attachments.map((a) => a.s3Key));
+
+  await HelpAttachment.deleteMany({ ticketId: ticket._id });
+  await HelpComment.deleteMany({ ticketId: ticket._id });
+  await HelpTicket.findByIdAndDelete(ticket._id);
+
+  auditLog('help_ticket_deleted', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+  });
+}
+
+export async function deleteHelpComment(ticketId, commentId, actor, permissions) {
+  const ticket = await loadTicket(ticketId);
+  if (!canViewTicket(actor, ticket, permissions)) {
+    throwError('You do not have permission to delete this comment.', 403);
+  }
+
+  if (!mongoose.isValidObjectId(commentId)) {
+    throwError('Comment not found.', 404);
+  }
+
+  const comment = await HelpComment.findOne({ _id: commentId, ticketId: ticket._id });
+  if (!comment) {
+    throwError('Comment not found.', 404);
+  }
+
+  const commentCreatorId = comment.userId?.toString?.() ?? comment.userId?._id?.toString?.() ?? null;
+  if (commentCreatorId !== actor._id.toString() && !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
+    throwError('You can only delete your own comments.', 403);
+  }
+
+  const commentAttachments = await HelpAttachment.find({ commentId: comment._id }).select('s3Key');
+  await deleteS3Objects(commentAttachments.map((a) => a.s3Key));
+
+  await HelpAttachment.deleteMany({ commentId: comment._id });
+  await HelpComment.findByIdAndDelete(comment._id);
+
+  auditLog('help_ticket_comment_deleted', {
+    userId: actor._id.toString(),
+    ticketId: ticket._id.toString(),
+    commentId: comment._id.toString(),
+  });
 }

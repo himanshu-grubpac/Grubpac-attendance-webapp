@@ -22,7 +22,7 @@ export function getCsrfCookieOptions() {
   return {
     httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge: env.jwtCookieMaxAgeMs,
     path: '/',
   };
@@ -36,7 +36,7 @@ export function clearCsrfCookie(res) {
   res.clearCookie(CSRF_COOKIE_NAME, {
     httpOnly: false,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
   });
 }
@@ -52,6 +52,12 @@ export function csrfProtection(req, res, next) {
 
   const path = req.path ?? '';
   if (path === '/auth/admin/login' || path === '/auth/user/login') {
+    return next();
+  }
+
+  // Email one-click leave approve/reject: the single-use token in the link is the
+  // authorization (and the CSRF defense), so no session CSRF token is expected.
+  if (path === '/leave/decision-link' || path === '/leave/decision-login') {
     return next();
   }
 

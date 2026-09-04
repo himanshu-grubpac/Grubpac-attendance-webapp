@@ -8,6 +8,7 @@ import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
+import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -15,13 +16,8 @@ import FieldError from '../../components/FieldError.jsx';
 import UserGuideLinks from '../../components/UserGuideLinks.jsx';
 
 const CATEGORIES = ['Login', 'Attendance', 'Leave', 'Salary', 'Other'];
-const PRIORITIES = ['low', 'medium', 'high'];
 
 const CATEGORY_OPTIONS = CATEGORIES.map((item) => ({ value: item, label: item }));
-const PRIORITY_OPTIONS = PRIORITIES.map((item) => ({
-  value: item,
-  label: item.charAt(0).toUpperCase() + item.slice(1),
-}));
 
 const MAX_ATTACHMENTS = 5;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -36,7 +32,6 @@ const ACCEPT_ATTR = '.jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,
 const EMPTY_FORM = {
   title: '',
   category: 'Other',
-  priority: 'medium',
   description: '',
 };
 
@@ -117,6 +112,7 @@ function uploadFileToS3(uploadUrl, file, headers = {}, onProgress) {
         onProgress?.(Math.round((event.loaded / event.total) * 100));
       }
     };
+    xhr.timeout = 120_000;
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
@@ -125,6 +121,7 @@ function uploadFileToS3(uploadUrl, file, headers = {}, onProgress) {
       reject(new Error(`Upload failed (${xhr.status})`));
     };
     xhr.onerror = () => reject(new Error('Upload failed.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out.'));
     xhr.send(file);
   });
 }
@@ -390,23 +387,35 @@ export default function EmployeeHelp() {
           });
 
           const failedCount = results.filter((item) => !item.success).length;
-          if (failedCount === 0) {
+          if (failedCount === results.length) {
+            await helpApi.deleteTicket(ticketId);
+            showError('File upload failed. Ticket was not created.');
+            setForm(EMPTY_FORM);
+            setSelectedFiles([]);
+            setFileUploadStates([]);
+            setShowForm(false);
+            await loadTickets(page);
+            return;
+          } else if (failedCount > 0) {
+            showError(
+              `Ticket created, but ${failedCount} of ${results.length} attachment uploads failed.`,
+            );
+          } else {
             showSuccess(
               selectedFiles.length === 1
                 ? 'Help ticket submitted with attachment.'
                 : `Help ticket submitted with ${selectedFiles.length} attachments.`,
             );
-          } else if (failedCount === results.length) {
-            showError('Ticket created, but all attachment uploads failed.');
-          } else {
-            showError(
-              `Ticket created, but ${failedCount} of ${results.length} attachment uploads failed.`,
-            );
           }
         } catch (uploadErr) {
-          showError(
-            `Ticket created, but attachment upload failed: ${getErrorMessage(uploadErr)}`,
-          );
+          await helpApi.deleteTicket(ticketId);
+          showError('File upload failed. Ticket was not created.');
+          setForm(EMPTY_FORM);
+          setSelectedFiles([]);
+          setFileUploadStates([]);
+          setShowForm(false);
+          await loadTickets(page);
+          return;
         }
       } else {
         showSuccess('Help ticket submitted.');
@@ -461,15 +470,6 @@ export default function EmployeeHelp() {
                   onChange={(value) => updateField('category', value)}
                   options={CATEGORY_OPTIONS}
                   aria-label="Category"
-                />
-              </label>
-              <label className="field">
-                <span className="label">Priority</span>
-                <SelectField
-                  value={form.priority}
-                  onChange={(value) => updateField('priority', value)}
-                  options={PRIORITY_OPTIONS}
-                  aria-label="Priority"
                 />
               </label>
             </div>
@@ -666,20 +666,24 @@ export default function EmployeeHelp() {
                 <thead>
                   <tr>
                     <th>Title</th>
+                    <th>Priority</th>
                     <th>Status</th>
                     <th>Created</th>
-                    <th></th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tickets.map((item) => (
                     <tr key={item.id}>
                       <td data-label="Title" className="cell-ellipsis" title={item.title}>{item.title}</td>
+                      <td data-label="Priority">
+                        <HelpPriorityBadge priority={item.priority} />
+                      </td>
                       <td data-label="Status">
                         <HelpStatusBadge status={item.status} />
                       </td>
                       <td data-label="Created" className="muted small">{formatISTDateTime(item.createdAt)}</td>
-                      <td data-label="Action" className="cell-actions">
+                      <td data-label="Actions" className="cell-actions">
                         <Link to={`/employee/help/${item.id}`} className="btn btn-ghost btn-sm">
                           View
                         </Link>

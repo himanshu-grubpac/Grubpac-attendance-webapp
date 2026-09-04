@@ -5,6 +5,7 @@ export const HELP_ATTACHMENT_STATUSES = ['pending', 'confirmed', 'deleted'];
 const helpAttachmentSchema = new mongoose.Schema(
   {
     ticketId: { type: mongoose.Schema.Types.ObjectId, ref: 'HelpTicket', required: true },
+    commentId: { type: mongoose.Schema.Types.ObjectId, ref: 'HelpComment', default: null },
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     fileName: { type: String, required: true, trim: true, maxlength: 255 },
     mimeType: { type: String, required: true, trim: true, maxlength: 127 },
@@ -20,6 +21,7 @@ const helpAttachmentSchema = new mongoose.Schema(
 );
 
 helpAttachmentSchema.index({ ticketId: 1, createdAt: 1 });
+helpAttachmentSchema.index({ commentId: 1, createdAt: 1 });
 
 helpAttachmentSchema.methods.toSafeJSON = function toSafeJSON() {
   const uploaderDoc =
@@ -28,6 +30,7 @@ helpAttachmentSchema.methods.toSafeJSON = function toSafeJSON() {
   return {
     id: this._id.toString(),
     ticketId: this.ticketId?.toString?.() ?? null,
+    commentId: this.commentId?.toString?.() ?? null,
     uploadedBy: uploaderDoc?._id?.toString() ?? this.uploadedBy?.toString?.() ?? null,
     uploadedByName: uploaderDoc?.name ?? null,
     fileName: this.fileName,

@@ -1,12 +1,16 @@
-import { Router } from 'express';
+import { Router, urlencoded } from 'express';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
+import { leaveDecisionLimiter } from '../middleware/rateLimiters.js';
 import {
   adjustLeaveBalances,
   approveLeaveRequestHandler,
   cancelLeaveRequestHandler,
+  cancelApprovedLeaveByApproverHandler,
+  undoLeaveCancellationHandler,
+  notifyLeaveRequestHandler,
   carryForwardHandler,
   createHoliday,
   createHolidayCategory,
@@ -14,7 +18,11 @@ import {
   createLeaveRequestHandler,
   createLeaveType,
   deleteHoliday,
+  leaveDecisionLinkHandler,
+  leaveDecisionLinkPageHandler,
+  leaveDecisionLoginHandler,
   deleteHolidayCategory,
+  editLeaveRequestHandler,
   encashLeaveBalanceHandler,
   getLeaveBalances,
   getLeaveRequestHandler,
@@ -31,6 +39,8 @@ import {
   previewCarryForwardHandler,
   previewLeaveRequestDays,
   rejectLeaveRequestHandler,
+  undoLeaveDecisionHandler,
+  undoSubmittedLeaveRequestHandler,
   runLeaveAccrualJobHandler,
   updateHoliday,
   updateHolidayCategory,
@@ -45,6 +55,14 @@ import {
 } from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
+
+// Public, token-protected approve/reject from email (no login required).
+// GET shows a confirmation page (safe against email scanners auto-clicking links).
+// POST performs the action.
+router.get('/decision-link', leaveDecisionLimiter, asyncHandler(leaveDecisionLinkPageHandler));
+router.post('/decision-link', leaveDecisionLimiter, urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
+// Auto-login: consumes the token, issues a JWT session, redirects to admin portal.
+router.get('/decision-login', leaveDecisionLimiter, asyncHandler(leaveDecisionLoginHandler));
 
 router.use(authenticate);
 
@@ -130,10 +148,25 @@ router.get(
   requirePermission(PERMISSIONS.LEAVE_READ),
   asyncHandler(getLeaveRequestHandler),
 );
+router.put(
+  '/requests/:id',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(editLeaveRequestHandler),
+);
 router.post(
   '/requests/:id/cancel',
   requirePermission(PERMISSIONS.LEAVE_APPLY),
   asyncHandler(cancelLeaveRequestHandler),
+);
+router.post(
+  '/requests/:id/notify',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(notifyLeaveRequestHandler),
+);
+router.post(
+  '/requests/:id/withdraw',
+  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(undoSubmittedLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/approve',
@@ -144,6 +177,21 @@ router.post(
   '/requests/:id/reject',
   requirePermission(PERMISSIONS.LEAVE_APPROVE),
   asyncHandler(rejectLeaveRequestHandler),
+);
+router.post(
+  '/requests/:id/undo',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(undoLeaveDecisionHandler),
+);
+router.post(
+  '/requests/:id/cancel-approval',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(cancelApprovedLeaveByApproverHandler),
+);
+router.post(
+  '/requests/:id/undo-cancel',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_APPLY),
+  asyncHandler(undoLeaveCancellationHandler),
 );
 
 router.get(
