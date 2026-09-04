@@ -167,7 +167,14 @@ export default function AdminDepartments() {
     setModalError('');
 
     const schema = modal.mode === 'create' ? createDepartmentSchema : updateDepartmentSchema;
-    const validation = validateForm(schema, form);
+    // "None" in the lead/deputy dropdowns is '' — normalize to null BEFORE
+    // validation so optional empty selections pass (only name/code are required).
+    const payload = {
+      ...form,
+      leadUserId: form.leadUserId || null,
+      deputyUserId: form.deputyUserId || null,
+    };
+    const validation = validateForm(schema, payload);
 
     if (!validation.data) {
       setFieldErrors(validation.errors);
@@ -179,19 +186,11 @@ export default function AdminDepartments() {
 
     try {
       if (modal.mode === 'create') {
-        await adminApi.createDepartment({
-          ...validation.data,
-          leadUserId: form.leadUserId || null,
-          deputyUserId: form.deputyUserId || null,
-        });
+        await adminApi.createDepartment(validation.data);
         showSuccess(`Department "${validation.data.name}" created.`);
       } else {
-        await adminApi.updateDepartment(modal.department.id, {
-          ...validation.data,
-          leadUserId: form.leadUserId || null,
-          deputyUserId: form.deputyUserId || null,
-        });
-        showSuccess(`Department "${validation.data.name}" updated.`);
+        await adminApi.updateDepartment(modal.department.id, validation.data);
+        showSuccess(`Department "${validation.data.name ?? modal.department.name}" updated.`);
       }
 
       closeModal();

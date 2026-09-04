@@ -74,10 +74,8 @@ export default function ForgotPasswordModal({ open, onClose }) {
     setSubmitting(true);
     try {
       const result = await authApi.forgotPassword(validation.data.email);
-      if (result?.exists === false) {
-        setError('No account found with that email address. Please check the email and try again.');
-        return;
-      }
+      // The API never reveals whether the email is registered (anti-enumeration),
+      // so every valid submission lands on the same success state.
       setSent(true);
       showSuccess('If the account exists, a reset link has been sent.');
       // Surface the dev link in non-production for local testing.

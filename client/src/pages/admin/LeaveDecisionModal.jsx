@@ -11,6 +11,7 @@ export default function LeaveDecisionModal({
   error = '',
   onApprove,
   onReject,
+  onCancel,
   onCommentChange,
 }) {
   const titleId = useId();
@@ -18,13 +19,17 @@ export default function LeaveDecisionModal({
   const dialogRef = useRef(null);
   const approveRef = useRef(null);
   const rejectRef = useRef(null);
+  const cancelRef = useRef(null);
   const commentRef = useRef(null);
   const previouslyFocused = useRef(null);
 
   const remarkEmpty = !initialComment.trim();
   const isCancelMode = action === 'cancel';
+  // Dismiss never takes action: Escape / backdrop / Cancel only close the modal.
+  // Falls back to onReject so older callers that used it as "close" keep working.
+  const handleDismiss = onCancel ?? onReject;
 
-  useEscapeKey(open && !busy, onReject);
+  useEscapeKey(open && !busy, handleDismiss);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -37,7 +42,7 @@ export default function LeaveDecisionModal({
 
     function handleKeyDown(event) {
       if (event.key !== 'Tab' || busy) return;
-      const focusables = [commentRef.current, approveRef.current, rejectRef.current].filter(Boolean);
+      const focusables = [commentRef.current, cancelRef.current, rejectRef.current, approveRef.current].filter(Boolean);
       if (focusables.length === 0) return;
 
       const first = focusables[0];
@@ -53,10 +58,11 @@ export default function LeaveDecisionModal({
       }
     }
 
-    dialogRef.current?.addEventListener('keydown', handleKeyDown);
+    const dialogNode = dialogRef.current;
+    dialogNode?.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      dialogRef.current?.removeEventListener('keydown', handleKeyDown);
+      dialogNode?.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
       if (previouslyFocused.current instanceof HTMLElement) {
         previouslyFocused.current.focus();
@@ -79,7 +85,7 @@ export default function LeaveDecisionModal({
     <div
       className="confirm-dialog-backdrop"
       role="presentation"
-      onClick={busy ? undefined : onReject}
+      onClick={busy ? undefined : handleDismiss}
     >
       <div
         ref={dialogRef}
@@ -147,14 +153,25 @@ export default function LeaveDecisionModal({
 
         <div className="confirm-dialog__actions">
           <button
-            ref={rejectRef}
+            ref={cancelRef}
             type="button"
             className="btn"
-            onClick={onReject}
+            onClick={handleDismiss}
             disabled={busy}
           >
             Cancel
           </button>
+          {isCancelMode ? null : (
+            <button
+              ref={rejectRef}
+              type="button"
+              className="btn btn-danger"
+              onClick={onReject}
+              disabled={busy || remarkEmpty}
+            >
+              Reject
+            </button>
+          )}
           <button
             ref={approveRef}
             type="button"

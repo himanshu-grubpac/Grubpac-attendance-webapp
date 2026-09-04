@@ -5,26 +5,33 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '..');
+// server/scripts/dev -> repo root is three levels up.
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const clientDir = path.join(repoRoot, 'client');
 const serverSrc = path.join(repoRoot, 'server', 'src');
+
+// playwright lives in client/node_modules (client devDependency); resolve it
+// from the client package so this script runs from the server workspace.
+const clientRequire = createRequire(path.join(clientDir, 'package.json'));
+const { chromium } = clientRequire('playwright');
 
 function importServer(relative) {
   return import(pathToFileURL(path.join(serverSrc, relative)).href);
 }
 
+// Alt ports keep this suite clear of local dev servers (5000/5173).
+const API_PORT = Number(process.env.UI_E2E_API_PORT ?? 5000);
+const CLIENT_PORT = Number(process.env.UI_E2E_CLIENT_PORT ?? 5173);
+
 process.env.NODE_ENV = 'test';
 process.env.USE_MEMORY_DB = 'true';
 process.env.JWT_SECRET = 'test-secret';
-process.env.CLIENT_ORIGIN = 'http://localhost:5173';
+process.env.CLIENT_ORIGIN = `http://localhost:${CLIENT_PORT}`;
 // Force SMTP off so the suite never makes a real network call to a mail provider.
 process.env.SMTP_HOST = '';
-
-const API_PORT = 5000;
-const CLIENT_PORT = 5173;
 const API_BASE = `http://127.0.0.1:${API_PORT}/api`;
 
 const empEmail = `ui.employee.${Date.now()}@grubpac.com`;
@@ -162,7 +169,7 @@ async function main() {
     await page.getByRole('button', { name: 'Send reset link' }).click();
     let sentOk = false;
     try {
-      await page.getByText(/If an account exists/i).first().waitFor({ state: 'visible', timeout: 5000 });
+      await page.getByText(/password reset instructions/i).first().waitFor({ state: 'visible', timeout: 5000 });
       sentOk = true;
     } catch {
       sentOk = false;
@@ -224,9 +231,10 @@ async function main() {
     await page.waitForURL('**/login', { timeout: 5000 });
     step('redirects to login after reset', page.url().includes('/login'));
 
-    // 9. Login with new password works
-    await page.fill('input[placeholder="you@company.com"]', empEmail);
-    await page.fill('input[placeholder="Enter your password"]', newPassword);
+    // 9. Login with new password works (autocomplete attrs are stable
+    // across login-form copy changes).
+    await page.fill('input[autocomplete="username"]', empEmail);
+    await page.fill('input[autocomplete="current-password"]', newPassword);
     await page.getByRole('button', { name: 'Sign in' }).click();
     // Should navigate away from /login to the employee portal
     const navigated = await page

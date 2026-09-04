@@ -1,6 +1,6 @@
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { acquireJobLock, releaseJobLock } from '../src/utils/jobLock.js';
-import { JobLock } from '../src/models/JobLock.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { acquireJobLock, releaseJobLock } from '../../src/utils/jobLock.js';
+import { JobLock } from '../../src/models/JobLock.js';
 
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
 
@@ -66,3 +66,4 @@ try {
 
 console.log('JOB LOCK E2E:', passed, 'passed,', failed, 'failed');
 process.exit(failed === 0 ? 0 : 1);
+

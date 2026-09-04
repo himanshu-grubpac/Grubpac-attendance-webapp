@@ -87,7 +87,6 @@ for (let i = 0; i < COUNT; i += 1) {
     endingDate: null,
     passwordHash,
     pin4Hash: null,
-    pin6Hash: null,
     monthlySalary: null,
     isActive: true,
     tokenVersion: 0,

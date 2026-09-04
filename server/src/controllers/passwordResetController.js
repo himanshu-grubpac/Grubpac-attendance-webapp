@@ -11,7 +11,9 @@ import {
   renderPasswordResetEmail,
   sendEmail,
 } from '../services/emailService.js';
-import { sendWhatsAppText } from '../services/whatsappService.js';
+// WhatsApp disabled for now (whatsappService is a no-op stub — no provider
+// wired). Re-enable the import + call site below when product enables it.
+// import { sendWhatsAppText } from '../services/whatsappService.js';
 import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
 import {
   forgotPasswordSchema,
@@ -25,7 +27,8 @@ function isEmployeeEligible(user) {
 
 /**
  * Step 1 — request a reset link.
- * Always returns a generic success message to avoid account enumeration.
+ * Always returns a generic success message to avoid account enumeration —
+ * the response never reveals whether the email is registered.
  * Only active employees receive an email. In non-production, the magic link is
  * also returned in the response so local/e2e testing does not need a real inbox.
  */
@@ -42,13 +45,14 @@ export async function requestPasswordReset(body, auditContext = {}) {
       resetLink,
     });
     await sendEmail({ to: user.email, subject, html, text, tag: 'password-reset' });
-    if (user.whatsappOptIn && user.mobile) {
-      const mins = Math.max(1, Math.round(env.passwordResetExpiresMs / 60000));
-      await sendWhatsAppText({
-        to: user.mobile,
-        message: `Grubpac Attendance: password reset requested. Reset here (expires in ${mins} min, single use): ${resetLink}`,
-      });
-    }
+    // WhatsApp disabled — see import note above.
+    // if (user.whatsappOptIn && user.mobile) {
+    //   const mins = Math.max(1, Math.round(env.passwordResetExpiresMs / 60000));
+    //   await sendWhatsAppText({
+    //     to: user.mobile,
+    //     message: `Grubpac Attendance: password reset requested. Reset here (expires in ${mins} min, single use): ${resetLink}`,
+    //   });
+    // }
     auditLog('password_reset_requested', {
       userId: user._id.toString(),
       email: user.email,
@@ -64,12 +68,7 @@ export async function requestPasswordReset(body, auditContext = {}) {
   }
 
   const response = {
-    message:
-      'We have sent password reset instructions.',
-    // Surfaced so the forgot-password UI can tell the user directly whether
-    // the email is registered (intentional account-existence check per product
-    // request — note this enables email enumeration).
-    exists: Boolean(user),
+    message: 'We have sent password reset instructions.',
   };
 
   if (process.env.NODE_ENV !== 'production' && resetLink) {
@@ -149,7 +148,6 @@ export async function resetPassword(body, auditContext = {}) {
   // A password reset revokes the alternative PIN credential too — the PIN is a
   // stand-in for the password, so it must not outlive a reset.
   user.pin4Hash = null;
-  user.pin6Hash = null;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 

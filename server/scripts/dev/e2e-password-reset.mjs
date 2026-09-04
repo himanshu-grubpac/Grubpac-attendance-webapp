@@ -1,7 +1,7 @@
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { User } from '../src/models/User.js';
-import { env } from '../src/config/env.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { User } from '../../src/models/User.js';
+import { env } from '../../src/config/env.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
@@ -78,7 +78,7 @@ async function main() {
   // 1. Forgot password — employee gets a dev link (non-prod), generic message
   const forgotEmp = await jsonFetch(`${api}/auth/forgot-password`, { email: empEmail });
   check('forgot-password (employee) returns 200', forgotEmp.status === 200, forgotEmp.status);
-  check('forgot-password (employee) generic message', /account exists/i.test(forgotEmp.data?.message ?? ''));
+  check('forgot-password (employee) generic message', /reset instructions/i.test(forgotEmp.data?.message ?? ''));
   check('forgot-password (employee) returns devResetLink in non-prod', typeof forgotEmp.data?.devResetLink === 'string');
 
   // 2. Forgot password — admin does NOT get a link (employees only)
@@ -90,6 +90,8 @@ async function main() {
   const forgotUnknown = await jsonFetch(`${api}/auth/forgot-password`, { email: 'nobody@nowhere.com' });
   check('forgot-password (unknown) returns 200', forgotUnknown.status === 200, forgotUnknown.status);
   check('forgot-password (unknown) returns NO devResetLink', !('devResetLink' in (forgotUnknown.data ?? {})));
+  check('forgot-password (employee) reveals NO exists flag', !('exists' in (forgotEmp.data ?? {})));
+  check('forgot-password (unknown) reveals NO exists flag', !('exists' in (forgotUnknown.data ?? {})));
 
   // 4. Forgot password — invalid email format -> 400
   const forgotBad = await jsonFetch(`${api}/auth/forgot-password`, { email: 'not-an-email' });
@@ -215,3 +217,4 @@ main().catch((err) => {
   console.error('E2E harness error:', err);
   process.exit(1);
 });
+

@@ -1,5 +1,6 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
 import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob, recoverPendingSubmitNotifications } from '../services/leaveService.js';
+import { cleanupStalePendingAttachments } from '../services/helpAttachmentService.js';
 import { User } from '../models/User.js';
 import { getISTYear } from '../utils/istDate.js';
 import { logError } from '../utils/logger.js';
@@ -43,6 +44,17 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   } finally {
     await releaseJobLock('leave-decision-notify', lock.lockId);
   }
+}
+
+/**
+ * Delete orphaned pending help attachments (uploaded to S3 but never
+ * confirmed) and their S3 objects. Runs on a daily schedule on Lambda because
+ * the API Lambda never executes startServer()'s interval cleanup.
+ * Idempotent — safe to call multiple times.
+ */
+export async function runHelpAttachmentCleanupJob() {
+  const deleted = await cleanupStalePendingAttachments();
+  return { job: 'help-attachment-cleanup', ...deleted, completedAt: new Date().toISOString() };
 }
 
 /**

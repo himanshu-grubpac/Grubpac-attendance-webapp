@@ -97,12 +97,12 @@ export default function AdminStreaks() {
     if (!ids.length) return;
 
     await requestConfirm({
-      title: ids.length === 1 ? 'Reset warning streak?' : 'Reset warning streaks?',
+      title: ids.length === 1 ? 'Reset Late Warning?' : 'Reset Late Warnings?',
       message:
         ids.length === 1
           ? `Clear ${label}'s late-check-in warnings for ${quarterLabel}? This only affects the current quarter and cannot be undone from this screen.`
           : `Clear late-check-in warnings for ${ids.length} selected employees for ${quarterLabel}? This only affects the current quarter and cannot be undone from this screen.`,
-      confirmLabel: ids.length === 1 ? 'Reset streak' : 'Reset selected',
+      confirmLabel: ids.length === 1 ? 'Reset Late Warning' : 'Reset selected',
       variant: 'danger',
       busyLabel: 'Resetting…',
       onConfirm: async () => {
@@ -129,8 +129,8 @@ export default function AdminStreaks() {
           });
           showSuccess(
             ids.length === 1
-              ? `Warning streak reset for ${label} (${quarterLabel}).`
-              : `Warning streaks reset for ${ids.length} employees (${quarterLabel}).`,
+              ? `Late Warning reset for ${label} (${quarterLabel}).`
+              : `Late Warnings reset for ${ids.length} employees (${quarterLabel}).`,
           );
         } catch (err) {
           showError(getErrorMessage(err));
@@ -145,7 +145,7 @@ export default function AdminStreaks() {
   return (
     <div className="page page--streaks">
       {confirmDialog}
-      <section className="streaks-panel card card--table" aria-label="Quarter warning streaks">
+      <section className="streaks-panel card card--table" aria-label="Quarter Late Warnings">
         <div className="streaks-toolbar">
           <p className="muted small streaks-toolbar__hint">
             {quarterLabel} — quarterly late-check-in warnings used and remaining per employee.
@@ -203,7 +203,7 @@ export default function AdminStreaks() {
                   <th>Employee</th>
                   <th>Used</th>
                   <th>Remaining</th>
-                  <th>Allowance</th>
+                  <th>Total</th>
                   <th scope="col" className="streaks-table__col-actions">
                     Actions
                   </th>
@@ -233,7 +233,7 @@ export default function AdminStreaks() {
                       </td>
                       <td data-label="Used">{stats.used}</td>
                       <td data-label="Remaining">{stats.remaining}</td>
-                      <td data-label="Allowance">{stats.allowance}</td>
+                      <td data-label="Total">{stats.allowance}</td>
                       <td data-label="Actions" className="streaks-table__actions">
                         <button
                           type="button"

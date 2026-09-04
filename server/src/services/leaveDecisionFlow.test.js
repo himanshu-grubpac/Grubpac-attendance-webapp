@@ -5,6 +5,8 @@ import {
   hashDecisionToken,
   formatLeaveDateText,
 } from './leaveService.js';
+import { leaveDecisionLoginHandler } from '../controllers/leaveController.js';
+import { CSRF_COOKIE_NAME } from '../middleware/csrf.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -327,12 +329,12 @@ test('Token peek: invalid token returns null', () => {
 // PART 4: Auto Login (autoLoginByDecisionToken)
 // ═══════════════════════════════════════════════════════════════════════════
 
-test('Auto login: token is consumed on successful login', () => {
+test('Auto login: token is peeked, not consumed (login reusable until decided)', () => {
   const raw = crypto.randomBytes(32).toString('hex');
   const token = makeTokenRecord(raw, { action: 'approve', managerId: 'mgr1' });
-  const managerId = simulateTokenConsume([token], 'approve', raw);
-  assert.equal(managerId, 'mgr1');
-  assert.equal(token.used, true, 'Token should be consumed after auto-login');
+  const peeked = simulatePeekToken([token], 'approve', raw);
+  assert.equal(peeked?.managerId, 'mgr1');
+  assert.equal(token.used, false, 'Login must not consume the token');
 });
 
 test('Auto login: request must be pending', () => {
@@ -355,16 +357,27 @@ test('Auto login: deleted manager (null) is rejected', () => {
   assert.equal(!manager || !manager.isActive, true, 'Deleted manager should be rejected');
 });
 
-test('Auto login: valid flow — token consumed + request pending + manager active', () => {
+test('Auto login: valid flow — token peeked + request pending + manager active', () => {
   const raw = crypto.randomBytes(32).toString('hex');
   const token = makeTokenRecord(raw, { action: 'approve', managerId: 'mgr1' });
   const request = mockLeaveRequest({ status: 'pending' });
   const manager = mockUser({ _id: 'mgr1', isActive: true });
 
-  const managerId = simulateTokenConsume([token], 'approve', raw);
-  assert.equal(managerId, 'mgr1');
+  const peeked = simulatePeekToken([token], 'approve', raw);
+  assert.equal(peeked?.managerId, 'mgr1');
+  assert.equal(token.used, false, 'Login leaves the token usable');
   assert.equal(request.status, 'pending');
   assert.equal(manager.isActive, true);
+});
+
+test('Decision by token: generic decide token satisfies an approve decision (fallback)', () => {
+  const raw = crypto.randomBytes(32).toString('hex');
+  const token = makeTokenRecord(raw, { action: 'decide', managerId: 'mgr1' });
+  // Exact-action consume misses; decide-fallback consumes.
+  assert.equal(simulateTokenConsume([token], 'approve', raw), null);
+  const fallback = makeTokenRecord(raw, { action: 'decide', managerId: 'mgr1' });
+  assert.equal(simulateTokenConsume([fallback], 'decide', raw), 'mgr1');
+  assert.equal(fallback.used, true, 'Decision consumes the token (single-use)');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -786,31 +799,46 @@ test('Decision login: redirect URL contains correct requestId', () => {
   assert.ok(redirectUrl.includes('action=reject'));
 });
 
-test('Decision login: cookie settings for production', () => {
-  const isProd = true;
-  const cookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'strict' : 'lax',
-    path: '/',
+test('Decision login: missing query params → real handler responds 400 HTML', async () => {
+  let statusCode = null;
+  let contentType = null;
+  let body = '';
+  const req = { query: { request: 'abc' } };
+  const res = {
+    status(code) { statusCode = code; return this; },
+    type(value) { contentType = value; return this; },
+    send(payload) { body = payload; return this; },
   };
-  assert.equal(cookie.httpOnly, true);
-  assert.equal(cookie.secure, true);
-  assert.equal(cookie.sameSite, 'strict');
-  assert.equal(cookie.path, '/');
+  await leaveDecisionLoginHandler(req, res);
+  assert.equal(statusCode, 400);
+  assert.equal(contentType, 'html');
+  assert.match(body, /missing required parameters/);
 });
 
-test('Decision login: cookie settings for development', () => {
-  const isProd = false;
-  const cookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'strict' : 'lax',
-    path: '/',
+test('Decision login: sets auth + CSRF cookies before redirect (same as normal login)', async () => {
+  // Exercise the exact helpers leaveDecisionLoginHandler uses, with a stub res.
+  const { setAuthCookie } = await import('../controllers/authController.js');
+  const { generateCsrfToken, setCsrfCookie } = await import('../middleware/csrf.js');
+  const cookies = {};
+  const res = {
+    cookie(name, value, options) { cookies[name] = { value, options }; },
   };
-  assert.equal(cookie.httpOnly, true);
-  assert.equal(cookie.secure, false);
-  assert.equal(cookie.sameSite, 'lax');
+  setAuthCookie(res, 'jwt-test-token');
+  const csrfToken = generateCsrfToken();
+  setCsrfCookie(res, csrfToken);
+
+  assert.ok(cookies.attendance_token, 'auth cookie is set');
+  assert.equal(cookies.attendance_token.value, 'jwt-test-token');
+  assert.equal(cookies.attendance_token.options.httpOnly, true);
+  assert.equal(cookies.attendance_token.options.sameSite, 'lax');
+  assert.equal(cookies.attendance_token.options.path, '/');
+
+  assert.ok(cookies[CSRF_COOKIE_NAME], 'CSRF cookie is set');
+  assert.equal(cookies[CSRF_COOKIE_NAME].value, csrfToken);
+  assert.match(csrfToken, /^[a-f0-9]{64}$/);
+  // CSRF cookie must be JS-readable so the client can echo it as X-CSRF-Token.
+  assert.equal(cookies[CSRF_COOKIE_NAME].options.httpOnly, false);
+  assert.equal(cookies[CSRF_COOKIE_NAME].options.path, '/');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

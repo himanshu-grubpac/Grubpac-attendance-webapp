@@ -79,7 +79,8 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await changePassword(req.user._id, req.body);
-    res.json(result);
+    applyAuthSession(res, result);
+    res.json({ message: result.message, csrfToken: result.csrfToken });
   }),
 );
 
@@ -89,7 +90,8 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await setPin(req.user._id, req.body, getRequestAuditContext(req));
-    res.json(result);
+    applyAuthSession(res, result);
+    res.json({ message: result.message, csrfToken: result.csrfToken });
   }),
 );
 
@@ -99,7 +101,8 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const result = await deletePin(req.user._id, req.body, getRequestAuditContext(req));
-    res.json(result);
+    applyAuthSession(res, result);
+    res.json({ message: result.message, csrfToken: result.csrfToken });
   }),
 );
 

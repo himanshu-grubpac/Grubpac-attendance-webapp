@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import AttendanceResultCard from '../../components/AttendanceResultCard.jsx';
@@ -178,6 +178,25 @@ export default function EmployeeDashboard() {
   useEffect(() => {
     loadCalendar(calendarMonth);
   }, [calendarMonth, loadCalendar]);
+
+  const calendarMonthRef = useRef(calendarMonth);
+  calendarMonthRef.current = calendarMonth;
+
+  useEffect(() => {
+    // A manager decision finalizes server-side after the undo window; refetch
+    // the visible month when the tab regains focus so WFH colors catch up.
+    function handleVisibility() {
+      if (document.visibilityState !== 'visible') return;
+      if (calendarMonthRef.current !== getISTMonthInputValue()) return;
+      loadCalendar(calendarMonthRef.current).catch(() => {});
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [loadCalendar]);
 
   useEffect(() => {
     getPosition({ fresh: false }).catch(() => {});
@@ -507,6 +526,9 @@ export default function EmployeeDashboard() {
                       teamStatus.map((member) => {
                         const present =
                           member.status === 'checked_in' || member.status === 'wfh';
+                        const onLeave = !present && member.status === 'on_leave';
+                        const badgeTone = present ? 'present' : onLeave ? 'leave' : 'absent';
+                        const badgeLabel = present ? 'Present' : onLeave ? 'On Leave' : 'Absent';
                         const statusDetail =
                           member.status === 'checked_in'
                             ? member.attendanceMode === 'wfh'
@@ -534,11 +556,9 @@ export default function EmployeeDashboard() {
                             </td>
                             <td>
                               <span
-                                className={`dash-team-table__badge dash-team-table__badge--${
-                                  present ? 'present' : 'absent'
-                                }`}
+                                className={`dash-team-table__badge dash-team-table__badge--${badgeTone}`}
                               >
-                                {present ? 'Present' : 'Absent'}
+                                {badgeLabel}
                               </span>
                               <span className="dash-team-table__detail muted small">
                                 {statusDetail}

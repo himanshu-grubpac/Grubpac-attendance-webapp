@@ -1,5 +1,5 @@
-import { sendEmail, renderLeaveManagerEmail, renderLeaveApplicantEmail } from '../src/services/emailService.js';
-import { sendSms, isSmsConfigured } from '../src/services/smsService.js';
+import { sendEmail, renderLeaveManagerEmail, renderLeaveApplicantEmail } from '../../src/services/emailService.js';
+import { sendSms, isSmsConfigured } from '../../src/services/smsService.js';
 
 const apiOrigin = process.env.API_ORIGIN || process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const testEmail = process.env.TEST_EMAIL || 'jha.piyush@grubpac.com';
@@ -50,3 +50,4 @@ console.log('applicant sms result:', s2);
 
 console.log('\nDONE');
 process.exit(0);
+

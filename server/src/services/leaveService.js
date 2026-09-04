@@ -49,7 +49,9 @@ import {
   renderLeaveCancelledForApproverEmail,
 } from './emailService.js';
 import { sendSms } from './smsService.js';
-import { sendWhatsAppText } from './whatsappService.js';
+// WhatsApp disabled for now (whatsappService is a no-op stub — no provider
+// wired). Re-enable the import + call sites below when product enables it.
+// import { sendWhatsAppText } from './whatsappService.js';
 import { env } from '../config/env.js';
 
 function throwError(message, statusCode = 400) {
@@ -196,7 +198,8 @@ async function notifyManagerChannels(managers, request, leaveType, { withActions
         : `${requesterName} applied for ${leaveTypeName} (${dateText}) (auto-approved).`;
       if (m.email) await sendEmail({ to: m.email, subject, html, text, tag: 'leave-manager' });
       if (m.mobile) await sendSms({ to: m.mobile, message: smsText });
-      if (m.whatsappOptIn && m.mobile) await sendWhatsAppText({ to: m.mobile, message: smsText });
+      // WhatsApp disabled — see import note above.
+      // if (m.whatsappOptIn && m.mobile) await sendWhatsAppText({ to: m.mobile, message: smsText });
     }),
   );
 }
@@ -335,7 +338,8 @@ async function notifyApplicantDecision({ applicant, request, leaveType, status, 
     const smsText = `Your ${leaveTypeName} leave (${dateText}) was ${status}.${remarks ? ' Remarks: ' + remarks : ''}`;
     if (applicantDoc.email) await sendEmail({ to: applicantDoc.email, subject, html, text, tag: 'leave-status' });
     if (applicantDoc.mobile) await sendSms({ to: applicantDoc.mobile, message: smsText });
-    if (applicantDoc.whatsappOptIn && applicantDoc.mobile) await sendWhatsAppText({ to: applicantDoc.mobile, message: smsText });
+    // WhatsApp disabled — see import note above.
+    // if (applicantDoc.whatsappOptIn && applicantDoc.mobile) await sendWhatsAppText({ to: applicantDoc.mobile, message: smsText });
   }
 }
 
@@ -1043,9 +1047,10 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
       const smsText = `Your ${leaveTypeName} leave (${dateText}) was cancelled.`;
       await sendSms({ to: applicant.mobile, message: smsText });
     }
-    if (applicant?.whatsappOptIn && applicant?.mobile) {
-      await sendWhatsAppText({ to: applicant.mobile, message: `Your ${leaveTypeName} leave (${dateText}) was cancelled.` });
-    }
+    // WhatsApp disabled — see import note above.
+    // if (applicant?.whatsappOptIn && applicant?.mobile) {
+    //   await sendWhatsAppText({ to: applicant.mobile, message: `Your ${leaveTypeName} leave (${dateText}) was cancelled.` });
+    // }
   } catch (err) {
     console.error('[leave] cancelled notification failed', request._id?.toString(), err?.message);
   }
@@ -1166,7 +1171,13 @@ export async function decideLeaveRequestByToken(requestId, action, rawToken, dec
     err.statusCode = 400;
     throw err;
   }
-  const managerId = await consumeLeaveDecisionToken(requestId, action, rawToken);
+  // Email links carry generic 'decide' tokens (usable for either outcome);
+  // per-action tokens are accepted too. consume() only marks on match, so the
+  // fallback attempt is safe.
+  const managerId = (await consumeLeaveDecisionToken(requestId, action, rawToken))
+    ?? (action === 'decide'
+      ? null
+      : await consumeLeaveDecisionToken(requestId, 'decide', rawToken));
   if (!managerId) {
     const err = new Error('This action link is invalid, has already been used, or has expired.');
     err.statusCode = 410;
@@ -1189,7 +1200,11 @@ export async function decideLeaveRequestByToken(requestId, action, rawToken, dec
 }
 
 export async function autoLoginByDecisionToken(requestId, action, rawToken) {
-  const managerId = await consumeLeaveDecisionToken(requestId, action, rawToken);
+  // Peek, don't consume: the link stays usable for login until the request is
+  // decided or the token expires. Single-use is enforced at decision time
+  // (consume + processLeaveDecision clears decisionTokens).
+  const peeked = await peekLeaveDecisionToken(requestId, action, rawToken);
+  const managerId = peeked?.managerId ?? null;
   if (!managerId) {
     const err = new Error('This link is invalid, has already been used, or has expired.');
     err.statusCode = 410;

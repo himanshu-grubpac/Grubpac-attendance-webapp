@@ -70,6 +70,14 @@ export function getRequestAuditContext(req) {
   };
 }
 
+/**
+ * In-flight fire-and-forget audit persists. Tracked so orderly shutdown
+ * (tests, scripts) can drain them via flushAuditLogs() before disconnecting
+ * the database. Request paths are unaffected — auditLog() still returns
+ * synchronously without awaiting the write.
+ */
+const pendingAuditPersists = new Set();
+
 export function auditLog(action, meta = {}) {
   const timestamp = new Date();
   console.log(
@@ -82,13 +90,27 @@ export function auditLog(action, meta = {}) {
   );
 
   const payload = buildPersistPayload(action, meta);
-  AuditLog.create({ ...payload, timestamp }).catch((error) => {
-    logError('audit_persist_failed', {
-      action,
-      error: error.message,
-      userId: payload.userId,
+  const pending = AuditLog.create({ ...payload, timestamp })
+    .catch((error) => {
+      logError('audit_persist_failed', {
+        action,
+        error: error.message,
+        userId: payload.userId,
+      });
+    })
+    .finally(() => {
+      pendingAuditPersists.delete(pending);
     });
-  });
+  pendingAuditPersists.add(pending);
+}
+
+/**
+ * Wait for all in-flight audit persists to settle. Never throws
+ * (individual failures are already logged by auditLog). Intended for
+ * orderly shutdown before database disconnect — NOT for request paths.
+ */
+export async function flushAuditLogs() {
+  await Promise.allSettled([...pendingAuditPersists]);
 }
 
 /** Awaited audit persist for critical mutations when callers need durability. */

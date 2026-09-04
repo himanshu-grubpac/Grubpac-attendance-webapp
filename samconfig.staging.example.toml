@@ -10,7 +10,11 @@ capabilities = "CAPABILITY_IAM"
 disable_rollback = false
 image_repositories = []
 # Copy to samconfig.staging.toml and fill MongoDbUri + JwtSecret locally (gitignored).
-parameter_overrides = "ApiFunctionName=\"grubpac-attendance-api-staging\" ClientOrigin=\"https://d24p2zn8763d4h.cloudfront.net\" HelpUploadsBucketName=\"grubpac-attendance-help-uploads-staging-662252246711\" MongoDbUri=\"REPLACE_ME\" JwtSecret=\"REPLACE_ME_STAGING_JWT_MIN_32_CHARS\""
+# Also fill Smtp*/BrevoApiKey/EmailFrom (copy working values from the Lambda console
+# BEFORE the next deploy — SAM owns the Environment block and will reset console-only
+# values to the parameters below). API_ORIGIN is intentionally omitted: the server
+# falls back to CLIENT_ORIGIN when unset.
+parameter_overrides = "ApiFunctionName=\"grubpac-attendance-api-staging\" JobFunctionName=\"grubpac-attendance-api-jobs-staging\" ClientOrigin=\"https://d24p2zn8763d4h.cloudfront.net\" HelpUploadsBucketName=\"grubpac-attendance-help-uploads-staging-662252246711\" ReservedConcurrency=0 EnableWarmupSchedule=false MongoDbUri=\"REPLACE_ME\" JwtSecret=\"REPLACE_ME_STAGING_JWT_MIN_32_CHARS\" JwtExpiresIn=\"12h\" JwtCookieMaxAgeMs=\"43200000\" SmtpHost=\"REPLACE_ME\" SmtpPort=\"587\" SmtpSecure=\"false\" SmtpUser=\"REPLACE_ME\" SmtpPass=\"REPLACE_ME\" EmailFrom=\"REPLACE_ME\" EmailFromName=\"Grubpac Attendance\" BrevoApiKey=\"REPLACE_ME\" SmsSender=\"GRUBPAC\" SmsDefaultCountryCode=\"91\" LeaveDecisionUndoMs=\"15000\" AutoCheckoutEnabled=\"true\" AutoCheckoutOfficeDay=\"same\" AutoCheckoutOfficeTime=\"23:59\" AutoCheckoutWfhDay=\"next\" AutoCheckoutWfhTime=\"06:00\""
 
 [default.global.parameters]
 region = "ap-south-1"

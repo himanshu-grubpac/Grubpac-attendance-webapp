@@ -62,6 +62,21 @@ test('handler: valid leave-decision-notify job returns 200', async () => {
   }
 });
 
+test('handler: valid help-attachment-cleanup job returns 200', async () => {
+  await setup();
+  try {
+    const event = { jobName: 'help-attachment-cleanup' };
+    const result = await handler(event, makeContext());
+
+    assert.equal(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.equal(body.job, 'help-attachment-cleanup');
+    assert.ok(typeof body.cleaned === 'number');
+  } finally {
+    await teardown();
+  }
+});
+
 test('handler: unknown job name returns 400', async () => {
   await setup();
   try {

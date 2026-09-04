@@ -6,12 +6,28 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import TimeField, { isValidHHmmTime, normalizeHHmmTime } from '../../components/TimeField.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import { useTableColumns } from '../../hooks/useTableColumns.js';
+import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import {
   IST_TIMEZONE,
   getISTDateInputValue,
   formatISTDateTime,
 } from '../../utils/datetime.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+
+const HISTORY_TABLE_KEY = 'attendanceHistory';
+
+const HISTORY_COLUMNS = [
+  { key: 'employee', label: 'Employee', always: true },
+  { key: 'department', label: 'Department' },
+  { key: 'date', label: 'Date (IST)' },
+  { key: 'type', label: 'Type' },
+  { key: 'status', label: 'Status' },
+  { key: 'mode', label: 'Mode' },
+  { key: 'time', label: 'Time (IST)' },
+];
+
+const HISTORY_DEFAULT_COLUMNS = ['employee', 'department', 'date', 'type', 'status', 'mode', 'time'];
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
@@ -1237,6 +1253,18 @@ export default function AdminAttendance() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const {
+    columnsLoading: historyColumnsLoading,
+    columnsError: historyColumnsError,
+    editorOpen: historyEditorOpen,
+    setEditorOpen: setHistoryEditorOpen,
+    isColumnVisible: isHistoryColumnVisible,
+    handleColumnToggle: handleHistoryColumnToggle,
+  } = useTableColumns({
+    tableKey: HISTORY_TABLE_KEY,
+    allColumns: HISTORY_COLUMNS,
+    defaultVisible: HISTORY_DEFAULT_COLUMNS,
+  });
 
   const weekDays = useMemo(() => buildWeekDayKeys(weekStart), [weekStart]);
   const weekEnd = weekDays[6];
@@ -2211,8 +2239,16 @@ export default function AdminAttendance() {
           <span className="muted small">
             Scroll to load more · Week of {formatWeekRangeLabel(weekStart, weekEnd)}
           </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setHistoryEditorOpen(true)}
+          >
+            Edit columns
+          </button>
         </div>
         {historyError ? <div className="alert alert--error">{historyError}</div> : null}
+        {historyColumnsError ? <div className="alert alert--error">{historyColumnsError}</div> : null}
         {historyLoading ? (
           <GridSkeleton />
         ) : historyRecords.length === 0 ? (
@@ -2235,13 +2271,13 @@ export default function AdminAttendance() {
             <table className="attendance-history">
               <thead>
                 <tr>
-                  <th scope="col">Employee</th>
-                  <th scope="col">Department</th>
-                  <th scope="col">Date (IST)</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Mode</th>
-                  <th scope="col">Time (IST)</th>
+                  {isHistoryColumnVisible('employee') && <th scope="col">Employee</th>}
+                  {isHistoryColumnVisible('department') && <th scope="col">Department</th>}
+                  {isHistoryColumnVisible('date') && <th scope="col">Date (IST)</th>}
+                  {isHistoryColumnVisible('type') && <th scope="col">Type</th>}
+                  {isHistoryColumnVisible('status') && <th scope="col">Status</th>}
+                  {isHistoryColumnVisible('mode') && <th scope="col">Mode</th>}
+                  {isHistoryColumnVisible('time') && <th scope="col">Time (IST)</th>}
                 </tr>
               </thead>
               <tbody>
@@ -2255,31 +2291,37 @@ export default function AdminAttendance() {
                       : null) ?? '—';
                   return (
                     <tr key={record.id ?? record._id}>
-                      <td data-label="Employee">{userName}</td>
-                      <td data-label="Department">{userDept}</td>
-                      <td data-label="Date (IST)">{toIstDayKey(record.timestamp) ?? '—'}</td>
-                      <td data-label="Type">
-                        {record.type === 'check_in' ? 'Check-in' : 'Check-out'}
-                      </td>
-                      <td data-label="Status">
-                        <span
-                          className={`badge ${
-                            record.status === 'allowed' ? 'badge-success' : 'badge-warning'
-                          }`}
-                        >
-                          {record.status}
-                        </span>
-                      </td>
-                      <td data-label="Mode">
-                        <span
-                          className={`attendance-mode-badge attendance-mode-badge--${
-                            record.attendanceMode === 'wfh' ? 'wfh' : 'office'
-                          }`}
-                        >
-                          {record.attendanceMode === 'wfh' ? 'WFH' : 'Office'}
-                        </span>
-                      </td>
-                      <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>
+                      {isHistoryColumnVisible('employee') && <td data-label="Employee">{userName}</td>}
+                      {isHistoryColumnVisible('department') && <td data-label="Department">{userDept}</td>}
+                      {isHistoryColumnVisible('date') && <td data-label="Date (IST)">{toIstDayKey(record.timestamp) ?? '—'}</td>}
+                      {isHistoryColumnVisible('type') && (
+                        <td data-label="Type">
+                          {record.type === 'check_in' ? 'Check-in' : 'Check-out'}
+                        </td>
+                      )}
+                      {isHistoryColumnVisible('status') && (
+                        <td data-label="Status">
+                          <span
+                            className={`badge ${
+                              record.status === 'allowed' ? 'badge-success' : 'badge-warning'
+                            }`}
+                          >
+                            {record.status}
+                          </span>
+                        </td>
+                      )}
+                      {isHistoryColumnVisible('mode') && (
+                        <td data-label="Mode">
+                          <span
+                            className={`attendance-mode-badge attendance-mode-badge--${
+                              record.attendanceMode === 'wfh' ? 'wfh' : 'office'
+                            }`}
+                          >
+                            {record.attendanceMode === 'wfh' ? 'WFH' : 'Office'}
+                          </span>
+                        </td>
+                      )}
+                      {isHistoryColumnVisible('time') && <td data-label="Time (IST)">{formatISTDateTime(record.timestamp)}</td>}
                     </tr>
                   );
                 })}
@@ -2295,6 +2337,15 @@ export default function AdminAttendance() {
             ) : null}
           </div>
         )}
+
+        <ColumnEditorPanel
+          open={historyEditorOpen}
+          columns={HISTORY_COLUMNS}
+          isColumnVisible={isHistoryColumnVisible}
+          onToggle={handleHistoryColumnToggle}
+          loading={historyColumnsLoading}
+          onClose={() => setHistoryEditorOpen(false)}
+        />
       </section>
 
       <div className="attendance-footer">

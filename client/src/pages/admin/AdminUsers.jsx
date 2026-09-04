@@ -247,7 +247,13 @@ export default function AdminUsers() {
     setColumnsError('');
     try {
       const response = await preferencesApi.getTablePreference(EMPLOYEE_TABLE_KEY);
-      setVisibleColumns(columnsFromPreference(response?.data?.columns));
+      // First visit (no saved preference) shows the compact UI default, not the
+      // full server column registry.
+      if (response?.data?.saved === false) {
+        setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+      } else {
+        setVisibleColumns(columnsFromPreference(response?.data?.columns));
+      }
     } catch (err) {
       setColumnsError(getErrorMessage(err));
       setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);

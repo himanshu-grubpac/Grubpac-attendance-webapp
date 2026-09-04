@@ -3847,6 +3847,18 @@ body::-webkit-scrollbar-thumb {
   color: var(--error);
 }
 
+.stat-pill--info {
+  background: var(--info-bg);
+  border-color: color-mix(in srgb, var(--info) 25%, var(--border));
+  color: var(--info);
+}
+
+.stat-pill--muted {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
 /* ── Loading & skeletons ────────────────────────────────────────────── */
 
 .spinner {
@@ -5338,6 +5350,11 @@ body::-webkit-scrollbar-thumb {
 .dash-team-table__badge--absent {
   background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
   color: var(--danger, #b91c1c);
+}
+
+.dash-team-table__badge--leave {
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .dash-team-table__detail {
@@ -7335,7 +7352,10 @@ body::-webkit-scrollbar-thumb {
 .confirm-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  /* Must sit above .modal__backdrop (120) and .modal__backdrop--elevated
+     (130): confirms are also triggered from inside modals (e.g. leave
+     adjustment bulk upload). Below .action-popup-stack (200). */
+  z-index: 140;
   display: grid;
   place-items: center;
   padding: 1.25rem;
@@ -7764,6 +7784,14 @@ body::-webkit-scrollbar-thumb {
 
 .approvals-stat--info .approvals-stat__icon {
   background: color-mix(in srgb, var(--primary) 14%, var(--surface-2));
+}
+
+.approvals-stat--danger .approvals-stat__icon {
+  background: color-mix(in srgb, var(--danger, #dc2626) 14%, var(--surface-2));
+}
+
+.approvals-stat--muted .approvals-stat__icon {
+  background: color-mix(in srgb, var(--text-muted) 14%, var(--surface-2));
 }
 
 .approvals-stat--skeleton {
@@ -10205,6 +10233,7 @@ body::-webkit-scrollbar-thumb {
 .calendar-management__day--event { background: color-mix(in srgb, var(--success) 14%, var(--surface)); color: var(--success); }
 .calendar-management__day--categorized { background: color-mix(in srgb, var(--calendar-category-color) 14%, var(--surface)); color: var(--calendar-category-color); }
 .calendar-management__day--selected { box-shadow: inset 0 0 0 2px var(--primary); }
+.calendar-management__day--today { border-color: color-mix(in srgb, var(--primary) 55%, transparent); }
 .calendar-management__editor { display: grid; gap: var(--space-3); padding: var(--space-4); }
 .calendar-management__editor .card__section-title { margin: 0; }
 .calendar-management__form { display: grid; gap: var(--space-3); }
@@ -10289,6 +10318,50 @@ body::-webkit-scrollbar-thumb {
 }
 @media (min-width: 541px) { .calendar-management__months { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 801px) { .calendar-management__layout { grid-template-columns: minmax(0, 1fr) 20rem; } .calendar-management__editor { position: sticky; top: var(--space-3); } .calendar-management__months { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* Calendar management — view switcher (weekly / monthly / yearly) */
+.calendar-management__nav { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-h); font-size: 1rem; }
+.calendar-management__nav .btn { width: 2rem; min-width: 2rem; padding-inline: 0; font-size: 1.35rem; line-height: 1; }
+.calendar-management__nav .calendar-management__today-btn { width: auto; min-width: 0; padding-inline: 0.65rem; font-size: 0.75rem; font-weight: 600; line-height: 1.5; }
+.calendar-management__nav strong { white-space: nowrap; }
+.calendar-management__view-switcher { display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.2rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); }
+.calendar-management__view-label { padding-left: 0.55rem; color: var(--text-muted); font-size: 0.68rem; font-weight: 700; }
+.calendar-management__view-btn { padding: 0.38rem 0.85rem; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer; transition: background var(--interaction), color var(--interaction); }
+.calendar-management__view-btn:hover { color: var(--text-h); }
+.calendar-management__view-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.calendar-management__view-btn--active { background: var(--primary); color: var(--primary-text); box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 35%, transparent); }
+/* Calendar management — monthly single view */
+.calendar-management__single-view { display: grid; gap: var(--space-3); }
+.calendar-management__month--single { padding: var(--space-4); }
+.calendar-management__month-heading { margin: 0 0 var(--space-2); color: var(--text-h); font-size: 0.8rem; font-weight: 700; }
+.calendar-management__month--single .calendar-management__days { gap: 0.3rem; }
+.calendar-management__month--single .calendar-management__day { border-radius: var(--radius); font-size: 0.82rem; }
+.calendar-management__month-events { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.calendar-management__month-events-title { margin: 0; color: var(--text-h); font-size: 0.78rem; font-weight: 700; }
+.calendar-management__event-list { display: grid; gap: 0.35rem; margin: 0; padding: 0; list-style: none; }
+.calendar-management__event-item { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.45rem 0.55rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text-h); font: inherit; font-size: 0.72rem; text-align: left; cursor: pointer; }
+.calendar-management__event-item:hover { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); }
+.calendar-management__event-item:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.calendar-management__event-date { color: var(--text-muted); font-weight: 700; white-space: nowrap; }
+.calendar-management__event-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Calendar management — weekly view */
+.calendar-management__week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-2); }
+.calendar-management__week-day { display: grid; align-content: start; gap: 0.45rem; min-width: 0; min-height: 9rem; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.calendar-management__week-day--today { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); }
+.calendar-management__week-day--selected { box-shadow: inset 0 0 0 2px var(--primary); }
+.calendar-management__week-day-head { display: grid; gap: 0.1rem; justify-items: center; padding: 0.3rem 0.2rem 0.45rem; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text-h); font: inherit; cursor: pointer; }
+.calendar-management__week-day-head:hover .calendar-management__week-day-number { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); }
+.calendar-management__week-day-head:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: var(--radius-sm); }
+.calendar-management__week-day-name { color: var(--text-muted); font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.calendar-management__week-day-number { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid transparent; border-radius: 999px; font-size: 0.95rem; font-weight: 700; }
+.calendar-management__week-day--today .calendar-management__week-day-number { background: var(--primary); color: var(--primary-text); }
+.calendar-management__week-day-month { color: var(--text-muted); font-size: 0.62rem; }
+.calendar-management__week-holiday { display: flex; align-items: flex-start; gap: 0.35rem; width: 100%; padding: 0.4rem 0.45rem; border: 0; border-radius: 0.32rem; background: color-mix(in srgb, var(--calendar-category-color) 14%, var(--surface)); color: var(--calendar-category-color); font: inherit; font-size: 0.66rem; font-weight: 600; line-height: 1.35; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.calendar-management__week-holiday:hover { outline: 1px solid color-mix(in srgb, var(--calendar-category-color) 45%, transparent); }
+.calendar-management__week-holiday:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.calendar-management__week-holiday .calendar-management__legend-dot { flex-shrink: 0; margin-top: 0.25rem; }
+.calendar-management__week-empty { color: var(--text-muted); font-size: 0.72rem; text-align: center; opacity: 0.5; }
+@media (max-width: 900px) { .calendar-management__week-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .calendar-management__week-day { min-height: 0; } }
+@media (max-width: 540px) { .calendar-management__week-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ── Employee list ──────────────────────────────────────────────── */
 
@@ -10526,7 +10599,7 @@ body::-webkit-scrollbar-thumb {
   color: var(--text-muted);
 }
 
-/* ── Streaks (quarter warnings) ─────────────────────────────────── */
+/* ── Late Warning (quarter warnings) ──────────────────────────── */
 
 .page--streaks {
   gap: var(--space-3);
@@ -10617,7 +10690,7 @@ body::-webkit-scrollbar-thumb {
 
 .streaks-table td[data-label='Used'],
 .streaks-table td[data-label='Remaining'],
-.streaks-table td[data-label='Allowance'] {
+.streaks-table td[data-label='Total'] {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
@@ -11374,6 +11447,62 @@ body::-webkit-scrollbar-thumb {
   min-height: var(--input-height);
   padding-inline: 1.15rem;
   font-weight: 700;
+}
+
+.bulk-upload__row--expandable {
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .bulk-upload__row--expandable:hover {
+    background: color-mix(in srgb, var(--primary) 4%, var(--surface-2));
+  }
+}
+
+.bulk-upload__change-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.bulk-upload__expand-icon {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.bulk-upload__detail-row td {
+  padding: 0 var(--space-3) var(--space-3) var(--space-3);
+  background: color-mix(in srgb, var(--surface-2) 60%, var(--surface));
+  border-top: 1px solid var(--border);
+}
+
+.bulk-upload__diff {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.bulk-upload__diff-change,
+.bulk-upload__diff-ignored {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+}
+
+.bulk-upload__diff-change {
+  background: color-mix(in srgb, var(--info) 10%, var(--surface));
+  color: var(--info);
+}
+
+.bulk-upload__diff-ignored {
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--warning);
+  text-decoration: line-through;
+  opacity: 0.8;
 }
 
 @media (min-width: 900px) {
@@ -12267,6 +12396,14 @@ body::-webkit-scrollbar-thumb {
 .roles-modal .checkbox-row__label {
   min-width: 0;
   padding-top: 0.05rem;
+}
+
+.roles-modal--view .checkbox-row {
+  cursor: default;
+}
+
+.roles-modal--view .checkbox-row input {
+  cursor: default;
 }
 
 @media (min-width: 900px) {
@@ -13733,6 +13870,11 @@ body::-webkit-scrollbar-thumb {
   color: var(--danger, #b91c1c);
 }
 
+.today-present-table__badge--leave {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
 .today-present-table__time {
   display: block;
   margin-top: 0.1rem;
@@ -13746,4 +13888,45 @@ body::-webkit-scrollbar-thumb {
   padding: var(--space-4);
   display: grid;
   gap: var(--space-2);
+}
+
+/* ── Employee leave adjustment: row edit / bulk edit / bulk upload ── */
+
+.leave-adjustment-table__col-actions {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.leave-adjustment-table__actions-cell {
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.leave-adjustment-table__value {
+  display: inline-block;
+  min-width: 1.35rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.leave-adjustment-table__row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.leave-adjustment-table__row--editing {
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+}
+
+.leave-carry-bulk-modal__body > section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.leave-carry-bulk-modal__body > section + section {
+  margin-top: 1rem;
 }

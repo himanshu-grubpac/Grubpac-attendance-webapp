@@ -416,7 +416,7 @@ test('integration: concurrent invocations — only one processes', async () => {
   }
 });
 
-test('integration: scan window boundary — check-in at exactly 3 days ago is included', async () => {
+test('integration: scan window — check-in 3 days ago is inside the 7-day window', async () => {
   await setupDb();
   try {
     await AttendanceRecord.deleteMany({});
@@ -438,7 +438,7 @@ test('integration: scan window boundary — check-in at exactly 3 days ago is in
   }
 });
 
-test('integration: check-in older than the previous scan window is still processed', async () => {
+test('integration: check-in 4 days ago is inside the 7-day window', async () => {
   await setupDb();
   try {
     await AttendanceRecord.deleteMany({});
@@ -453,8 +453,30 @@ test('integration: check-in older than the previous scan window is still process
     const result = await runAutoCheckoutJob(now);
     const after = await countAutoCheckouts(user._id);
 
-    assert.equal(after - before, 1, 'historical open check-in should be processed');
+    assert.equal(after - before, 1, 'check-in inside the scan window should be processed');
     assert.equal(result.processed, 1);
+  } finally {
+    await teardownDb();
+  }
+});
+
+test('integration: stale check-in 30 days old is excluded by the bounded scan', async () => {
+  await setupDb();
+  try {
+    await AttendanceRecord.deleteMany({});
+    await JobLock.deleteMany({});
+    const user = await makeUser('int.stale');
+    await ensureDefaultOffice();
+    const now = new Date();
+    const thirtyDaysAgo = getISTDateInputValue(new Date(now.getTime() - 30 * 86400000));
+    await makeCheckIn(user._id, 'office', thirtyDaysAgo, '09:00');
+
+    const before = await countAutoCheckouts(user._id);
+    const result = await runAutoCheckoutJob(now);
+    const after = await countAutoCheckouts(user._id);
+
+    assert.equal(after - before, 0, 'check-in outside the scan window must be skipped');
+    assert.equal(result.processed, 0);
   } finally {
     await teardownDb();
   }

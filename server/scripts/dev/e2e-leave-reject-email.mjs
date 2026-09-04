@@ -1,11 +1,11 @@
 import mongoose from 'mongoose';
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { User } from '../src/models/User.js';
-import { LeaveRequest } from '../src/models/LeaveRequest.js';
-import { Notification } from '../src/models/Notification.js';
-import { decideLeaveRequest } from '../src/services/leaveService.js';
-import { renderLeaveApplicantEmail } from '../src/services/emailService.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { User } from '../../src/models/User.js';
+import { LeaveRequest } from '../../src/models/LeaveRequest.js';
+import { Notification } from '../../src/models/Notification.js';
+import { decideLeaveRequest, runLeaveDecisionNotifyJob } from '../../src/services/leaveService.js';
+import { renderLeaveApplicantEmail } from '../../src/services/emailService.js';
 import bcrypt from 'bcryptjs';
 
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
@@ -67,21 +67,34 @@ try {
     result = await decideLeaveRequest(requestId, manager, ['leave.approve', 'leave.read_all'], 'rejected', { comment: 'Not enough coverage' });
   } catch (e) {
     error = e;
-  } finally {
-    console.log = origLog;
   }
 
   check('reject does not throw', !error);
-  check('request status is rejected', result && result.status === 'rejected');
+
+  // Decisions are two-phase: decide() only stages pendingDecision + notifyAfter
+  // (undo window); status/notifications finalize when the notify job runs.
+  const staged = await LeaveRequest.findById(requestId).lean();
+  check('decision staged as pending', staged && staged.status === 'pending');
+  check('pendingDecision is rejected', staged && staged.pendingDecision === 'rejected');
+  check('notifyAfter is scheduled', staged && staged.notifyAfter !== null);
+  check('notificationsSent is false before finalize', staged && staged.notificationsSent === false);
+
+  // Simulate the 1-minute LeaveNotifyScheduleRule firing after the undo window.
+  const jobResult = await runLeaveDecisionNotifyJob(
+    new Date(new Date(staged.notifyAfter).getTime() + 1000),
+  );
+  check('notify job processed the decision', jobResult && jobResult.processed === 1);
 
   const afterNotifCount = await Notification.countDocuments({ userId: employee._id, type: 'leave.rejected' });
   check('in-app notification created', afterNotifCount > beforeNotifCount);
 
   const savedRequest = await LeaveRequest.findById(requestId).lean();
+  check('request status is rejected', savedRequest && savedRequest.status === 'rejected');
   check('notificationsSent is true', savedRequest.notificationsSent === true);
   check('notifyAfter is null', savedRequest.notifyAfter === null);
 
   const emailLogged = consoleOutput.some((line) => line.includes('email:sent') && line.includes(employee.email));
+  console.log = origLog;
   check('rejection email sent', emailLogged);
 
   const notif = await Notification.findOne({ userId: employee._id, type: 'leave.rejected' }).sort({ createdAt: -1 }).lean();
@@ -110,3 +123,4 @@ try {
 
 console.log('LEAVE REJECT EMAIL E2E:', passed, 'passed,', failed, 'failed');
 process.exit(failed === 0 ? 0 : 1);
+

@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import { deviceIdSchema, emailSchema, indianMobileSchema, passwordSchema } from './common.js';
 
-const pinRegex = /^(\d{4}|\d{6})$/;
+/** System PIN is strictly 4 digits — 6-digit PINs were retired. */
+const pinRegex = /^\d{4}$/;
 export const pinSchema = z
   .string()
-  .regex(pinRegex, 'PIN must be 4 or 6 digits.');
+  .regex(pinRegex, 'PIN must be exactly 4 digits.');
 
-export const fourDigitPinSchema = z
-  .string()
-  .regex(/^\d{4}$/, 'PIN must be exactly 4 digits.');
+export const fourDigitPinSchema = pinSchema;
 
 /**
  * Employee self-service PIN setup/change.

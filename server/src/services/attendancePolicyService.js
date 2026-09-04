@@ -241,7 +241,7 @@ export function isExhaustionRelatedLv(timestamp, policy, weekendDays = [0, 6]) {
 }
 
 /**
- * Clear current-IST-quarter warning streaks for the given users.
+ * Clear current-IST-quarter late warnings (Late Warning page) for the given users.
  * - Sets warningIssued=false and quarterWarningIndex=null on warning check-ins.
  * - Reclassifies exhaustion-related LV (late window) to P; leaves HD and other LV alone.
  */

@@ -130,7 +130,7 @@ export const NAV_ITEMS = [
   },
   {
     to: '/admin/leave/streaks',
-    label: 'Streaks',
+    label: 'Late Warning',
     icon: '⚡',
     section: 'Leaves',
     portal: 'admin',

@@ -1,16 +1,16 @@
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { AttendanceRecord } from '../src/models/AttendanceRecord.js';
-import { User } from '../src/models/User.js';
-import { OfficeSettings } from '../src/models/OfficeSettings.js';
-import { getOfficeSettings } from '../src/services/geoService.js';
-import { buildAdminSyntheticGeoFields } from '../src/services/attendanceService.js';
-import { runAutoCheckoutJob, computeAutoCheckoutDeadline } from '../src/jobs/autoCheckoutJob.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { AttendanceRecord } from '../../src/models/AttendanceRecord.js';
+import { User } from '../../src/models/User.js';
+import { OfficeSettings } from '../../src/models/OfficeSettings.js';
+import { getOfficeSettings } from '../../src/services/geoService.js';
+import { buildAdminSyntheticGeoFields } from '../../src/services/attendanceService.js';
+import { runAutoCheckoutJob, computeAutoCheckoutDeadline } from '../../src/jobs/autoCheckoutJob.js';
 import bcrypt from 'bcryptjs';
 import {
   getISTDateInputValue,
   buildISTTimestampFromDayAndTime,
-} from '../src/utils/istDate.js';
+} from '../../src/utils/istDate.js';
 
 // Always run against an isolated in-memory MongoDB so we never touch real data.
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';

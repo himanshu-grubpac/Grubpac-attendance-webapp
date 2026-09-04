@@ -30,5 +30,18 @@
   "devDependencies": {
     "concurrently": "^9.2.1",
     "kill-port": "^2.0.1"
-  }
+  },
+  "description": "Internal employee attendance system for **Grubpac Technologies** — React (Vite) client + Node/Express API + MongoDB.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/himanshu-grubpac/Grubpac-attendance-webapp.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/himanshu-grubpac/Grubpac-attendance-webapp/issues"
+  },
+  "homepage": "https://github.com/himanshu-grubpac/Grubpac-attendance-webapp#readme"
 }

@@ -1,12 +1,12 @@
 import mongoose from 'mongoose';
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { User } from '../src/models/User.js';
-import { LeaveRequest } from '../src/models/LeaveRequest.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { User } from '../../src/models/User.js';
+import { LeaveRequest } from '../../src/models/LeaveRequest.js';
 import {
   issueLeaveDecisionToken,
   consumeLeaveDecisionToken,
-} from '../src/services/leaveService.js';
+} from '../../src/services/leaveService.js';
 
 let passed = 0;
 let failed = 0;
@@ -138,3 +138,4 @@ try {
   process.exitCode = 1;
   try { await disconnectDatabase(); server.close(); } catch {}
 }
+
