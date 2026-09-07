@@ -171,8 +171,17 @@ function formatDayPickerLabel(dayKey) {
 
 function isEditableAttendanceCell(cell) {
   if (!cell) return false;
-  if (cell.kind === 'absent') return true;
+  if (cell.kind === 'absent' || cell.kind === 'pending') return true;
+  if (cell.kind === 'leave' && !cell.checkInRecordId) return true;
   return Boolean(cell.checkInRecordId && cell.checkInRecord);
+}
+
+function isAttendanceCreateCell(cell) {
+  return (
+    cell?.kind === 'absent'
+    || cell?.kind === 'pending'
+    || (cell?.kind === 'leave' && !cell?.checkInRecordId)
+  );
 }
 
 function getEditableWeekDays(cells, weekDayKeys) {
@@ -236,7 +245,33 @@ function statusCodeFromCheckInRecord(record) {
   return record?.attendanceTag ?? 'P';
 }
 
-function buildStatusOptions(warningsPerQuarter = 3) {
+function isPolicyStatusCode(code) {
+  if (code === 'P' || code === 'HD' || code === 'LV') return true;
+  return /^W\d+$/.test(String(code ?? ''));
+}
+
+function findLeaveTypeByCode(code, leaveTypes) {
+  const normalized = String(code ?? '').trim().toUpperCase();
+  if (!normalized) return null;
+  return (leaveTypes ?? []).find(
+    (type) => String(type.code ?? '').trim().toUpperCase() === normalized,
+  );
+}
+
+function resolveLeaveOnlyStatusCode(cell, leaveTypes = []) {
+  const fromCell = String(cell?.leaveTypeCode ?? '').trim().toUpperCase();
+  if (fromCell) return fromCell;
+  const firstActive = leaveTypes.find((type) => type?.isActive !== false);
+  return String(firstActive?.code ?? '').trim().toUpperCase();
+}
+
+function isWfhLeaveTypeCode(code, leaveTypes) {
+  const type = findLeaveTypeByCode(code, leaveTypes);
+  if (!type) return false;
+  return String(type.code ?? '').trim().toUpperCase() === 'WFH';
+}
+
+function buildStatusOptions(warningsPerQuarter = 3, leaveTypes = []) {
   const allowance = Math.max(1, Math.min(10, Number(warningsPerQuarter) || 3));
   const options = [
     { value: 'P', label: 'Present (P)' },
@@ -245,6 +280,13 @@ function buildStatusOptions(warningsPerQuarter = 3) {
   ];
   for (let index = 1; index <= allowance; index += 1) {
     options.push({ value: `W${index}`, label: `Warning ${index} (W${index})` });
+  }
+  for (const type of leaveTypes) {
+    if (type?.isActive === false) continue;
+    const code = String(type.code ?? '').trim().toUpperCase();
+    if (!code || options.some((option) => option.value === code)) continue;
+    const name = type.name ?? code;
+    options.push({ value: code, label: `${code} — ${name}` });
   }
   return options;
 }
@@ -1221,6 +1263,7 @@ export default function AdminAttendance() {
   const [departments, setDepartments] = useState([]);
   const [recordIndex, setRecordIndex] = useState(new Map());
   const [leaveEntries, setLeaveEntries] = useState([]);
+  const [leaveTypes, setLeaveTypes] = useState([]);
   const [leaveTypeCodeById, setLeaveTypeCodeById] = useState(() => new Map());
   const [decisionNow, setDecisionNow] = useState(() => Date.now());
   const [holidaySet, setHolidaySet] = useState(new Set());
@@ -1346,12 +1389,14 @@ export default function AdminAttendance() {
       setRecordIndex(indexRecordsByUserAndDay(allRecords));
       setHolidaySet(holidays);
       setLeaveEntries(leaves);
+      setLeaveTypes(leaveTypesResponse.types ?? []);
       setLeaveTypeCodeById(buildLeaveTypeCodeById(leaveTypesResponse.types, leaves));
     } catch (err) {
       setError(getErrorMessage(err));
       setEmployees([]);
       setRecordIndex(new Map());
       setLeaveEntries([]);
+      setLeaveTypes([]);
       setLeaveTypeCodeById(new Map());
       setHolidaySet(new Set());
       setQuarterWarnings({ byUser: {}, quarter: null, allowance: 3 });
@@ -1666,8 +1711,8 @@ export default function AdminAttendance() {
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
   const statusOptions = useMemo(
-    () => buildStatusOptions(policy.warningsPerQuarter),
-    [policy.warningsPerQuarter],
+    () => buildStatusOptions(policy.warningsPerQuarter, leaveTypes),
+    [policy.warningsPerQuarter, leaveTypes],
   );
 
   function openEditForDay(employee, dayKey, cell) {
@@ -1675,21 +1720,25 @@ export default function AdminAttendance() {
 
     setEditPickerTarget(null);
 
-    if (cell.kind === 'absent') {
+    if (isAttendanceCreateCell(cell)) {
+      const isLeaveOnly = cell.kind === 'leave' && !cell.checkInRecordId;
       setEditTarget({
         employee,
         dayKey,
         checkInRecordId: null,
         isCreate: true,
-        hasCheckOutField: true,
+        isLeaveOnly,
+        hasCheckOutField: !isLeaveOnly,
         cellKind: cell.kind,
         checkInRecord: null,
       });
+      const leaveOnlyStatusCode = isLeaveOnly ? resolveLeaveOnlyStatusCode(cell, leaveTypes) : 'P';
       setEditForm({
-        checkInTime: normalizeHHmmTime(policy.officeStartTime) ?? '09:00',
+        checkInTime: isLeaveOnly ? '' : normalizeHHmmTime(policy.officeStartTime) ?? '09:00',
         checkOutTime: '',
-        statusCode: 'P',
-        attendanceMode: 'office',
+        statusCode: leaveOnlyStatusCode,
+        attendanceMode:
+          isLeaveOnly && isWfhLeaveTypeCode(leaveOnlyStatusCode, leaveTypes) ? 'wfh' : 'office',
         lateNote: '',
       });
       setEditError('');
@@ -1701,7 +1750,8 @@ export default function AdminAttendance() {
       dayKey,
       checkInRecordId: cell.checkInRecordId,
       isCreate: false,
-      hasCheckOutField: Boolean(cell.checkOutRecordId),
+      isLeaveOnly: false,
+      hasCheckOutField: true,
       cellKind: cell.kind,
       checkInRecord: cell.checkInRecord,
     });
@@ -1739,13 +1789,41 @@ export default function AdminAttendance() {
   }
 
   function patchEditForm(patch) {
-    setEditForm((current) => ({ ...current, ...patch }));
+    setEditForm((current) => {
+      const next = { ...current, ...patch };
+      if (patch.statusCode !== undefined) {
+        if (isWfhLeaveTypeCode(patch.statusCode, leaveTypes)) {
+          next.attendanceMode = 'wfh';
+        } else if (
+          findLeaveTypeByCode(patch.statusCode, leaveTypes)
+          && current.attendanceMode === 'wfh'
+          && editTarget?.isLeaveOnly
+        ) {
+          next.attendanceMode = 'office';
+        }
+      }
+      return next;
+    });
   }
 
   async function saveAttendanceEdit() {
     if (!editTarget) return;
-    if (!editTarget.isCreate && !editTarget.checkInRecordId) return;
-    if (!isValidHHmmTime(editForm.checkInTime)) {
+    if (!editTarget.isCreate && !editTarget.checkInRecordId && !editTarget.isLeaveOnly) return;
+
+    const leaveType = findLeaveTypeByCode(editForm.statusCode, leaveTypes);
+    const isLeaveTypeSelection = Boolean(leaveType);
+    const applyLeaveOnly =
+      isLeaveTypeSelection
+      && !editTarget.checkInRecordId
+      && !editForm.checkOutTime
+      && (editTarget.isLeaveOnly || editTarget.cellKind === 'absent' || editTarget.cellKind === 'leave');
+
+    if (applyLeaveOnly && !leaveType) {
+      setEditError('Select a leave type from the list.');
+      return;
+    }
+
+    if (!applyLeaveOnly && !isValidHHmmTime(editForm.checkInTime)) {
       setEditError('Enter a valid check-in time.');
       return;
     }
@@ -1762,18 +1840,30 @@ export default function AdminAttendance() {
     setEditError('');
     try {
       const payload = {
-        checkInTime: normalizeHHmmTime(editForm.checkInTime),
-        statusCode: editForm.statusCode,
         attendanceMode: editForm.attendanceMode,
         lateNote: editForm.lateNote.trim() ? editForm.lateNote.trim() : null,
       };
-      if (editTarget.hasCheckOutField) {
+
+      if (isLeaveTypeSelection) {
+        payload.leaveTypeId = leaveType.id ?? leaveType._id;
+      }
+
+      if (applyLeaveOnly) {
+        // Leave-only correction — no attendance record required.
+      } else {
+        payload.checkInTime = normalizeHHmmTime(editForm.checkInTime);
+        payload.statusCode = isPolicyStatusCode(editForm.statusCode) ? editForm.statusCode : 'P';
+      }
+
+      if (!editTarget.isCreate) {
         payload.checkOutTime = editForm.checkOutTime
           ? normalizeHHmmTime(editForm.checkOutTime)
           : null;
+      } else if (editTarget.hasCheckOutField && editForm.checkOutTime) {
+        payload.checkOutTime = normalizeHHmmTime(editForm.checkOutTime);
       }
 
-      if (editTarget.isCreate) {
+      if (editTarget.isCreate || editTarget.isLeaveOnly) {
         await adminApi.upsertAttendanceRecord({
           userId: editTarget.employee.id,
           dayKey: editTarget.dayKey,

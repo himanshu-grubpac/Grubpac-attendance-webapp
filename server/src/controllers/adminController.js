@@ -740,6 +740,29 @@ export async function upsertAttendanceRecord(req, res) {
     auditContext,
   });
 
+  if (result.leaveOnly) {
+    res.status(result.created ? 201 : 200).json({
+      record: null,
+      leaveOnly: true,
+      dayKey: result.dayKey,
+      leaveRequest: result.leaveRequest
+        ? {
+            id: result.leaveRequest._id.toString(),
+            userId: result.leaveRequest.userId?.toString?.() ?? String(result.leaveRequest.userId),
+            leaveTypeId:
+              result.leaveRequest.leaveTypeId?._id?.toString?.()
+              ?? result.leaveRequest.leaveTypeId?.toString?.(),
+            startDate: result.leaveRequest.startDate,
+            endDate: result.leaveRequest.endDate,
+            status: result.leaveRequest.status,
+            days: result.leaveRequest.days,
+          }
+        : null,
+      created: Boolean(result.created),
+    });
+    return;
+  }
+
   res.status(result.created ? 201 : 200).json({
     record: {
       id: result.checkIn._id.toString(),

@@ -37,6 +37,7 @@ import {
 import { auditLog } from '../utils/auditLog.js';
 import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
+  isUserInTeamScope,
   resolveLeaveApprovalUserIds,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
@@ -739,6 +740,281 @@ async function validateLeadDeputyConflict(userId, startDate, endDate, adminExcep
       'Department Lead and Deputy cannot be on leave on the same day. Request admin exception if required.',
     );
   }
+}
+
+const ADMIN_LEAVE_CORRECTION_REASON = 'Admin attendance correction';
+
+async function adminForceApproveExistingLeave(request, actor, session) {
+  if (request.status === 'approved') return;
+  const userId = request.userId?._id ?? request.userId;
+  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  const year = getISTYear(request.startDate);
+  await applyLeaveApproval(request, {
+    userId,
+    leaveTypeId,
+    days: request.days,
+    year,
+    session,
+    approverId: actor._id,
+    comment: ADMIN_LEAVE_CORRECTION_REASON,
+  });
+}
+
+async function adminCreateSingleDayApprovedLeave({
+  userId,
+  dayKey,
+  leaveTypeId,
+  actor,
+  auditContext,
+  reason = ADMIN_LEAVE_CORRECTION_REASON,
+}) {
+  const session = await mongoose.startSession();
+  try {
+    let createdRequest;
+    await session.withTransaction(async () => {
+      const validated = await validateLeaveRequestInput({
+        userId,
+        leaveTypeId,
+        startDateInput: dayKey,
+        endDateInput: dayKey,
+        adminException: true,
+      });
+      await reserveValidatedLeaveBalance(validated.balance, validated.balancePendingDelta, session);
+
+      const [request] = await LeaveRequest.create(
+        [
+          {
+            userId,
+            leaveTypeId,
+            startDate: validated.startDate,
+            endDate: validated.endDate,
+            days: validated.days,
+            halfDay: null,
+            reason,
+            status: 'pending',
+            adminException: true,
+          },
+        ],
+        { session },
+      );
+
+      await applyLeaveApproval(request, {
+        userId,
+        leaveTypeId,
+        days: validated.days,
+        year: validated.year,
+        session,
+        approverId: actor._id,
+        comment: reason,
+      });
+
+      if (isWfhLeaveType(validated.leaveType)) {
+        await updateWfhAttendanceForRequest(request, {
+          toStatus: 'approved',
+          leaveType: validated.leaveType,
+          session,
+        });
+      }
+
+      createdRequest = request;
+    });
+
+    auditLog('leave_admin_apply_day', {
+      adminId: actor._id.toString(),
+      email: auditContext.email,
+      userId: userId.toString(),
+      dayKey,
+      leaveTypeId: leaveTypeId.toString(),
+      requestId: createdRequest._id.toString(),
+      created: true,
+      ip: auditContext.ip,
+      userAgent: auditContext.userAgent,
+    });
+
+    return { leaveRequest: createdRequest, created: true, updated: false };
+  } finally {
+    session.endSession();
+  }
+}
+
+async function adminChangeSingleDayLeaveType(existing, leaveTypeId, actor, auditContext, reason) {
+  const session = await mongoose.startSession();
+  try {
+    let oldLeaveType = null;
+    await session.withTransaction(async () => {
+      const userId = existing.userId?._id ?? existing.userId;
+      const oldLeaveTypeId = existing.leaveTypeId?._id ?? existing.leaveTypeId;
+      const dayKey = getISTDateInputValue(existing.startDate);
+      const year = getISTYear(existing.startDate);
+      const days = existing.days;
+
+      oldLeaveType = await LeaveType.findById(oldLeaveTypeId).session(session);
+
+      if (existing.status === 'approved') {
+        await releaseApprovedDays(userId, oldLeaveTypeId, days, year, session);
+      } else if (existing.status === 'pending') {
+        await releasePendingDays(userId, oldLeaveTypeId, days, year, session);
+      }
+
+      const validated = await validateLeaveRequestInput({
+        userId,
+        leaveTypeId,
+        startDateInput: dayKey,
+        endDateInput: dayKey,
+        adminException: true,
+        excludeRequestId: existing._id,
+      });
+
+      existing.leaveTypeId = leaveTypeId;
+      existing.reason = reason;
+      existing.adminException = true;
+      existing.days = validated.days;
+      existing.status = 'pending';
+
+      await reserveValidatedLeaveBalance(validated.balance, validated.balancePendingDelta, session);
+      await applyLeaveApproval(existing, {
+        userId,
+        leaveTypeId,
+        days: validated.days,
+        year: validated.year,
+        session,
+        approverId: actor._id,
+        comment: reason,
+      });
+
+      if (isWfhLeaveType(validated.leaveType)) {
+        await updateWfhAttendanceForRequest(existing, {
+          toStatus: 'approved',
+          leaveType: validated.leaveType,
+          session,
+        });
+      } else if (isWfhLeaveType(oldLeaveType)) {
+        await clearWfhAttendanceMarkers(existing, { session });
+      }
+
+      await existing.save({ session });
+    });
+
+    auditLog('leave_admin_apply_day', {
+      adminId: actor._id.toString(),
+      email: auditContext.email,
+      userId: (existing.userId?._id ?? existing.userId).toString(),
+      dayKey: getISTDateInputValue(existing.startDate),
+      leaveTypeId: leaveTypeId.toString(),
+      requestId: existing._id.toString(),
+      created: false,
+      updated: true,
+      ip: auditContext.ip,
+      userAgent: auditContext.userAgent,
+    });
+
+    return { leaveRequest: existing, created: false, updated: true };
+  } finally {
+    session.endSession();
+  }
+}
+
+/**
+ * Admin / reporting-manager single-day leave correction for attendance grid edits.
+ * Same RBAC scope as admin attendance edit (ATTENDANCE_READ_ALL / ATTENDANCE_READ_TEAM).
+ */
+export async function adminApplyLeaveForEmployeeDay({
+  userId,
+  dayKey,
+  leaveTypeId,
+  actor,
+  permissions,
+  auditContext = {},
+  reason = ADMIN_LEAVE_CORRECTION_REASON,
+}) {
+  if (!mongoose.isValidObjectId(userId)) {
+    throwError('Employee not found.', 404);
+  }
+  if (!mongoose.isValidObjectId(leaveTypeId)) {
+    throwError('Leave type not found or inactive.');
+  }
+
+  const allowed = await isUserInTeamScope(
+    actor,
+    permissions,
+    userId,
+    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.ATTENDANCE_READ_TEAM,
+  );
+  if (!allowed) {
+    throwError('You do not have permission to edit this attendance record.', 403);
+  }
+
+  const employee = await User.findById(userId).select('_id isActive');
+  if (!employee?.isActive) {
+    throwError('Employee not found.', 404);
+  }
+
+  const istDay = parseDateInputAsISTDay(dayKey);
+  if (!istDay) {
+    throwError('Invalid attendance day.');
+  }
+
+  const leaveType = await LeaveType.findById(leaveTypeId);
+  if (!leaveType?.isActive) {
+    throwError('Leave type not found or inactive.');
+  }
+
+  const dayStart = startOfDayIST(istDay);
+  const dayEnd = endOfDayIST(istDay);
+
+  const existing = await LeaveRequest.findOne({
+    userId,
+    status: { $in: ['pending', 'approved'] },
+    startDate: { $lte: dayEnd },
+    endDate: { $gte: dayStart },
+  });
+
+  if (existing) {
+    const existingStartKey = getISTDateInputValue(existing.startDate);
+    const existingEndKey = getISTDateInputValue(existing.endDate);
+    const existingTypeId = (existing.leaveTypeId?._id ?? existing.leaveTypeId).toString();
+
+    if (existingTypeId === leaveTypeId.toString()) {
+      if (existing.status === 'approved') {
+        return { leaveRequest: existing, created: false, updated: false };
+      }
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await adminForceApproveExistingLeave(existing, actor, session);
+          if (isWfhLeaveType(leaveType)) {
+            await updateWfhAttendanceForRequest(existing, {
+              toStatus: 'approved',
+              leaveType,
+              session,
+            });
+          }
+          await existing.save({ session });
+        });
+      } finally {
+        session.endSession();
+      }
+      return { leaveRequest: existing, created: false, updated: true };
+    }
+
+    if (existingStartKey !== dayKey || existingEndKey !== dayKey) {
+      throwError(
+        'This employee has multi-day leave covering this date. Adjust it from the Leave module first.',
+      );
+    }
+
+    return adminChangeSingleDayLeaveType(existing, leaveTypeId, actor, auditContext, reason);
+  }
+
+  return adminCreateSingleDayApprovedLeave({
+    userId,
+    dayKey,
+    leaveTypeId,
+    actor,
+    auditContext,
+    reason,
+  });
 }
 
 export async function createLeaveRequest(userId, payload) {

@@ -564,6 +564,102 @@ async function main() {
   const latestEdit = editAttendance.data.record.editHistory.at(-1);
   assert(latestEdit?.changes?.some((change) => change.field === 'lateNote'), 'Edit history includes late note change');
 
+  console.log('\n--- Admin attendance edit: checkout create & absent upsert ---');
+  const usersForEdit = await request('/admin/users?page=1&limit=50', { method: 'GET' });
+  const employee2Id = usersForEdit.data.employees?.find((e) => e.email === employee2Email)?.id;
+  assert(employee2Id, 'Second employee id available for admin upsert test');
+
+  const upsertAbsent = await request('/admin/attendance/records', {
+    method: 'POST',
+    body: {
+      userId: employee2Id,
+      dayKey: getISTDateInputValue(),
+      checkInTime: '09:00',
+      checkOutTime: '18:00',
+      statusCode: 'P',
+      attendanceMode: 'office',
+      lateNote: 'Admin upsert verify',
+    },
+  });
+  assert(upsertAbsent.response.ok, 'Admin can upsert attendance for employee without punch');
+  assert(upsertAbsent.data.record?.checkInTime === '09:00', 'Upserted check-in time is persisted');
+  assert(upsertAbsent.data.record?.checkOutTime === '18:00', 'Upserted check-out time is persisted');
+
+  cookieHeader = '';
+  const employee3Email = `emp3.verify.${Date.now()}@grubpac.test`;
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
+  });
+  await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Employee 3',
+    email: employee3Email,
+    mobile: `7${String(Date.now()).slice(-9)}`,
+    reportingManagerId: sharedRmId,
+    codePrefix: 'TE',
+    label: 'Third employee',
+  });
+  cookieHeader = '';
+  await request('/auth/user/login', {
+    method: 'POST',
+    body: { identifier: employee3Email, password: employeePassword },
+  });
+  const checkInOnly = await request('/attendance/check-in', {
+    method: 'POST',
+    body: insidePayload(OFFICE_LAT, OFFICE_LNG, 10),
+  });
+  assert(checkInOnly.response.status === 201, 'Employee3 check-in without checkout works');
+  const checkInOnlyId = checkInOnly.data.record?.id ?? checkInOnly.data.record?._id;
+  assert(checkInOnlyId, 'Check-in-only record id available for admin checkout test');
+
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
+  });
+  const addCheckout = await request(`/admin/attendance/records/${checkInOnlyId}`, {
+    method: 'PATCH',
+    body: {
+      checkInTime: '09:30',
+      checkOutTime: '18:00',
+      statusCode: 'P',
+      attendanceMode: 'office',
+      lateNote: null,
+    },
+  });
+  assert(addCheckout.response.ok, 'Admin can add checkout to check-in-only record');
+  assert(addCheckout.data.record?.checkOutTime === '18:00', 'Admin-added checkout time is persisted');
+  assert(addCheckout.data.record?.checkOutRecordId, 'Admin-added checkout record id is returned');
+
+  const pastWorkingDayKeys = [];
+  for (let offset = 1; offset <= 14; offset += 1) {
+    const probe = new Date(Date.now() - offset * 86_400_000);
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'short',
+    }).format(probe);
+    if (weekday === 'Sat' || weekday === 'Sun') continue;
+    pastWorkingDayKeys.push(getISTDateInputValue(probe));
+  }
+  assert(pastWorkingDayKeys.length >= 1, 'Past working day available for admin leave upsert test');
+  const leaveTypesList = await request('/leave/types', { method: 'GET' });
+  const activeLeaveTypes = (leaveTypesList.data.types ?? []).filter((type) => type.isActive !== false);
+  const clLeaveType =
+    activeLeaveTypes.find((type) => type.code === 'CL') ?? activeLeaveTypes[0];
+  assert(clLeaveType?.id, 'Active leave type is available for admin leave upsert test');
+  const upsertLeave = await request('/admin/attendance/records', {
+    method: 'POST',
+    body: {
+      userId: employee2Id,
+      dayKey: pastWorkingDayKeys[0],
+      leaveTypeId: clLeaveType.id,
+    },
+  });
+  assert(upsertLeave.response.ok, 'Admin can mark leave type on absent day');
+  assert(upsertLeave.data.leaveOnly === true, 'Leave-only upsert response is flagged');
+  assert(upsertLeave.data.leaveRequest?.status === 'approved', 'Admin leave correction is auto-approved');
+
   cookieHeader = '';
   const editedEmployeeEmail =
     (typeof checkInRecord.userId === 'object' && checkInRecord.userId?.email)

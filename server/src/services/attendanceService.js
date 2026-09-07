@@ -14,8 +14,7 @@ import {
   parseStatusCodeToPolicyFields,
   statusCodeFromRecord,
 } from './attendancePolicyService.js';
-import { getHolidayMapForYear } from './leaveService.js';
-import { hasApprovedWfhForIstDate } from './wfhPolicyService.js';
+import { getHolidayMapForYear, adminApplyLeaveForEmployeeDay } from './leaveService.js';
 import {
   isUserInTeamScope,
   resolveTeamScopedUserIds,
@@ -34,8 +33,10 @@ import {
 } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
 import {
+  hasApprovedWfhForIstDate,
   findWfhRequestForIstDate,
 } from './wfhPolicyService.js';
+import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 
 function throwError(message, statusCode = 400) {
@@ -1321,6 +1322,36 @@ export async function adminEditAttendanceRecord({
     throwError('Invalid attendance day on record.');
   }
 
+  if (payload.leaveTypeId) {
+    await adminApplyLeaveForEmployeeDay({
+      userId: checkInRecord.userId,
+      dayKey,
+      leaveTypeId: payload.leaveTypeId,
+      actor,
+      permissions,
+      auditContext,
+    });
+  }
+
+  if (!payload.checkInTime) {
+    const dayStart = startOfDayIST(istDay);
+    const dayEnd = endOfDayIST(istDay);
+    const checkOutRecord = await AttendanceRecord.findOne({
+      userId: checkInRecord.userId,
+      type: 'check_out',
+      status: 'allowed',
+      timestamp: { $gte: dayStart, $lte: dayEnd },
+    }).sort({ timestamp: 1 });
+
+    return {
+      checkIn: checkInRecord,
+      checkOut: checkOutRecord,
+      dayKey,
+      checkInTime: getISTTimeHHmm(checkInRecord.timestamp),
+      checkOutTime: checkOutRecord ? getISTTimeHHmm(checkOutRecord.timestamp) : null,
+    };
+  }
+
   const dayStart = startOfDayIST(istDay);
   const dayEnd = endOfDayIST(istDay);
   const newCheckInTs = buildISTTimestampFromDayAndTime(dayKey, payload.checkInTime);
@@ -1331,7 +1362,7 @@ export async function adminEditAttendanceRecord({
     throwError('Check-in time must fall within the attendance day (IST).');
   }
 
-  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode);
+  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode ?? 'P');
   const beforeCheckIn = snapshotAttendanceRecord(checkInRecord);
   const wfhRequestForDay = await findWfhRequestForIstDate(checkInRecord.userId, dayKey);
   const wfhDecisionPending =
@@ -1471,6 +1502,35 @@ export async function adminUpsertAttendanceForDay({
 
   const dayStart = startOfDayIST(istDay);
   const dayEnd = endOfDayIST(istDay);
+
+  let leaveResult = null;
+  if (payload.leaveTypeId) {
+    leaveResult = await adminApplyLeaveForEmployeeDay({
+      userId,
+      dayKey,
+      leaveTypeId: payload.leaveTypeId,
+      actor,
+      permissions,
+      auditContext,
+    });
+  }
+
+  if (!payload.checkInTime) {
+    if (!payload.leaveTypeId) {
+      throwError('Either check-in time or leave type is required.');
+    }
+    return {
+      checkIn: null,
+      checkOut: null,
+      dayKey,
+      checkInTime: null,
+      checkOutTime: null,
+      leaveRequest: leaveResult?.leaveRequest ?? null,
+      created: Boolean(leaveResult?.created),
+      leaveOnly: true,
+    };
+  }
+
   const existingCheckIn = await findCheckInForUserDay(userId, dayStart, dayEnd);
   if (existingCheckIn) {
     return adminEditAttendanceRecord({
@@ -1509,7 +1569,7 @@ export async function adminUpsertAttendanceForDay({
     }
   }
 
-  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode);
+  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode ?? 'P');
   const office = await getOfficeSettings();
   const geoFields = buildAdminSyntheticGeoFields(office);
   const wfhRequestForDay = await findWfhRequestForIstDate(userId, dayKey);
@@ -1552,7 +1612,7 @@ export async function adminUpsertAttendanceForDay({
   const changes = buildAdminCreateEditChanges({
     checkInTime,
     checkOutTime,
-    statusCode: payload.statusCode,
+    statusCode: payload.statusCode ?? 'P',
     attendanceMode: payload.attendanceMode,
     lateNote: payload.lateNote ?? null,
   });
@@ -1581,6 +1641,7 @@ export async function adminUpsertAttendanceForDay({
     checkInTime,
     checkOutTime,
     created: true,
+    leaveRequest: leaveResult?.leaveRequest ?? null,
   };
 }
 
