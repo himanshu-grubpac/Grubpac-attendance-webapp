@@ -5,11 +5,13 @@ import { helpApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
+import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
 import BackLink from '../../components/BackLink.jsx';
 import PageLoading from '../../components/PageLoading.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import FieldError from '../../components/FieldError.jsx';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 
 const STATUS_OPTIONS = [
   { value: 'open', label: 'Open' },
@@ -17,7 +19,12 @@ const STATUS_OPTIONS = [
   { value: 'resolved', label: 'Resolved' },
   { value: 'closed', label: 'Closed' },
 ];
-import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+
+const PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
 
 const MAX_COMMENT_ATTACHMENTS = 3;
 const MAX_COMMENT_FILE_BYTES = 5 * 1024 * 1024;
@@ -87,6 +94,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState('');
   const [statusValue, setStatusValue] = useState('open');
+  const [priorityValue, setPriorityValue] = useState('medium');
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [attachmentError, setAttachmentError] = useState('');
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -100,6 +108,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
       setComments(data.comments ?? []);
       setAttachments(data.attachments ?? []);
       setStatusValue(data.ticket?.status ?? 'open');
+      setPriorityValue(data.ticket?.priority ?? 'medium');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -235,9 +244,11 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           setUpdatingStatus(true);
           setError('');
           try {
-            await helpApi.updateTicketStatus(id, { status: statusValue });
-            showSuccess('Ticket status updated.');
+            await helpApi.updateTicketStatus(id, { status: statusValue, priority: priorityValue });
+            showSuccess('Ticket updated.');
             await loadTicket();
+          } catch (err) {
+            setError(getErrorMessage(err));
           } finally {
             setUpdatingStatus(false);
           }
@@ -249,8 +260,8 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     setUpdatingStatus(true);
     setError('');
     try {
-      await helpApi.updateTicketStatus(id, { status: statusValue });
-      showSuccess('Ticket status updated.');
+      await helpApi.updateTicketStatus(id, { status: statusValue, priority: priorityValue });
+      showSuccess('Ticket updated.');
       await loadTicket();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -316,8 +327,9 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
       <div className="card help-ticket-hero">
         <div className="help-ticket-hero__status">
           <HelpStatusBadge status={ticket.status} />
+          <HelpPriorityBadge priority={ticket.priority} />
           <span className="muted small">
-            {ticket.category} · {ticket.priority} priority
+            {ticket.category}
           </span>
         </div>
         <p className="help-ticket-hero__body">{ticket.description}</p>
@@ -364,7 +376,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
 
       {canUpdateStatus && (
         <div className="card">
-        <p className="card__section-title">Update status</p>
+        <p className="card__section-title">Update ticket</p>
         <form className="toolbar-row" onSubmit={handleStatusUpdate}>
             <label className="field-inline form-field--sm">
               <span className="label">Status</span>
@@ -375,8 +387,17 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
                 aria-label="Status"
               />
             </label>
+            <label className="field-inline form-field--sm">
+              <span className="label">Set Priority</span>
+              <SelectField
+                value={priorityValue}
+                onChange={setPriorityValue}
+                options={PRIORITY_OPTIONS}
+                aria-label="Set Priority"
+              />
+            </label>
             <button type="submit" className="btn btn-primary" disabled={updatingStatus}>
-              {updatingStatus ? 'Saving…' : 'Save status'}
+              {updatingStatus ? 'Saving…' : 'Save changes'}
             </button>
           </form>
         </div>

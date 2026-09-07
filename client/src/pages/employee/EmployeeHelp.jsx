@@ -8,6 +8,7 @@ import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
+import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -15,13 +16,8 @@ import FieldError from '../../components/FieldError.jsx';
 import UserGuideLinks from '../../components/UserGuideLinks.jsx';
 
 const CATEGORIES = ['Login', 'Attendance', 'Leave', 'Salary', 'Other'];
-const PRIORITIES = ['low', 'medium', 'high'];
 
 const CATEGORY_OPTIONS = CATEGORIES.map((item) => ({ value: item, label: item }));
-const PRIORITY_OPTIONS = PRIORITIES.map((item) => ({
-  value: item,
-  label: item.charAt(0).toUpperCase() + item.slice(1),
-}));
 
 const MAX_ATTACHMENTS = 5;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -36,7 +32,6 @@ const ACCEPT_ATTR = '.jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,
 const EMPTY_FORM = {
   title: '',
   category: 'Other',
-  priority: 'medium',
   description: '',
 };
 
@@ -477,15 +472,6 @@ export default function EmployeeHelp() {
                   aria-label="Category"
                 />
               </label>
-              <label className="field">
-                <span className="label">Priority</span>
-                <SelectField
-                  value={form.priority}
-                  onChange={(value) => updateField('priority', value)}
-                  options={PRIORITY_OPTIONS}
-                  aria-label="Priority"
-                />
-              </label>
             </div>
             <label className="field form-grid__full">
               <span className="label">Description</span>
@@ -680,20 +666,24 @@ export default function EmployeeHelp() {
                 <thead>
                   <tr>
                     <th>Title</th>
+                    <th>Priority</th>
                     <th>Status</th>
                     <th>Created</th>
-                    <th></th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tickets.map((item) => (
                     <tr key={item.id}>
                       <td data-label="Title" className="cell-ellipsis" title={item.title}>{item.title}</td>
+                      <td data-label="Priority">
+                        <HelpPriorityBadge priority={item.priority} />
+                      </td>
                       <td data-label="Status">
                         <HelpStatusBadge status={item.status} />
                       </td>
                       <td data-label="Created" className="muted small">{formatISTDateTime(item.createdAt)}</td>
-                      <td data-label="Action" className="cell-actions">
+                      <td data-label="Actions" className="cell-actions">
                         <Link to={`/employee/help/${item.id}`} className="btn btn-ghost btn-sm">
                           View
                         </Link>

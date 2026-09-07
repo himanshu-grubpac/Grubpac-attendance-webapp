@@ -1,12 +1,12 @@
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { User } from '../src/models/User.js';
-import { AttendanceRecord } from '../src/models/AttendanceRecord.js';
-import { OfficeSettings } from '../src/models/OfficeSettings.js';
-import { UndoAction } from '../src/models/UndoAction.js';
-import { LeaveRequest } from '../src/models/LeaveRequest.js';
-import { LeaveType } from '../src/models/LeaveType.js';
-import { getOfficeSettings } from '../src/services/geoService.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { User } from '../../src/models/User.js';
+import { AttendanceRecord } from '../../src/models/AttendanceRecord.js';
+import { OfficeSettings } from '../../src/models/OfficeSettings.js';
+import { UndoAction } from '../../src/models/UndoAction.js';
+import { LeaveRequest } from '../../src/models/LeaveRequest.js';
+import { LeaveType } from '../../src/models/LeaveType.js';
+import { getOfficeSettings } from '../../src/services/geoService.js';
 import {
   markAttendance,
   undoAttendance,
@@ -14,14 +14,14 @@ import {
   getMonthDayStatusSummary,
   getAdminAttendanceCreateDayBlockReason,
   adminEditAttendanceRecord,
-} from '../src/services/attendanceService.js';
-import { runAutoCheckoutJob } from '../src/jobs/autoCheckoutJob.js';
+} from '../../src/services/attendanceService.js';
+import { runAutoCheckoutJob } from '../../src/jobs/autoCheckoutJob.js';
 import {
   getISTDateInputValue,
   buildISTTimestampFromDayAndTime,
-} from '../src/utils/istDate.js';
+} from '../../src/utils/istDate.js';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../shared/permissions.js';
+import { PERMISSIONS } from '../../../shared/permissions.js';
 import bcrypt from 'bcryptjs';
 
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
@@ -108,6 +108,22 @@ await new Promise((r) => server.once('listening', r));
 await connectDatabase();
 
 try {
+  // ═══════════════════════════════════════════════════════════
+  // GROUP 0: Cold-start warm-up (in-memory DB only)
+  // The first write transaction against a fresh in-memory replica set can
+  // stall ~45s (primary election), which would push geo clientTimestamps
+  // past the 30s freshness window and cause false "stale" rejections.
+  // One throwaway check-in warms the txn path; its data is removed after.
+  // ═══════════════════════════════════════════════════════════
+  {
+    const office = await getOfficeSettings();
+    const warmUser = await makeUser('warmup');
+    await markAttendance(warmUser._id, 'check_in', { ...geoInside(office), attendanceMode: 'office' });
+    await AttendanceRecord.deleteMany({ userId: warmUser._id });
+    await UndoAction.deleteMany({ actorId: warmUser._id });
+    await User.deleteOne({ _id: warmUser._id });
+  }
+
   // ═══════════════════════════════════════════════════════════
   // GROUP 1: Basic Check-In / Check-Out Flow
   // ═══════════════════════════════════════════════════════════
@@ -751,3 +767,5 @@ try {
 
 console.log('\nATTENDANCE FLOW E2E:', passed, 'passed,', failed, 'failed');
 process.exit(failed === 0 ? 0 : 1);
+
+

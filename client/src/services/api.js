@@ -158,6 +158,8 @@ export const adminApi = {
     api.patch(`/admin/users/${id}`, { isActive }).then((r) => r.data),
   resetEmployeePassword: (id, payload) =>
     api.patch(`/admin/users/${id}/password`, payload).then((r) => r.data),
+  resetEmployeePin: (id, payload) =>
+    api.patch(`/admin/users/${id}/pin`, payload).then((r) => r.data),
   downloadTemplate: () =>
     downloadExcelBlob('/api/admin/users/template', {
       errorMessage: 'Failed to download template.',

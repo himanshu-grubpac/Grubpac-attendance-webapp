@@ -32,7 +32,16 @@ export default function CheckInMap({
       attributionControl: true,
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // CARTO raster basemaps require an API key (?key=) or tiles render with an
+    // "API key required" watermark. The key is baked in at build time via
+    // VITE_CARTO_API_KEY (see client/.env.example). Without it we fall back to
+    // the keyless URL so local dev still renders.
+    const cartoKey = import.meta.env.VITE_CARTO_API_KEY;
+    const tileUrl = cartoKey
+      ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${cartoKey}`
+      : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+    L.tileLayer(tileUrl, {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
       subdomains: 'abcd',
       maxZoom: 20,

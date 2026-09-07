@@ -16,11 +16,12 @@
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
     "test": "node --test src/**/*.test.js",
-    "test:e2e": "node scripts/e2e-password-reset.mjs",
-    "test:e2e:auto-checkout": "node scripts/e2e-auto-checkout.mjs",
-    "test:e2e:job-lock": "node scripts/e2e-job-lock.mjs",
-    "test:e2e:leave-reject-email": "node scripts/e2e-leave-reject-email.mjs",
-    "test:e2e:attendance-flow": "node scripts/e2e-attendance-flow.mjs",
+    "test:e2e": "node --env-file=.env.e2e scripts/dev/e2e-password-reset.mjs",
+    "test:e2e:auto-checkout": "node --env-file=.env.e2e scripts/dev/e2e-auto-checkout.mjs",
+    "test:e2e:job-lock": "node --env-file=.env.e2e scripts/dev/e2e-job-lock.mjs",
+    "test:e2e:leave-reject-email": "node --env-file=.env.e2e scripts/dev/e2e-leave-reject-email.mjs",
+    "test:e2e:attendance-flow": "node --env-file=.env.e2e scripts/dev/e2e-attendance-flow.mjs",
+    "test:e2e:ui-password-reset": "node scripts/dev/e2e-ui-password-reset.mjs",
     "jobs:auto-checkout": "node scripts/autoCheckoutJob.mjs"
   },
   "dependencies": {

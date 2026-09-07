@@ -19,6 +19,14 @@ Parameters:
     Type: String
     NoEcho: true
     Description: JWT signing secret (32+ characters)
+  JwtExpiresIn:
+    Type: String
+    Default: 12h
+    Description: JWT access-token lifetime (jsonwebtoken format, e.g. 12h, 30m) — keep in sync with JwtCookieMaxAgeMs so the cookie and token expire together
+  JwtCookieMaxAgeMs:
+    Type: String
+    Default: '43200000'
+    Description: Auth cookie lifetime in ms — keep equal to JwtExpiresIn (12h) so the cookie and token expire together
   ClientOrigin:
     Type: String
     Default: https://localhost
@@ -47,6 +55,89 @@ Parameters:
     Type: String
     Default: grubpac-attendance-api-jobs
     Description: Lambda function name for scheduled background jobs (auto-checkout, leave notify)
+  # Outbound notifications (leave decision emails/SMS). The deferred
+  # leave-decision-notify job needs the same mail/SMS config as the API.
+  # IMPORTANT: SAM owns the whole Environment block — any value currently set
+  # only in the Lambda console will be reset to the parameter below on the next
+  # deploy. Copy working console values into samconfig overrides BEFORE deploying.
+  SmtpHost:
+    Type: String
+    Default: ''
+    Description: SMTP host for transactional email (empty disables email)
+  SmtpPort:
+    Type: String
+    Default: '587'
+    Description: SMTP port
+  SmtpSecure:
+    Type: String
+    Default: 'false'
+    Description: Use implicit TLS for SMTP ('true' for port 465)
+  SmtpUser:
+    Type: String
+    Default: ''
+    Description: SMTP username
+  SmtpPass:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: SMTP password
+  EmailFrom:
+    Type: String
+    Default: ''
+    Description: From address for transactional email
+  EmailFromName:
+    Type: String
+    Default: Grubpac Attendance
+    Description: From name for transactional email
+  BrevoApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Brevo API key for transactional SMS (empty disables SMS)
+  SmsSender:
+    Type: String
+    Default: GRUBPAC
+    Description: Sender ID for outgoing SMS
+  SmsDefaultCountryCode:
+    Type: String
+    Default: '91'
+    Description: Country code prepended to local phone numbers lacking one
+  LeaveDecisionUndoMs:
+    Type: String
+    Default: '15000'
+    Description: Undo window (ms) before a leave decision is finalized and mailed
+  # Auto-checkout tuning. Consumed when the office-settings doc is first created
+  # (thereafter the DB doc wins). Wired into both functions so a fresh staging
+  # DB seeds with the intended schedule.
+  AutoCheckoutEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Master toggle for the auto-checkout job
+  AutoCheckoutOfficeDay:
+    Type: String
+    Default: same
+    AllowedValues:
+      - same
+      - next
+    Description: Which day office auto-checkout lands on (same/next calendar day)
+  AutoCheckoutOfficeTime:
+    Type: String
+    Default: '23:59'
+    Description: Office auto-checkout time (IST HH:mm)
+  AutoCheckoutWfhDay:
+    Type: String
+    Default: next
+    AllowedValues:
+      - same
+      - next
+    Description: Which day WFH auto-checkout lands on (same/next calendar day)
+  AutoCheckoutWfhTime:
+    Type: String
+    Default: '06:00'
+    Description: WFH auto-checkout time (IST HH:mm)
 
 Conditions:
   EnableWarmup: !Equals [!Ref EnableWarmupSchedule, 'true']
@@ -66,6 +157,7 @@ Resources:
           - Content-Type
           - Authorization
           - Cookie
+          - X-CSRF-Token
         AllowMethods:
           - GET
           - POST
@@ -90,11 +182,28 @@ Resources:
           NODE_ENV: production
           MONGODB_URI: !Ref MongoDbUri
           JWT_SECRET: !Ref JwtSecret
-          JWT_EXPIRES_IN: 12h
+          JWT_EXPIRES_IN: !Ref JwtExpiresIn
+          JWT_COOKIE_MAX_AGE_MS: !Ref JwtCookieMaxAgeMs
           CLIENT_ORIGIN: !Ref ClientOrigin
           UPLOADS_BUCKET: !Ref HelpUploadsBucketName
           UPLOADS_PREFIX: help-tickets
           UPLOAD_MAX_BYTES: '5242880'
+          SMTP_HOST: !Ref SmtpHost
+          SMTP_PORT: !Ref SmtpPort
+          SMTP_SECURE: !Ref SmtpSecure
+          SMTP_USER: !Ref SmtpUser
+          SMTP_PASS: !Ref SmtpPass
+          EMAIL_FROM: !Ref EmailFrom
+          EMAIL_FROM_NAME: !Ref EmailFromName
+          BREVO_API_KEY: !Ref BrevoApiKey
+          SMS_SENDER: !Ref SmsSender
+          SMS_DEFAULT_COUNTRY_CODE: !Ref SmsDefaultCountryCode
+          LEAVE_DECISION_UNDO_MS: !Ref LeaveDecisionUndoMs
+          AUTO_CHECKOUT_ENABLED: !Ref AutoCheckoutEnabled
+          AUTO_CHECKOUT_OFFICE_DAY: !Ref AutoCheckoutOfficeDay
+          AUTO_CHECKOUT_OFFICE_TIME: !Ref AutoCheckoutOfficeTime
+          AUTO_CHECKOUT_WFH_DAY: !Ref AutoCheckoutWfhDay
+          AUTO_CHECKOUT_WFH_TIME: !Ref AutoCheckoutWfhTime
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -155,6 +264,25 @@ Resources:
           NODE_ENV: production
           MONGODB_URI: !Ref MongoDbUri
           JWT_SECRET: !Ref JwtSecret
+          CLIENT_ORIGIN: !Ref ClientOrigin
+          UPLOADS_BUCKET: !Ref HelpUploadsBucketName
+          UPLOADS_PREFIX: help-tickets
+          SMTP_HOST: !Ref SmtpHost
+          SMTP_PORT: !Ref SmtpPort
+          SMTP_SECURE: !Ref SmtpSecure
+          SMTP_USER: !Ref SmtpUser
+          SMTP_PASS: !Ref SmtpPass
+          EMAIL_FROM: !Ref EmailFrom
+          EMAIL_FROM_NAME: !Ref EmailFromName
+          BREVO_API_KEY: !Ref BrevoApiKey
+          SMS_SENDER: !Ref SmsSender
+          SMS_DEFAULT_COUNTRY_CODE: !Ref SmsDefaultCountryCode
+          LEAVE_DECISION_UNDO_MS: !Ref LeaveDecisionUndoMs
+          AUTO_CHECKOUT_ENABLED: !Ref AutoCheckoutEnabled
+          AUTO_CHECKOUT_OFFICE_DAY: !Ref AutoCheckoutOfficeDay
+          AUTO_CHECKOUT_OFFICE_TIME: !Ref AutoCheckoutOfficeTime
+          AUTO_CHECKOUT_WFH_DAY: !Ref AutoCheckoutWfhDay
+          AUTO_CHECKOUT_WFH_TIME: !Ref AutoCheckoutWfhTime
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -164,6 +292,11 @@ Resources:
                 - logs:CreateLogStream
                 - logs:PutLogEvents
               Resource: '*'
+            - Effect: Allow
+              Action:
+                - s3:HeadObject
+                - s3:DeleteObject
+              Resource: !Sub 'arn:aws:s3:::${HelpUploadsBucketName}/help-tickets/*'
 
   AutoCheckoutScheduleRule:
     Type: AWS::Events::Rule
@@ -179,8 +312,8 @@ Resources:
   LeaveNotifyScheduleRule:
     Type: AWS::Events::Rule
     Properties:
-      Description: Run leave decision notify job every 30 minutes
-      ScheduleExpression: rate(30 minutes)
+      Description: Finalize leave decisions and send applicant mail shortly after the 15s undo window
+      ScheduleExpression: rate(1 minute)
       State: ENABLED
       Targets:
         - Arn: !GetAtt JobFunction.Arn
@@ -202,6 +335,25 @@ Resources:
       FunctionName: !Ref JobFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt LeaveNotifyScheduleRule.Arn
+
+  HelpCleanupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Delete orphaned pending help attachments (S3 + DB) daily
+      ScheduleExpression: rate(1 day)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt JobFunction.Arn
+          Id: HelpCleanupTarget
+          Input: '{"jobName":"help-attachment-cleanup"}'
+
+  HelpCleanupSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref JobFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt HelpCleanupScheduleRule.Arn
 
   JobFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm

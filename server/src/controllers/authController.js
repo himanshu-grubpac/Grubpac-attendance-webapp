@@ -123,20 +123,16 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
-  // A login secret is either the account password OR a 4/6-digit PIN. We detect
+  // A login secret is either the account password OR the 4-digit PIN. We detect
   // the format so a 4-digit PIN is tried against the PIN hash (when set) and
   // anything else falls through to a normal password comparison. This avoids
   // comparing against a null hash, which would throw.
   const secret = parsed.password;
   let valid = false;
   const isFourDigit = /^\d{4}$/.test(secret);
-  const isSixDigit = /^\d{6}$/.test(secret);
 
   if (isFourDigit && user.pin4Hash) {
     valid = await bcrypt.compare(secret, user.pin4Hash);
-  }
-  if (!valid && isSixDigit && user.pin6Hash) {
-    valid = await bcrypt.compare(secret, user.pin6Hash);
   }
   if (!valid) {
     valid = await bcrypt.compare(secret, user.passwordHash);
@@ -269,7 +265,13 @@ export async function changePassword(userId, body) {
     email: user.email,
   });
 
-  return { message: 'Password changed successfully.' };
+  // Re-issue the caller's own session so changing your password does not log
+  // you out (other sessions stay revoked via tokenVersion).
+  return {
+    message: 'Password changed successfully.',
+    token: signToken(user),
+    csrfToken: generateCsrfToken(),
+  };
 }
 
 /**
@@ -277,8 +279,7 @@ export async function changePassword(userId, body) {
  * - Only employees may set a PIN (admins use the admin reset endpoint).
  * - Setting a PIN for the first time requires no current PIN.
  * - Changing an existing PIN requires the current PIN to be supplied and correct.
- * - Self-service PINs are stored strictly as 4-digit (pin4Hash); any legacy
- *   6-digit hash is cleared so the account has a single, predictable credential.
+ * - PINs are strictly 4-digit (pin4Hash).
  */
 export async function setPin(userId, body, auditContext = {}) {
   const parsed = setPinSchema.parse(body);
@@ -296,7 +297,7 @@ export async function setPin(userId, body, auditContext = {}) {
     throw error;
   }
 
-  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
+  const hasPin = Boolean(user.pin4Hash);
   if (hasPin) {
     // Changing an existing PIN requires the current PIN.
     if (!parsed.currentPin) {
@@ -304,8 +305,7 @@ export async function setPin(userId, body, auditContext = {}) {
       error.statusCode = 400;
       throw error;
     }
-    const currentHash = user.pin4Hash || user.pin6Hash;
-    const currentValid = await bcrypt.compare(parsed.currentPin, currentHash);
+    const currentValid = await bcrypt.compare(parsed.currentPin, user.pin4Hash);
     if (!currentValid) {
       const error = new Error('Current PIN is incorrect.');
       error.statusCode = 401;
@@ -327,7 +327,8 @@ export async function setPin(userId, body, auditContext = {}) {
   }
 
   user.pin4Hash = await bcrypt.hash(parsed.pin, 12);
-  user.pin6Hash = null;
+  // Rotating the PIN revokes other sessions, like every credential change.
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
   auditLog(hasPin ? 'pin_changed' : 'pin_set', {
@@ -337,8 +338,11 @@ export async function setPin(userId, body, auditContext = {}) {
     ...auditContext,
   });
 
+  // Re-issue the caller's own session (see changePassword above).
   return {
     message: hasPin ? 'PIN changed successfully.' : 'PIN set successfully.',
+    token: signToken(user),
+    csrfToken: generateCsrfToken(),
   };
 }
 
@@ -363,7 +367,7 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
     throw error;
   }
 
-  const hasPin = Boolean(user.pin4Hash || user.pin6Hash);
+  const hasPin = Boolean(user.pin4Hash);
   if (!hasPin) {
     return { message: 'No PIN is currently set.' };
   }
@@ -378,8 +382,7 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
   }
 
   if (currentPin) {
-    const currentHash = user.pin4Hash || user.pin6Hash;
-    const currentValid = await bcrypt.compare(currentPin, currentHash);
+    const currentValid = await bcrypt.compare(currentPin, user.pin4Hash);
     if (!currentValid) {
       const error = new Error('Current PIN is incorrect.');
       error.statusCode = 401;
@@ -395,7 +398,8 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
   }
 
   user.pin4Hash = null;
-  user.pin6Hash = null;
+  // Removing the PIN revokes other sessions, like every credential change.
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
   auditLog('pin_removed', {
@@ -405,5 +409,10 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
     ...auditContext,
   });
 
-  return { message: 'PIN removed successfully.' };
+  // Re-issue the caller's own session (see changePassword above).
+  return {
+    message: 'PIN removed successfully.',
+    token: signToken(user),
+    csrfToken: generateCsrfToken(),
+  };
 }

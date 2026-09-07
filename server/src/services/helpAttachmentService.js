@@ -60,19 +60,37 @@ export function getUploadsBucket() {
 }
 
 let _s3Client = null;
+/**
+ * S3 client for help-ticket attachments.
+ * - Static keys (local dev / explicit env) are honored, including the session
+ *   token when present (temporary credentials).
+ * - Otherwise the AWS SDK default credential chain is used, so the Lambda
+ *   execution role (temporary container credentials) just works — no manual
+ *   keys required on staging/prod.
+ */
 export function getS3Client() {
   if (_s3Client) return _s3Client;
   const region = process.env.AWS_REGION ?? 'ap-south-1';
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  if (!accessKeyId || !secretAccessKey) {
-    throwError('AWS credentials are not configured.', 503);
+  const sessionToken = process.env.AWS_SESSION_TOKEN;
+  if (accessKeyId && secretAccessKey) {
+    _s3Client = new S3Client({
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+        ...(sessionToken ? { sessionToken } : {}),
+      },
+    });
+  } else {
+    _s3Client = new S3Client({ region });
   }
-  _s3Client = new S3Client({
-    region,
-    credentials: { accessKeyId, secretAccessKey },
-  });
   return _s3Client;
+}
+/** Test-only hook to drop the cached client between credential scenarios. */
+export function resetS3ClientForTests() {
+  _s3Client = null;
 }
 
 export function sanitizeFilename(fileName) {
@@ -357,6 +375,13 @@ export async function presignCommentUpload(actor, ticketId, commentId, permissio
 
   const comment = await loadComment(ticketId, commentId);
 
+  // Only the comment author or the ticket creator may attach files to a comment.
+  const actorId = actor._id.toString();
+  const commentAuthorId = comment.userId?._id?.toString() ?? comment.userId?.toString?.() ?? null;
+  if (getCreatorId(ticket) !== actorId && commentAuthorId !== actorId) {
+    throwError('You can only attach files to your own comments.', 403);
+  }
+
   if (!isAllowedMimeType(payload.mimeType)) {
     throwError('File type is not allowed. Use JPEG, PNG, WebP, or PDF.');
   }
@@ -520,9 +545,10 @@ export async function cleanupStalePendingAttachments() {
     createdAt: { $lt: cutoff },
   }).select('s3Key');
 
-  if (stale.length === 0) return;
+  if (stale.length === 0) return { cleaned: 0 };
 
   console.log(`[help-attachment] Cleaning up ${stale.length} stale pending attachment(s)`);
   await deleteS3Objects(stale.map((a) => a.s3Key));
   await HelpAttachment.deleteMany({ _id: { $in: stale.map((a) => a._id) } });
+  return { cleaned: stale.length };
 }

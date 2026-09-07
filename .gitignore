@@ -9,6 +9,7 @@ node_modules/
 server/.env
 client/.env
 client/.env.*
+!client/.env.example
 # Build outputs
 dist/
 dist-ssr/

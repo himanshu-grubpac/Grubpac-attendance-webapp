@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createHolidaySchema, createHolidayCategorySchema, updateHolidayCategorySchema } from '@shared/validation/holidays.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
@@ -22,10 +22,20 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const CATEGORY_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899'];
+const WEEKDAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const VIEW_TYPES = [
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+];
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function currentYear() {
   return Number(getISTDateInputValue().slice(0, 4));
+}
+
+function currentMonthIndex() {
+  return Number(getISTDateInputValue().slice(5, 7)) - 1;
 }
 
 function emptyForm(date = getISTDateInputValue()) {
@@ -34,6 +44,44 @@ function emptyForm(date = getISTDateInputValue()) {
 
 function dateKey(year, monthIndex, day) {
   return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function isValidDateKey(value) {
+  if (!value || !DATE_KEY_PATTERN.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const check = new Date(Date.UTC(year, month - 1, day));
+  return check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
+}
+
+function parseDateKey(value) {
+  if (!isValidDateKey(value)) return null;
+  return {
+    year: Number(value.slice(0, 4)),
+    month: Number(value.slice(5, 7)),
+    day: Number(value.slice(8, 10)),
+  };
+}
+
+function addDaysToKey(value, delta) {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  const shifted = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + delta));
+  return dateKey(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+}
+
+function mondayOfWeek(value) {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  const jsDay = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day)).getUTCDay();
+  const offset = (jsDay + 6) % 7;
+  return addDaysToKey(value, -offset);
+}
+
+function weekDates(mondayKey) {
+  return Array.from({ length: 7 }, (_, index) => addDaysToKey(mondayKey, index));
 }
 
 function monthCells(year, monthIndex) {
@@ -45,13 +93,30 @@ function monthCells(year, monthIndex) {
   ];
 }
 
+function formatDayLabel(value) {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  return `${parsed.day} ${MONTHS[parsed.month - 1].slice(0, 3)}`;
+}
+
+function formatDayWithYear(value) {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  return `${parsed.day} ${MONTHS[parsed.month - 1].slice(0, 3)} ${parsed.year}`;
+}
+
 export default function AdminTeamLeaveCalendar() {
   const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const [year, setYear] = useState(currentYear);
+  const [viewType, setViewType] = useState('monthly');
+  const [focusedMonth, setFocusedMonth] = useState(currentMonthIndex);
+  const [weekAnchor, setWeekAnchor] = useState(() => mondayOfWeek(getISTDateInputValue()));
   const [holidays, setHolidays] = useState([]);
   const [customCategories, setCustomCategories] = useState([]);
-  const [form, setForm] = useState(emptyForm);
+  // Initial selection: today (visible in the default monthly/weekly view).
+  // The original yearly view defaulted to Jan 1; that reset is preserved on year changes below.
+  const [form, setForm] = useState(() => emptyForm(getISTDateInputValue()));
   const [categoryForm, setCategoryForm] = useState({ name: '', color: '#8b5cf6' });
   const [categoryEditingId, setCategoryEditingId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -72,6 +137,9 @@ export default function AdminTeamLeaveCalendar() {
   });
   const [expandedMonth, setExpandedMonth] = useState(null);
   const categoryDialogTitleId = useId();
+  const yearsLoadedRef = useRef(new Set());
+
+  const todayKey = getISTDateInputValue();
 
   function closeCategoryDialog() {
     setAddingCategory(false);
@@ -83,14 +151,44 @@ export default function AdminTeamLeaveCalendar() {
   useEscapeKey(addingCategory, closeCategoryDialog);
   useEscapeKey(expandedMonth != null, () => setExpandedMonth(null));
 
+  function mergeHolidays(current, fetchedYear, fetched) {
+    const prefix = `${fetchedYear}-`;
+    const kept = current.filter((holiday) => {
+      const key = holiday.dateInput ?? '';
+      return !key.startsWith(prefix);
+    });
+    return [...kept, ...fetched];
+  }
+
+  async function ensureYearsLoaded(targetYears) {
+    const missing = [...new Set(targetYears)].filter((value) => !yearsLoadedRef.current.has(value));
+    if (missing.length === 0) return;
+    const results = await Promise.all(
+      missing.map(async (targetYear) => {
+        const data = await leaveApi.listHolidays({ year: targetYear });
+        return { targetYear, list: Array.isArray(data.holidays) ? data.holidays : [] };
+      }),
+    );
+    setHolidays((current) => {
+      let next = current;
+      for (const { targetYear, list } of results) {
+        next = mergeHolidays(next, targetYear, list);
+        yearsLoadedRef.current.add(targetYear);
+      }
+      return [...next];
+    });
+  }
+
   async function loadHolidays() {
     setLoading(true);
     setError('');
     try {
       const data = await leaveApi.listHolidays({ year });
-      setHolidays(Array.isArray(data.holidays) ? data.holidays : []);
+      const list = Array.isArray(data.holidays) ? data.holidays : [];
+      yearsLoadedRef.current.add(year);
+      setHolidays((current) => mergeHolidays(current, year, list));
     } catch (err) {
-      setHolidays([]);
+      setHolidays((current) => current.filter((holiday) => !(holiday.dateInput ?? '').startsWith(`${year}-`)));
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
@@ -106,10 +204,10 @@ export default function AdminTeamLeaveCalendar() {
     }
   }
 
+  // Pure data loader: selection/focus resets are owned explicitly by the
+  // navigation handlers below, so selecting a date in another year (or
+  // StrictMode's double-invocation on mount) can never wipe the form.
   useEffect(() => {
-    setEditingId(null);
-    setFieldErrors({});
-    setForm(emptyForm(`${year}-01-01`));
     loadHolidays();
   }, [year]);
 
@@ -144,16 +242,60 @@ export default function AdminTeamLeaveCalendar() {
     [holidays],
   );
 
+  const currentWeekKeys = useMemo(() => weekDates(weekAnchor), [weekAnchor]);
+
+  const weekRangeLabel = useMemo(() => {
+    const first = currentWeekKeys[0];
+    const last = currentWeekKeys[6];
+    const start = parseDateKey(first);
+    const end = parseDateKey(last);
+    if (!start || !end) return `${first} – ${last}`;
+    if (start.year !== end.year) return `${formatDayWithYear(first)} – ${formatDayWithYear(last)}`;
+    if (start.month !== end.month) return `${formatDayLabel(first)} – ${formatDayWithYear(last)}`;
+    return `${start.day}–${end.day} ${MONTHS[start.month - 1]} ${start.year}`;
+  }, [currentWeekKeys]);
+
+  const monthHolidays = useMemo(() => {
+    const prefix = `${year}-${String(focusedMonth + 1).padStart(2, '0')}-`;
+    return holidays
+      .filter((holiday) => (holiday.dateInput ?? '').startsWith(prefix))
+      .slice()
+      .sort((a, b) => (a.dateInput ?? '').localeCompare(b.dateInput ?? ''));
+  }, [holidays, year, focusedMonth]);
+
+  const calendarAriaLabel = useMemo(() => {
+    if (viewType === 'monthly') return `${MONTHS[focusedMonth]} ${year} company calendar`;
+    if (viewType === 'weekly') return `Week of ${weekRangeLabel} company calendar`;
+    return `${year} company calendar`;
+  }, [viewType, focusedMonth, year, weekRangeLabel]);
+
   function resetForm(date = `${year}-01-01`) {
     setEditingId(null);
     setFieldErrors({});
     setForm(emptyForm(date));
   }
 
+  function syncFocusToDate(date) {
+    const parsed = parseDateKey(date);
+    if (!parsed) return;
+    setFocusedMonth(parsed.month - 1);
+    setWeekAnchor(mondayOfWeek(date));
+    if (parsed.year !== year) {
+      setYear(parsed.year);
+    } else if (viewType === 'weekly') {
+      const needed = new Set(weekDates(mondayOfWeek(date)).map((key) => Number(key.slice(0, 4))));
+      const missing = [...needed].filter((value) => !yearsLoadedRef.current.has(value));
+      if (missing.length > 0) {
+        ensureYearsLoaded(missing).catch(() => {});
+      }
+    }
+  }
+
   function selectDate(date) {
     const holiday = holidaysByDate.get(date);
     setError('');
     setFieldErrors({});
+    syncFocusToDate(date);
     if (holiday) {
       setEditingId(holiday.id);
       setForm({
@@ -164,6 +306,137 @@ export default function AdminTeamLeaveCalendar() {
       return;
     }
     resetForm(date);
+  }
+
+  function handleFormDateChange(date) {
+    setForm((current) => ({ ...current, date }));
+    syncFocusToDate(date);
+  }
+
+  function goToYear(delta) {
+    const next = year + delta;
+    resetForm(`${next}-01-01`);
+    setYear(next);
+  }
+
+  function goToMonth(delta) {
+    const absolute = year * 12 + focusedMonth + delta;
+    const nextYear = Math.floor(absolute / 12);
+    const nextMonth = absolute - nextYear * 12;
+    setFocusedMonth(nextMonth);
+    if (nextYear !== year) {
+      // Land the selection on the first of the newly focused month so it stays visible.
+      resetForm(`${nextYear}-${String(nextMonth + 1).padStart(2, '0')}-01`);
+      setYear(nextYear);
+    }
+  }
+
+  function goToWeek(delta) {
+    const nextAnchor = addDaysToKey(weekAnchor, delta * 7);
+    const nextMondayYear = Number(nextAnchor.slice(0, 4));
+    const needed = new Set(
+      weekDates(nextAnchor)
+        .map((key) => parseDateKey(key))
+        .filter(Boolean)
+        .map((parsed) => parsed.year),
+    );
+    setWeekAnchor(nextAnchor);
+    const yearChanged = nextMondayYear !== year;
+    if (yearChanged) {
+      // Land the selection on the newly focused Monday so it stays visible.
+      resetForm(nextAnchor);
+      // The year effect loads nextMondayYear; silently fetch any straddled second year.
+      setYear(nextMondayYear);
+    }
+    const pendingYear = yearChanged ? nextMondayYear : null;
+    const missing = [...needed].filter((value) => value !== pendingYear && !yearsLoadedRef.current.has(value));
+    if (missing.length > 0) {
+      ensureYearsLoaded(missing).catch(() => {});
+    }
+  }
+
+  function goToToday() {
+    const today = getISTDateInputValue();
+    const todayYear = Number(today.slice(0, 4));
+    setFocusedMonth(Number(today.slice(5, 7)) - 1);
+    setWeekAnchor(mondayOfWeek(today));
+    // Today is the default selection: focus and form move together.
+    resetForm(today);
+    if (todayYear !== year) {
+      setYear(todayYear);
+    }
+  }
+
+  function handleViewTypeChange(next) {
+    // Switching views never moves the focused month/week or the form selection:
+    // focusedMonth and weekAnchor persist as independent state, so returning to
+    // monthly/weekly always lands back where the user was (e.g. September).
+    setViewType(next);
+    if (next === 'weekly') {
+      // Silently fetch the straddled second year when the visible week spans two years.
+      const needed = weekDates(weekAnchor)
+        .map((key) => parseDateKey(key))
+        .filter(Boolean)
+        .map((item) => item.year)
+        .filter((value) => value !== year && !yearsLoadedRef.current.has(value));
+      if (needed.length > 0) {
+        ensureYearsLoaded([...new Set(needed)]).catch(() => {});
+      }
+    }
+  }
+
+  function renderDayButton(key, day, onSelect) {
+    const holiday = holidaysByDate.get(key);
+    const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
+    return (
+      <button
+        key={key}
+        type="button"
+        className={`calendar-management__day${holiday ? ' calendar-management__day--categorized' : ''}${form.date === key ? ' calendar-management__day--selected' : ''}${key === todayKey ? ' calendar-management__day--today' : ''}`}
+        style={holiday ? { '--calendar-category-color': category.color } : undefined}
+        onClick={() => {
+          selectDate(key);
+          onSelect?.(key);
+        }}
+        title={holiday ? `${holiday.name} — ${category.label}` : `Add calendar entry for ${key}`}
+        aria-label={holiday ? `${key}: ${holiday.name}` : `Add calendar entry for ${key}`}
+        aria-pressed={form.date === key}
+      >
+        {day}
+      </button>
+    );
+  }
+
+  function renderMonthGrid(targetYear, monthIndex, { large = false, showModalTrigger = false } = {}) {
+    const monthName = MONTHS[monthIndex];
+    return (
+      <section
+        key={`${targetYear}-${monthName}`}
+        className={`calendar-management__month${large ? ' calendar-management__month--single' : ''}`}
+        aria-label={`${monthName} ${targetYear}`}
+      >
+        {showModalTrigger ? (
+          <button
+            type="button"
+            className="calendar-management__month-title"
+            onClick={() => setExpandedMonth(monthIndex)}
+          >
+            {monthName}
+          </button>
+        ) : (
+          <h2 className="calendar-management__month-heading">{monthName}</h2>
+        )}
+        <div className="calendar-management__weekdays" aria-hidden="true">
+          {WEEKDAYS.map((weekday) => <span key={weekday}>{weekday.slice(0, 1)}</span>)}
+        </div>
+        <div className="calendar-management__days">
+          {monthCells(targetYear, monthIndex).map((day, index) => {
+            if (!day) return <span key={`empty-${index}`} className="calendar-management__day calendar-management__day--empty" />;
+            return renderDayButton(dateKey(targetYear, monthIndex, day), day);
+          })}
+        </div>
+      </section>
+    );
   }
 
   async function handleSubmit(event) {
@@ -186,6 +459,8 @@ export default function AdminTeamLeaveCalendar() {
         result = await leaveApi.createHoliday(validation.data);
         showSuccess('Calendar entry added.');
       }
+      const savedYear = Number((result.holiday.dateInput ?? validation.data.date).slice(0, 4));
+      yearsLoadedRef.current.add(savedYear);
       setHolidays((current) => {
         const saved = result.holiday;
         return editingId
@@ -211,7 +486,11 @@ export default function AdminTeamLeaveCalendar() {
       onConfirm: async () => {
         await leaveApi.deleteHoliday(editingId);
         showSuccess('Calendar entry deleted.');
-        resetForm(`${year}-01-01`);
+        // Default selection is today; fall back to Jan 1 only when today lies
+        // outside the currently viewed year, keeping the form coherent with the view.
+        const today = getISTDateInputValue();
+        resetForm(today.startsWith(`${year}-`) ? today : `${year}-01-01`);
+        yearsLoadedRef.current.delete(year);
         await loadHolidays();
       },
     });
@@ -271,6 +550,7 @@ export default function AdminTeamLeaveCalendar() {
     try {
       const result = await leaveApi.materializeRecurringHolidays({ year });
       showSuccess(`Generated ${result.created?.length ?? 0} holiday dates for ${year}.`);
+      yearsLoadedRef.current.delete(year);
       await loadHolidays();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -302,16 +582,63 @@ export default function AdminTeamLeaveCalendar() {
       ) : null}
 
       <div className="calendar-management__layout">
-        <section className="calendar-management__calendar card" aria-label={`${year} company calendar`}>
+        <section className="calendar-management__calendar card" aria-label={calendarAriaLabel}>
           <div className="calendar-management__toolbar">
-            <div className="calendar-management__year-nav" aria-label="Calendar year">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setYear((value) => value - 1)} aria-label="Previous year">
-                ‹
-              </button>
-              <strong>{year}</strong>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setYear((value) => value + 1)} aria-label="Next year">
-                ›
-              </button>
+            <div className="calendar-management__nav" aria-label={viewType === 'monthly' ? 'Calendar month' : viewType === 'weekly' ? 'Calendar week' : 'Calendar year'}>
+              {viewType === 'yearly' ? (
+                <>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToYear(-1)} aria-label="Previous year">
+                    ‹
+                  </button>
+                  <strong aria-live="polite">{year}</strong>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToYear(1)} aria-label="Next year">
+                    ›
+                  </button>
+                </>
+              ) : null}
+              {viewType === 'monthly' ? (
+                <>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToMonth(-1)} aria-label="Previous month">
+                    ‹
+                  </button>
+                  <strong aria-live="polite">{MONTHS[focusedMonth]} {year}</strong>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToMonth(1)} aria-label="Next month">
+                    ›
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm calendar-management__today-btn" onClick={goToToday}>
+                    Today
+                  </button>
+                </>
+              ) : null}
+              {viewType === 'weekly' ? (
+                <>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToWeek(-1)} aria-label="Previous week">
+                    ‹
+                  </button>
+                  <strong aria-live="polite">{weekRangeLabel}</strong>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => goToWeek(1)} aria-label="Next week">
+                    ›
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm calendar-management__today-btn" onClick={goToToday}>
+                    Today
+                  </button>
+                </>
+              ) : null}
+            </div>
+            <div className="calendar-management__view-switcher" role="tablist" aria-label="Calendar view type">
+              <span className="calendar-management__view-label" aria-hidden="true">View:</span>
+              {VIEW_TYPES.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={viewType === option.value}
+                  className={`calendar-management__view-btn${viewType === option.value ? ' calendar-management__view-btn--active' : ''}`}
+                  onClick={() => handleViewTypeChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
             <div className="calendar-management__legend" aria-label="Calendar legend">
               {categoryOptions.map((category) => (
@@ -328,45 +655,88 @@ export default function AdminTeamLeaveCalendar() {
             <div className="calendar-management__loading" aria-busy="true">
               <div className="skeleton skeleton--calendar" />
             </div>
-          ) : (
+          ) : null}
+          {!loading && viewType === 'yearly' ? (
             <div className="calendar-management__months">
-              {MONTHS.map((monthName, monthIndex) => (
-                <section key={monthName} className="calendar-management__month" aria-label={`${monthName} ${year}`}>
-                  <button
-                    type="button"
-                    className="calendar-management__month-title"
-                    onClick={() => setExpandedMonth(monthIndex)}
-                  >
-                    {monthName}
-                  </button>
-                  <div className="calendar-management__weekdays" aria-hidden="true">
-                    {WEEKDAYS.map((weekday) => <span key={weekday}>{weekday.slice(0, 1)}</span>)}
-                  </div>
-                  <div className="calendar-management__days">
-                    {monthCells(year, monthIndex).map((day, index) => {
-                      if (!day) return <span key={`empty-${index}`} className="calendar-management__day calendar-management__day--empty" />;
-                      const key = dateKey(year, monthIndex, day);
-                      const holiday = holidaysByDate.get(key);
+              {MONTHS.map((monthName, monthIndex) => renderMonthGrid(year, monthIndex, { showModalTrigger: true }))}
+            </div>
+          ) : null}
+          {!loading && viewType === 'monthly' ? (
+            <div className="calendar-management__single-view">
+              {renderMonthGrid(year, focusedMonth, { large: true })}
+              <section className="calendar-management__month-events" aria-label={`Holidays in ${MONTHS[focusedMonth]} ${year}`}>
+                <h3 className="calendar-management__month-events-title">
+                  {MONTHS[focusedMonth]} entries ({monthHolidays.length})
+                </h3>
+                {monthHolidays.length === 0 ? (
+                  <p className="muted small">No entries this month. Select a date to add one.</p>
+                ) : (
+                  <ul className="calendar-management__event-list">
+                    {monthHolidays.map((holiday) => {
                       const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
                       return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`calendar-management__day${holiday ? ' calendar-management__day--categorized' : ''}${form.date === key ? ' calendar-management__day--selected' : ''}`}
-                          style={holiday ? { '--calendar-category-color': category.color } : undefined}
-                          onClick={() => selectDate(key)}
-                          title={holiday ? `${holiday.name} — ${category.label}` : `Add calendar entry for ${key}`}
-                          aria-label={holiday ? `${key}: ${holiday.name}` : `Add calendar entry for ${key}`}
-                        >
-                          {day}
-                        </button>
+                        <li key={holiday.id}>
+                          <button
+                            type="button"
+                            className="calendar-management__event-item"
+                            onClick={() => selectDate(holiday.dateInput)}
+                            title={`${holiday.name} — ${category.label}`}
+                          >
+                            <i className="calendar-management__legend-dot" style={{ background: category.color }} aria-hidden="true" />
+                            <span className="calendar-management__event-date">{formatDayLabel(holiday.dateInput)}</span>
+                            <span className="calendar-management__event-name">{holiday.name}</span>
+                          </button>
+                        </li>
                       );
                     })}
-                  </div>
-                </section>
-              ))}
+                  </ul>
+                )}
+              </section>
             </div>
-          )}
+          ) : null}
+          {!loading && viewType === 'weekly' ? (
+            <div className="calendar-management__week-grid" role="list" aria-label={`Week of ${weekRangeLabel}`}>
+              {currentWeekKeys.map((key, index) => {
+                const holiday = holidaysByDate.get(key);
+                const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
+                const parsed = parseDateKey(key);
+                return (
+                  <div
+                    key={key}
+                    role="listitem"
+                    className={`calendar-management__week-day${key === todayKey ? ' calendar-management__week-day--today' : ''}${form.date === key ? ' calendar-management__week-day--selected' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="calendar-management__week-day-head"
+                      onClick={() => selectDate(key)}
+                      title={holiday ? `${holiday.name} — ${category.label}` : `Add calendar entry for ${key}`}
+                      aria-label={holiday ? `${WEEKDAYS_FULL[index]} ${key}: ${holiday.name}` : `Add calendar entry for ${WEEKDAYS_FULL[index]} ${key}`}
+                      aria-pressed={form.date === key}
+                    >
+                      <span className="calendar-management__week-day-name">{WEEKDAYS[index]}</span>
+                      <span className="calendar-management__week-day-number">{parsed?.day}</span>
+                      <span className="calendar-management__week-day-month">{parsed ? MONTHS[parsed.month - 1].slice(0, 3) : ''}</span>
+                    </button>
+                    {holiday ? (
+                      <button
+                        type="button"
+                        className="calendar-management__week-holiday"
+                        style={{ '--calendar-category-color': category.color }}
+                        onClick={() => selectDate(key)}
+                        title={`${holiday.name} — ${category.label}`}
+                      >
+                        <i className="calendar-management__legend-dot" style={{ background: category.color }} aria-hidden="true" />
+                        <span>{holiday.name}</span>
+                      </button>
+                    ) : (
+                      <span className="calendar-management__week-empty" aria-hidden="true">—</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
         </section>
 
         <aside className="calendar-management__editor card">
@@ -377,7 +747,7 @@ export default function AdminTeamLeaveCalendar() {
           <form className="calendar-management__form" onSubmit={handleSubmit}>
             <label>
               <span className="label">Date</span>
-              <DateField value={form.date} onChange={(date) => setForm({ ...form, date })} aria-label="Holiday date" />
+              <DateField value={form.date} onChange={handleFormDateChange} aria-label="Holiday date" />
               <FieldError message={fieldErrors.date} />
             </label>
             <label>
@@ -437,23 +807,7 @@ export default function AdminTeamLeaveCalendar() {
                   <div className="calendar-management__days calendar-management__days--expanded">
                     {monthCells(year, expandedMonth).map((day, index) => {
                       if (!day) return <span key={`empty-${index}`} className="calendar-management__day calendar-management__day--empty" />;
-                      const key = dateKey(year, expandedMonth, day);
-                      const holiday = holidaysByDate.get(key);
-                      const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`calendar-management__day${holiday ? ' calendar-management__day--categorized' : ''}${form.date === key ? ' calendar-management__day--selected' : ''}`}
-                          style={holiday ? { '--calendar-category-color': category.color } : undefined}
-                          onClick={() => {
-                            selectDate(key);
-                            setExpandedMonth(null);
-                          }}
-                        >
-                          {day}
-                        </button>
-                      );
+                      return renderDayButton(dateKey(year, expandedMonth, day), day, () => setExpandedMonth(null));
                     })}
                   </div>
                 </div>

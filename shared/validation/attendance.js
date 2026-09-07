@@ -51,7 +51,7 @@ export const attendancePayloadSchema = z.object({
     .transform((value) => (value ? value : undefined)),
 });
 
-/** Admin reset of quarterly late-check-in warning streaks for selected employees. */
+/** Admin reset of quarterly late-check-in warnings (Late Warning page) for selected employees. */
 export const MAX_QUARTER_WARNING_RESET_USERS = 200;
 
 export const resetQuarterWarningsSchema = z.object({

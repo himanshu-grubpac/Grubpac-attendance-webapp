@@ -32,6 +32,8 @@ import {
 import { parseDateInputAsISTDay, getISTYear } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
 import { signToken } from '../middleware/auth.js';
+import { generateCsrfToken, setCsrfCookie } from '../middleware/csrf.js';
+import { setAuthCookie } from './authController.js';
 import { env } from '../config/env.js';
 import {
   getRecurringHolidayRules,
@@ -453,14 +455,10 @@ export async function leaveDecisionLoginHandler(req, res) {
   try {
     const { manager } = await autoLoginByDecisionToken(request, action, token);
     const jwtToken = signToken(manager);
-    const isProd = process.env.NODE_ENV === 'production';
-    res.cookie('attendance_token', jwtToken, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'strict' : 'lax',
-      maxAge: env.jwtCookieMaxAgeMs,
-      path: '/',
-    });
+    // Same session as a normal login: auth cookie plus the CSRF pair, so the
+    // manager's Approve/Reject POSTs from the approvals page pass csrfProtection.
+    setAuthCookie(res, jwtToken);
+    setCsrfCookie(res, generateCsrfToken());
     const redirectUrl = action === 'decide'
       ? `${env.clientOrigin}/admin/leave/approvals?decision=request&requestId=${request}`
       : `${env.clientOrigin}/admin/leave/approvals?decision=request&requestId=${request}&action=${action}`;

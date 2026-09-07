@@ -24,7 +24,7 @@ import {
 
 export async function createTicketHandler(req, res) {
   const parsed = createHelpTicketSchema.parse(req.body);
-  const ticket = await createHelpTicket(req.user, parsed);
+  const ticket = await createHelpTicket(req.user, parsed, req.userPermissions);
   res.status(201).json({ ticket });
 }
 

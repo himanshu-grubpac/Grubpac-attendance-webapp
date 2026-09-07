@@ -13,6 +13,12 @@ import {
 
 const DEFAULT_OFFICE_TIME = '23:59';
 const DEFAULT_WFH_TIME = '06:00';
+/**
+ * Lookback window for dangling check-ins. Deadlines are same-day 23:59
+ * (office) or next-day 06:00 (WFH), so anything actionable is at most ~2 days
+ * old; 7 days keeps the scan bounded while covering job outages.
+ */
+const AUTO_CHECKOUT_SCAN_DAYS = 7;
 let schedulerTimer = null;
 
 function nextISTDayKey(dayKey) {
@@ -50,11 +56,12 @@ export async function runAutoCheckoutJob(now = new Date()) {
     const wfhCfg = autoCheckout.wfh;
 
     const scanEnd = endOfDayIST(now);
+    const scanStart = new Date(scanEnd.getTime() - (AUTO_CHECKOUT_SCAN_DAYS - 1) * 24 * 60 * 60 * 1000);
 
     const checkIns = await AttendanceRecord.find({
       type: 'check_in',
       status: 'allowed',
-      timestamp: { $lte: scanEnd },
+      timestamp: { $gte: scanStart, $lte: scanEnd },
     })
       .select('userId timestamp attendanceMode')
       .lean();
@@ -68,7 +75,7 @@ export async function runAutoCheckoutJob(now = new Date()) {
       type: 'check_out',
       status: 'allowed',
       userId: { $in: userIds },
-      timestamp: { $lte: scanEnd },
+      timestamp: { $gte: scanStart, $lte: scanEnd },
     })
       .select('userId timestamp attendanceMode')
       .lean();

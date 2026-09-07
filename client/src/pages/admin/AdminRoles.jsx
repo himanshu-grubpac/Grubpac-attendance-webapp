@@ -29,7 +29,7 @@ function TableSkeleton() {
   );
 }
 
-function PermissionMatrix({ groups, selected, onChange, disabled = false }) {
+function PermissionMatrix({ groups, selected, onChange, disabled = false, hideActions = false }) {
   function togglePermission(key) {
     if (disabled) return;
     onChange(
@@ -67,14 +67,16 @@ function PermissionMatrix({ groups, selected, onChange, disabled = false }) {
                   {selectedCount}/{groupKeys.length}
                 </span>
               </div>
-              <button
-                type="button"
-                className="permission-group__action"
-                disabled={disabled || groupKeys.length === 0}
-                onClick={() => toggleGroup(group)}
-              >
-                {allSelected ? 'Clear group' : 'Select all'}
-              </button>
+              {hideActions ? null : (
+                <button
+                  type="button"
+                  className="permission-group__action"
+                  disabled={disabled || groupKeys.length === 0}
+                  onClick={() => toggleGroup(group)}
+                >
+                  {allSelected ? 'Clear group' : 'Select all'}
+                </button>
+              )}
             </div>
             <div className="permission-grid" role="group" aria-label={`${group.label} permissions`}>
               {group.permissions.map((permission) => (
@@ -109,6 +111,7 @@ export default function AdminRoles() {
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const createModalTitleId = useId();
   const editModalTitleId = useId();
+  const viewModalTitleId = useId();
 
   const [roles, setRoles] = useState([]);
   const [permissionGroups, setPermissionGroups] = useState([]);
@@ -191,6 +194,12 @@ export default function AdminRoles() {
     setModal({ mode: 'edit', role });
   }
 
+  function openViewModal(role) {
+    setFieldErrors({});
+    setModalError('');
+    setModal({ mode: 'view', role });
+  }
+
   function closeModal() {
     if (submitting) return;
     setModal(null);
@@ -203,7 +212,7 @@ export default function AdminRoles() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (!modal) return;
+    if (!modal || modal.mode === 'view') return;
 
     setSubmitting(true);
     setError('');
@@ -275,6 +284,11 @@ export default function AdminRoles() {
   function getActionItems(role) {
     const items = [
       {
+        key: 'view',
+        label: 'View permissions',
+        onClick: () => openViewModal(role),
+      },
+      {
         key: 'edit',
         label: 'Edit role',
         onClick: () => openEditModal(role),
@@ -309,8 +323,11 @@ export default function AdminRoles() {
     return 'Roles will appear here once they are created.';
   }, [roles.length, hasActiveFilters]);
 
-  const modalTitleId = modal?.mode === 'create' ? createModalTitleId : editModalTitleId;
+  const modalTitleId =
+    modal?.mode === 'create' ? createModalTitleId : modal?.mode === 'view' ? viewModalTitleId : editModalTitleId;
   const slugLocked = modal?.mode === 'edit' && modal.role?.isSystem;
+  const isViewMode = modal?.mode === 'view';
+  const viewPermissions = modal?.role?.permissions ?? [];
 
   return (
     <div className="page page--roles">
@@ -400,7 +417,7 @@ export default function AdminRoles() {
       {modal ? (
         <div className="modal__backdrop" role="presentation" onClick={closeModal}>
           <div
-            className="modal modal--wide roles-modal"
+            className={`modal modal--wide roles-modal${isViewMode ? ' roles-modal--view' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby={modalTitleId}
@@ -408,17 +425,51 @@ export default function AdminRoles() {
           >
             <header className="modal__header">
               <h2 id={modalTitleId} className="modal__title">
-                {modal.mode === 'create' ? 'Add role' : `Edit role: ${modal.role.name}`}
+                {modal.mode === 'create'
+                  ? 'Add role'
+                  : isViewMode
+                    ? `View permissions: ${modal.role.name}`
+                    : `Edit role: ${modal.role.name}`}
               </h2>
               <p className="modal__lead muted">
                 {modal.mode === 'create'
                   ? 'Define a role with a unique slug and the permissions it should grant.'
-                  : slugLocked
-                    ? 'Slug cannot be changed for this role. Permissions and display name can be updated.'
-                    : 'Update the role details and permission set assigned to users.'}
+                  : isViewMode
+                    ? 'Read-only view of the permissions granted to this role.'
+                    : slugLocked
+                      ? 'Slug cannot be changed for this role. Permissions and display name can be updated.'
+                      : 'Update the role details and permission set assigned to users.'}
               </p>
             </header>
 
+            {isViewMode ? (
+              <div className="modal__form">
+                <div className="modal__body">
+                  <div className="modal__field roles-modal__permissions-field">
+                    <span className="label">Permissions</span>
+                    {permissionGroups.length === 0 ? (
+                      <p className="muted">Loading permission groups…</p>
+                    ) : viewPermissions.length === 0 ? (
+                      <p className="muted">No permissions assigned to this role.</p>
+                    ) : (
+                      <PermissionMatrix
+                        groups={permissionGroups}
+                        selected={viewPermissions}
+                        onChange={() => {}}
+                        disabled
+                        hideActions
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <footer className="modal__footer">
+                  <button type="button" className="btn btn-primary" onClick={closeModal} autoFocus>
+                    Close
+                  </button>
+                </footer>
+              </div>
+            ) : (
             <form className="modal__form" onSubmit={handleSubmit}>
               <div className="modal__body">
                 {modalError ? <div className="alert alert--error modal__alert">{modalError}</div> : null}
@@ -499,6 +550,7 @@ export default function AdminRoles() {
                 </button>
               </footer>
             </form>
+            )}
           </div>
         </div>
       ) : null}

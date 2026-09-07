@@ -10,6 +10,8 @@ import { getTodayMonthIst } from '../../components/MonthField.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
+import { useTableColumns } from '../../hooks/useTableColumns.js';
+import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 
 const APPROVALS_PAGE_SIZE = 20;
@@ -29,13 +31,27 @@ const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#
 const QUEUE_STATUS_OPTIONS = [
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
+
+const LEAVE_TABLE_KEY = 'leaveList';
+
+const LEAVE_COLUMNS = [
+  { key: 'employee', label: 'Employee', always: true },
+  { key: 'type', label: 'Leave type' },
+  { key: 'period', label: 'Period' },
+  { key: 'days', label: 'Days' },
+  { key: 'status', label: 'Status' },
+];
+
+const LEAVE_DEFAULT_COLUMNS = ['employee', 'type', 'period', 'days', 'status'];
 
 function statCardsForQueue(queueStatus) {
   const labels = {
     pending: { label: 'PENDING REQUESTS', hint: 'Awaiting your decision', icon: '⏳', tone: 'warning' },
     approved: { label: 'APPROVED REQUESTS', hint: 'Decisions recorded in your scope', icon: '✓', tone: 'info' },
+    rejected: { label: 'REJECTED REQUESTS', hint: 'Rejected leave requests with remarks', icon: '✕', tone: 'danger' },
     cancelled: { label: 'CANCELLED REQUESTS', hint: 'Cancelled leave requests', icon: '✕', tone: 'muted' },
   };
   const config = labels[queueStatus] ?? labels.pending;
@@ -268,6 +284,18 @@ export default function AdminLeaveApprovals() {
 
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
   const [cancelModal, setCancelModal] = useState({ open: false, item: null, comment: '' });
+  const {
+    columnsLoading: leaveColumnsLoading,
+    columnsError: leaveColumnsError,
+    editorOpen: leaveEditorOpen,
+    setEditorOpen: setLeaveEditorOpen,
+    isColumnVisible: isLeaveColumnVisible,
+    handleColumnToggle: handleLeaveColumnToggle,
+  } = useTableColumns({
+    tableKey: LEAVE_TABLE_KEY,
+    allColumns: LEAVE_COLUMNS,
+    defaultVisible: LEAVE_DEFAULT_COLUMNS,
+  });
   const deepLinkRef = useRef(null);
 
   const employeeFilterRef = useRef(employeeFilter);
@@ -658,10 +686,16 @@ export default function AdminLeaveApprovals() {
                 </button>
               </div>
             ) : null}
+            <div className="filter-bar__field approvals-toolbar__clear">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLeaveEditorOpen(true)}>
+                Edit columns
+              </button>
+            </div>
           </div>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
+        {leaveColumnsError ? <div className="alert alert--error">{leaveColumnsError}</div> : null}
 
         {loading ? (
           <QueueSkeleton />
@@ -675,7 +709,9 @@ export default function AdminLeaveApprovals() {
                   ? 'No leave requests pending approval'
                   : queueStatus === 'approved'
                     ? 'No approved leave requests in this period'
-                    : 'No cancelled leave requests'
+                    : queueStatus === 'rejected'
+                      ? 'No rejected leave requests in this period'
+                      : 'No cancelled leave requests'
             }
             description={
               hasActiveFilters
@@ -684,7 +720,9 @@ export default function AdminLeaveApprovals() {
                   ? 'New leave requests that require your decision will appear in this queue.'
                   : queueStatus === 'approved'
                     ? 'Approved requests in your scope will appear here after decisions are recorded.'
-                    : 'Cancelled leave requests will appear here.'
+                    : queueStatus === 'rejected'
+                      ? 'Rejected requests in your scope will appear here with approver remarks.'
+                      : 'Cancelled leave requests will appear here.'
             }
             action={
               hasActiveFilters ? (
@@ -704,11 +742,11 @@ export default function AdminLeaveApprovals() {
                     <th scope="col" className="approvals-table__col-row-num">
                       #
                     </th>
-                    <th>Employee</th>
-                    <th>Leave type</th>
-                    <th>Period</th>
-                    <th>Days</th>
-                    <th>Status</th>
+                    {isLeaveColumnVisible('employee') && <th>Employee</th>}
+                    {isLeaveColumnVisible('type') && <th>Leave type</th>}
+                    {isLeaveColumnVisible('period') && <th>Period</th>}
+                    {isLeaveColumnVisible('days') && <th>Days</th>}
+                    {isLeaveColumnVisible('status') && <th>Status</th>}
                     <th className="approvals-table__actions-col">Actions</th>
                   </tr>
                 </thead>
@@ -768,38 +806,48 @@ export default function AdminLeaveApprovals() {
                             {rowNumber}
                           </td>
 
-                          <td data-label="Employee" className="approval-row__employee-cell">
-                            <div className="approval-row__identity">
-                              <span
-                                className="approval-row__avatar"
-                                style={{ backgroundColor: color }}
-                                aria-hidden="true"
-                              >
-                                {initials}
-                              </span>
-                              <span className="approval-row__name">{item.userName || 'Employee'}</span>
-                            </div>
-                          </td>
+                          {isLeaveColumnVisible('employee') && (
+                            <td data-label="Employee" className="approval-row__employee-cell">
+                              <div className="approval-row__identity">
+                                <span
+                                  className="approval-row__avatar"
+                                  style={{ backgroundColor: color }}
+                                  aria-hidden="true"
+                                >
+                                  {initials}
+                                </span>
+                                <span className="approval-row__name">{item.userName || 'Employee'}</span>
+                              </div>
+                            </td>
+                          )}
 
-                          <td data-label="Leave type" className="approval-row__type" title={leaveTypeLabel(item)}>
-                            {compactLeaveTypeLabel(item)}
-                          </td>
+                          {isLeaveColumnVisible('type') && (
+                            <td data-label="Leave type" className="approval-row__type" title={leaveTypeLabel(item)}>
+                              {compactLeaveTypeLabel(item)}
+                            </td>
+                          )}
 
-                          <td
-                            data-label="Period"
-                            className="approval-row__dates muted"
-                            title={dateRangeLabel(item)}
-                          >
-                            {compactDateRangeLabel(item)}
-                          </td>
+                          {isLeaveColumnVisible('period') && (
+                            <td
+                              data-label="Period"
+                              className="approval-row__dates muted"
+                              title={dateRangeLabel(item)}
+                            >
+                              {compactDateRangeLabel(item)}
+                            </td>
+                          )}
 
-                          <td data-label="Days" className="approval-row__days">
-                            {durationLabel(item.days)}
-                          </td>
+                          {isLeaveColumnVisible('days') && (
+                            <td data-label="Days" className="approval-row__days">
+                              {durationLabel(item.days)}
+                            </td>
+                          )}
 
-                          <td data-label="Status" className="approval-row__status">
-                            <LeaveStatusBadge status={item.status} />
-                          </td>
+                          {isLeaveColumnVisible('status') && (
+                            <td data-label="Status" className="approval-row__status">
+                              <LeaveStatusBadge status={item.status} />
+                            </td>
+                          )}
 
                           {!isExpanded ? (
                             <td
@@ -946,6 +994,15 @@ export default function AdminLeaveApprovals() {
       </section>
 
       {confirmDialog}
+
+      <ColumnEditorPanel
+        open={leaveEditorOpen}
+        columns={LEAVE_COLUMNS}
+        isColumnVisible={isLeaveColumnVisible}
+        onToggle={handleLeaveColumnToggle}
+        loading={leaveColumnsLoading}
+        onClose={() => setLeaveEditorOpen(false)}
+      />
 
       <LeaveDecisionModal
         open={decisionModal.open}

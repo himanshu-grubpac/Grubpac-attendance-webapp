@@ -15,15 +15,26 @@ export const createHelpTicketSchema = z.object({
     .trim()
     .min(10, 'Description must be at least 10 characters.')
     .max(5000),
-  priority: z.enum(HELP_PRIORITIES).default('medium'),
+  priority: z.enum(HELP_PRIORITIES).optional(),
 });
 
-export const updateHelpTicketStatusSchema = z.object({
-  status: z.enum(HELP_STATUSES, {
-    errorMap: () => ({ message: 'Invalid status.' }),
-  }),
-  assignedTo: objectIdSchema.optional().nullable(),
-});
+export const updateHelpTicketStatusSchema = z
+  .object({
+    status: z
+      .enum(HELP_STATUSES, {
+        errorMap: () => ({ message: 'Invalid status.' }),
+      })
+      .optional(),
+    priority: z
+      .enum(HELP_PRIORITIES, {
+        errorMap: () => ({ message: 'Invalid priority.' }),
+      })
+      .optional(),
+    assignedTo: objectIdSchema.optional().nullable(),
+  })
+  .refine((data) => data.status !== undefined || data.priority !== undefined, {
+    message: 'At least one of status or priority must be provided.',
+  });
 
 export const createHelpCommentSchema = z.object({
   body: z.string().trim().min(1, 'Comment cannot be empty.').max(5000),

@@ -8,9 +8,15 @@ import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 
 const ACTION_OPTIONS = [
-  { value: '', label: 'All login events' },
+  { value: '', label: 'All events' },
   { value: 'login_success', label: 'Login success' },
   { value: 'login_failed', label: 'Login failed' },
+  { value: 'employee_bulk_upsert', label: 'Bulk employee sync' },
+  { value: 'employee_bulk_upload', label: 'Bulk upload (legacy)' },
+  { value: 'employee_registered', label: 'Employee registered' },
+  { value: 'employee_org_updated', label: 'Employee updated' },
+  { value: 'password_reset_by_admin', label: 'Password reset' },
+  { value: 'pin_reset_by_admin', label: 'PIN reset' },
 ];
 
 function statusBadgeClass(status) {
@@ -26,14 +32,26 @@ function formatAuditStatus(status) {
 }
 
 function formatActionLabel(action) {
-  if (action === 'login_success') return 'Success';
-  if (action === 'login_failed') return 'Failed';
+  if (action === 'login_success') return 'Login success';
+  if (action === 'login_failed') return 'Login failed';
+  if (action === 'employee_bulk_upsert') return 'Bulk sync';
+  if (action === 'employee_bulk_upload') return 'Bulk upload';
+  if (action === 'employee_registered') return 'Registered';
+  if (action === 'employee_org_updated') return 'Updated';
+  if (action === 'password_reset_by_admin') return 'Password reset';
+  if (action === 'pin_reset_by_admin') return 'PIN reset';
   return action || '—';
 }
 
 function formatActionTitle(action) {
   if (action === 'login_success') return 'Login success';
   if (action === 'login_failed') return 'Login failed';
+  if (action === 'employee_bulk_upsert') return 'Bulk employee sync';
+  if (action === 'employee_bulk_upload') return 'Bulk upload (legacy)';
+  if (action === 'employee_registered') return 'Employee registered';
+  if (action === 'employee_org_updated') return 'Employee org updated';
+  if (action === 'password_reset_by_admin') return 'Password reset by admin';
+  if (action === 'pin_reset_by_admin') return 'PIN reset by admin';
   return action || undefined;
 }
 
@@ -201,15 +219,15 @@ export default function AdminAuditLogs() {
   }
 
   const emptyTitle = useMemo(() => {
-    if (hasActiveFilters) return 'No login logs match these filters';
-    return 'No login logs found';
+    if (hasActiveFilters) return 'No audit logs match these filters';
+    return 'No audit logs found';
   }, [hasActiveFilters]);
 
   const emptyDescription = useMemo(() => {
     if (hasActiveFilters) {
-      return 'Try adjusting search, date, event type, or conflict filter, or clear filters to browse all login attempts.';
+      return 'Try adjusting search, date, event type, or conflict filter, or clear filters to browse all events.';
     }
-    return 'Successful and failed sign-in attempts will appear here as users access the system.';
+    return 'Login events, bulk uploads, employee registrations, and other admin actions will appear here.';
   }, [hasActiveFilters]);
 
   return (

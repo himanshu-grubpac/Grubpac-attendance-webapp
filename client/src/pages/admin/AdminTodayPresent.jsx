@@ -1,9 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
+import { useTableColumns } from '../../hooks/useTableColumns.js';
+import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
+
+const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
+
+// Keys must exist in the backend attendanceToday registry (validateColumns
+// rejects unknown keys on save) — `name` renders as the Employee column.
+const TODAY_PRESENT_COLUMNS = [
+  { key: 'name', label: 'Employee', always: true },
+  { key: 'department', label: 'Department' },
+  { key: 'role', label: 'Role' },
+  { key: 'status', label: 'Status' },
+];
+
+const TODAY_PRESENT_DEFAULT_COLUMNS = ['name', 'department', 'role', 'status'];
 
 function isPresent(member) {
   return member.status === 'checked_in' || member.status === 'wfh';
+}
+
+function isOnLeave(member) {
+  return member.status === 'on_leave';
 }
 
 export default function AdminTodayPresent() {
@@ -12,6 +31,19 @@ export default function AdminTodayPresent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const {
+    visibleColumns,
+    columnsLoading,
+    columnsError,
+    editorOpen,
+    setEditorOpen,
+    isColumnVisible,
+    handleColumnToggle,
+  } = useTableColumns({
+    tableKey: TODAY_PRESENT_TABLE_KEY,
+    allColumns: TODAY_PRESENT_COLUMNS,
+    defaultVisible: TODAY_PRESENT_DEFAULT_COLUMNS,
+  });
 
   useEffect(() => {
     setMeta({
@@ -104,10 +136,18 @@ export default function AdminTodayPresent() {
               onChange={(event) => setQuery(event.target.value)}
               aria-label="Search team members"
             />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setEditorOpen(true)}
+            >
+              Edit columns
+            </button>
           </div>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
+        {columnsError ? <div className="alert alert--error">{columnsError}</div> : null}
 
         {loading ? (
           <div className="employees-table-skeleton" aria-busy="true" aria-label="Loading team status">
@@ -121,49 +161,54 @@ export default function AdminTodayPresent() {
               <thead>
                 <tr>
                   <th scope="col" className="today-present-table__col-num">#</th>
-                  <th scope="col">Employee</th>
-                  <th scope="col">Department</th>
-                  <th scope="col">Role</th>
-                  <th scope="col">Status</th>
+                  {isColumnVisible('name') && <th scope="col">Employee</th>}
+                  {isColumnVisible('department') && <th scope="col">Department</th>}
+                  {isColumnVisible('role') && <th scope="col">Role</th>}
+                  {isColumnVisible('status') && <th scope="col">Status</th>}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="muted small today-present-table__empty">
+                    <td colSpan={visibleColumns.length + 1} className="muted small today-present-table__empty">
                       No team members found.
                     </td>
                   </tr>
                 ) : (
                   filtered.map((member, index) => {
                     const present = isPresent(member);
+                    const onLeave = !present && isOnLeave(member);
+                    const badgeTone = present ? 'present' : onLeave ? 'leave' : 'absent';
+                    const badgeLabel = present ? 'Present' : onLeave ? 'On Leave' : 'Absent';
                     return (
                       <tr key={member.userId}>
                         <td className="today-present-table__col-num">{index + 1}</td>
-                        <td data-label="Employee" className="today-present-table__employee">
-                          <span className="today-present-table__name">
-                            {member.firstName ||
-                              member.name?.split(' ')[0] ||
-                              'Team Member'}
-                          </span>
-                          {member.employeeCode && (
-                            <span className="today-present-table__code muted small">
-                              {' '}
-                              ({member.employeeCode})
+                        {isColumnVisible('name') && (
+                          <td data-label="Employee" className="today-present-table__employee">
+                            <span className="today-present-table__name">
+                              {member.firstName ||
+                                member.name?.split(' ')[0] ||
+                                'Team Member'}
                             </span>
-                          )}
-                        </td>
-                        <td data-label="Department">{member.department ?? '—'}</td>
-                        <td data-label="Role">{member.roleName ?? '—'}</td>
-                        <td data-label="Status">
-                          <span
-                            className={`today-present-table__badge today-present-table__badge--${
-                              present ? 'present' : 'absent'
-                            }`}
-                          >
-                            {present ? 'Present' : 'Absent'}
-                          </span>
-                        </td>
+                            {member.employeeCode && (
+                              <span className="today-present-table__code muted small">
+                                {' '}
+                                ({member.employeeCode})
+                              </span>
+                            )}
+                          </td>
+                        )}
+                        {isColumnVisible('department') && <td data-label="Department">{member.department ?? '—'}</td>}
+                        {isColumnVisible('role') && <td data-label="Role">{member.roleName ?? '—'}</td>}
+                        {isColumnVisible('status') && (
+                          <td data-label="Status">
+                            <span
+                              className={`today-present-table__badge today-present-table__badge--${badgeTone}`}
+                            >
+                              {badgeLabel}
+                            </span>
+                          </td>
+                        )}
                       </tr>
                     );
                   })
@@ -173,6 +218,15 @@ export default function AdminTodayPresent() {
           </div>
         )}
       </section>
+
+      <ColumnEditorPanel
+        open={editorOpen}
+        columns={TODAY_PRESENT_COLUMNS}
+        isColumnVisible={isColumnVisible}
+        onToggle={handleColumnToggle}
+        loading={columnsLoading}
+        onClose={() => setEditorOpen(false)}
+      />
     </div>
   );
 }

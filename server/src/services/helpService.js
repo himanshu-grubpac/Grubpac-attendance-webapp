@@ -92,12 +92,13 @@ export function canManageTicket(actor, ticket, permissions) {
   return managerId === actorId;
 }
 
-export async function createHelpTicket(actor, payload) {
+export async function createHelpTicket(actor, payload, permissions = []) {
+  const canSetPriority = hasPermission(permissions, PERMISSIONS.HELP_MANAGE);
   const ticket = await HelpTicket.create({
     title: payload.title,
     category: payload.category,
     description: payload.description,
-    priority: payload.priority ?? 'medium',
+    priority: canSetPriority && payload.priority ? payload.priority : 'medium',
     status: 'open',
     createdBy: actor._id,
   });
@@ -264,7 +265,15 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
   }
 
   const previousStatus = ticket.status;
-  ticket.status = payload.status;
+  const previousPriority = ticket.priority;
+
+  if (payload.status !== undefined) {
+    ticket.status = payload.status;
+  }
+
+  if (payload.priority !== undefined) {
+    ticket.priority = payload.priority;
+  }
 
   if (payload.assignedTo !== undefined) {
     if (payload.assignedTo) {
@@ -285,21 +294,33 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
 
   const creatorId = getCreatorId(ticket);
   if (creatorId && creatorId !== actor._id.toString()) {
-    await createNotification({
-      userId: creatorId,
-      type: 'help.status',
-      title: 'Help ticket updated',
-      body: `Your ticket "${ticket.title}" is now ${payload.status.replace('_', ' ')}.`,
-      link: `/employee/help/${ticket._id.toString()}`,
-      metadata: { ticketId: ticket._id.toString(), status: payload.status },
-    });
+    const changed = [];
+    if (payload.status !== undefined && payload.status !== previousStatus) {
+      changed.push(`status to ${payload.status.replace('_', ' ')}`);
+    }
+    if (payload.priority !== undefined && payload.priority !== previousPriority) {
+      changed.push(`priority to ${payload.priority}`);
+    }
+
+    if (changed.length > 0) {
+      await createNotification({
+        userId: creatorId,
+        type: 'help.status',
+        title: 'Help ticket updated',
+        body: `Your ticket "${ticket.title}" — ${changed.join(' and ')}.`,
+        link: `/employee/help/${ticket._id.toString()}`,
+        metadata: { ticketId: ticket._id.toString(), status: payload.status, priority: payload.priority },
+      });
+    }
   }
 
   auditLog('help_ticket_status_updated', {
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
     previousStatus,
-    status: payload.status,
+    status: payload.status ?? ticket.status,
+    previousPriority,
+    priority: ticket.priority,
   });
 
   return ticket.toSafeJSON();

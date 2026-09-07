@@ -15,6 +15,22 @@ const {
 const { startServer } = await import('../server/src/index.js');
 const { disconnectDatabase } = await import('../server/src/config/db.js');
 const { seedDatabase } = await import('../server/src/seed.js');
+const { runLeaveDecisionNotifyJob } = await import('../server/src/services/leaveService.js');
+// Seed hashes the admin password with env.adminPassword (ADMIN_PASSWORD or the
+// 'Admin@12345' default when no env file is loaded). Read the same source so
+// the harness login always matches the seeded credential regardless of CWD.
+const { env } = await import('../server/src/config/env.js');
+const ADMIN_PASSWORD = env.adminPassword;
+
+/**
+ * Finalize deferred approve/reject decisions: decisions stay pending with a
+ * 15s undo window and are finalized by the background job (EventBridge every
+ * minute in prod). In-harness we wait out the window and run the job directly.
+ */
+async function finalizePendingDecisions() {
+  await new Promise((resolve) => setTimeout(resolve, 16000));
+  await runLeaveDecisionNotifyJob(new Date());
+}
 
 const PORT = 5055;
 const BASE = `http://localhost:${PORT}/api`;
@@ -25,13 +41,15 @@ let httpServer;
 let cookieHeader = '';
 let csrfToken = '';
 
+let lastResponse = null;
 function assert(condition, message) {
   if (condition) {
     passed += 1;
     console.log(`✓ ${message}`);
   } else {
     failed += 1;
-    console.error(`✗ ${message}`);
+    const detail = lastResponse ? ` status=${lastResponse.status} body=${JSON.stringify(lastResponse.data).slice(0, 300)}` : '';
+    console.error(`✗ ${message}${detail}`);
   }
 }
 
@@ -65,6 +83,7 @@ async function request(pathname, options = {}) {
   });
   absorbCookies(response);
   const data = await response.json().catch(() => ({}));
+  lastResponse = { status: response.status, data };
   if (data.csrfToken) {
     csrfToken = data.csrfToken;
   }
@@ -96,14 +115,15 @@ async function main() {
   const OFFICE_LNG = 77.5946;
 
   console.log('\n--- Health ---');
-  const health = await request('/health', { method: 'GET' });
+  // Deep check (?db=1) includes the MongoDB ping; plain /health omits it by design.
+  const health = await request('/health?db=1', { method: 'GET' });
   assert(health.response.ok, 'Health endpoint responds');
   assert(health.data.checks?.mongo === 'ok', 'Health reports MongoDB ping ok');
 
   console.log('\n--- Admin auth (httpOnly cookie) ---');
   const adminLogin = await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   assert(adminLogin.response.ok, 'Admin login works');
   assert(adminLogin.data.user?.role === 'admin', 'Admin login sets session cookie');
@@ -138,6 +158,51 @@ async function main() {
   const employeePassword = 'Employee@12345';
   const employeeMobile = `9${String(Date.now()).slice(-9)}`;
 
+  // Registration must satisfy current validation: valid role + designation +
+  // seeded department + valid employee code, and a reporting manager for the
+  // employee role. This helper builds a compliant body for any role.
+  let userCodeSeq = 0;
+  async function resolveSeededRoleId(slug) {
+    const res = await request('/admin/roles', { method: 'GET' });
+    return res.data.roles?.find((r) => r.slug === slug)?.id;
+  }
+  async function resolveSeededDevDeptId() {
+    const res = await request('/admin/departments', { method: 'GET' });
+    return res.data.departments?.find((d) => d.code === 'DEV')?.id;
+  }
+  async function registerTestUser({
+    firstName,
+    lastName,
+    email,
+    mobile,
+    roleSlug = 'employee',
+    designation = 'QA Engineer',
+    reportingManagerId = null,
+    codePrefix = 'TE',
+    label = 'Test user',
+  }) {
+    const roleId = await resolveSeededRoleId(roleSlug);
+    const body = {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password: employeePassword,
+      employeeCode: `${codePrefix}${String(Date.now()).slice(-5)}${userCodeSeq++ % 10}`,
+      designation,
+      department: 'Development',
+      roleId,
+      joiningDate: '2026-01-01',
+    };
+    if (roleSlug === 'reporting-manager') {
+      body.managedDepartmentIds = [await resolveSeededDevDeptId()];
+    }
+    if (reportingManagerId) body.reportingManagerId = reportingManagerId;
+    const res = await request('/admin/users', { method: 'POST', body });
+    assert(res.response.status === 201, `${label} registration works`);
+    return res.data.employee?.id;
+  }
+
   console.log('\n--- Employee registration validation ---');
   const badEmployee = await request('/admin/users', {
     method: 'POST',
@@ -150,6 +215,35 @@ async function main() {
   });
   assert(badEmployee.response.status === 400, 'Invalid employee payload is rejected');
 
+  // Registration requires a valid role, designation, seeded department, valid
+  // employee code, and a reporting manager for employees — resolve them first.
+  const rolesForReg = await request('/admin/roles', { method: 'GET' });
+  const employeeRoleId = rolesForReg.data.roles.find((r) => r.slug === 'employee')?.id;
+  const rmRoleId = rolesForReg.data.roles.find((r) => r.slug === 'reporting-manager')?.id;
+  assert(employeeRoleId && rmRoleId, 'Employee and reporting-manager roles are seeded');
+  const deptsForReg = await request('/admin/departments', { method: 'GET' });
+  const devDeptId = deptsForReg.data.departments.find((d) => d.code === 'DEV')?.id;
+  assert(devDeptId, 'Development department is seeded');
+  const rmEmail = `rm.verify.${Date.now()}@grubpac.test`;
+  const registerRm = await request('/admin/users', {
+    method: 'POST',
+    body: {
+      firstName: 'Verify',
+      lastName: 'Manager',
+      email: rmEmail,
+      mobile: `8${String(Date.now()).slice(-9)}`,
+      password: 'Employee@12345',
+      employeeCode: `RM${String(Date.now()).slice(-4)}`,
+      designation: 'QA Lead',
+      department: 'Development',
+      roleId: rmRoleId,
+      managedDepartmentIds: [devDeptId],
+      joiningDate: '2026-01-01',
+    },
+  });
+  assert(registerRm.response.status === 201, 'Reporting manager registration works');
+  const sharedRmId = registerRm.data.employee?.id;
+  assert(sharedRmId, 'Shared reporting manager id is available');
   const register = await request('/admin/users', {
     method: 'POST',
     body: {
@@ -158,8 +252,11 @@ async function main() {
       email: employeeEmail,
       mobile: employeeMobile,
       password: employeePassword,
-      employeeCode: `EMP${Date.now()}`,
-      department: 'QA',
+      employeeCode: `TE${String(Date.now()).slice(-4)}`,
+      designation: 'QA Engineer',
+      department: 'Development',
+      roleId: employeeRoleId,
+      reportingManagerId: registerRm.data.employee?.id,
       joiningDate: '2026-01-01',
       endingDate: '2027-12-31',
     },
@@ -181,7 +278,7 @@ async function main() {
   cookieHeader = '';
   const adminOnEmployeePortal = await request('/auth/user/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   assert(adminOnEmployeePortal.response.ok, 'Admin with attendance.read_own can sign in on Employee tab');
   assert(adminOnEmployeePortal.data.user?.loginPortal === 'employee', 'Employee tab login sets loginPortal');
@@ -241,7 +338,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const failedLogin = await request('/auth/user/login', {
     method: 'POST',
@@ -276,7 +373,7 @@ async function main() {
     method: 'POST',
     body: {
       identifier: 'admin@grubpac.com',
-      password: 'Grubpac@Admin2026',
+      password: ADMIN_PASSWORD,
       deviceId: sharedDeviceId,
     },
   });
@@ -292,7 +389,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const conflictLogs = await request('/admin/audit-logs?action=login_success&page=1&limit=50', {
     method: 'GET',
@@ -390,18 +487,16 @@ async function main() {
   const employee2Email = `emp2.verify.${Date.now()}@grubpac.test`;
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
-  await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Employee 2',
-      email: employee2Email,
-      mobile: `8${String(Date.now()).slice(-9)}`,
-      password: employeePassword,
-      joiningDate: '2026-01-01',
-    },
+  await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Employee 2',
+    email: employee2Email,
+    mobile: `8${String(Date.now()).slice(-9)}`,
+    reportingManagerId: sharedRmId,
+    codePrefix: 'TE',
+    label: 'Second employee',
   });
   cookieHeader = '';
   const employee2Login = await request('/auth/user/login', {
@@ -427,7 +522,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const adminAttendance = await request(
     `/admin/attendance?date=${getISTDateInputValue()}&page=1&limit=10`,
@@ -487,7 +582,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const listUsers = await request('/admin/users?page=1&limit=10', { method: 'GET' });
@@ -530,7 +625,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   console.log('\n--- Inactive user login ---');
@@ -552,7 +647,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const reactivate = await request(`/admin/users/${inactiveTarget.id}`, {
     method: 'PATCH',
@@ -636,7 +731,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const orgAudits = await request('/admin/audit-logs?page=1&limit=100', { method: 'GET' });
   assert(
@@ -780,7 +875,7 @@ async function main() {
 
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const passwordAudits = await request('/admin/audit-logs?page=1&limit=50', { method: 'GET' });
   assert(
@@ -796,7 +891,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const leaveTypes = await request('/leave/types', { method: 'GET' });
@@ -822,26 +917,15 @@ async function main() {
 
   const managerEmail = `mgr.verify.${Date.now()}@grubpac.test`;
   const managerMobile = `7${String(Date.now()).slice(-9)}`;
-  const managerRegister = await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Manager',
-      email: managerEmail,
-      mobile: managerMobile,
-      password: employeePassword,
-      employeeCode: `MGR${Date.now()}`,
-      joiningDate: '2026-01-01',
-    },
-  });
-  assert(managerRegister.response.status === 201, 'Manager user created');
-  const managerId = managerRegister.data.employee?.id;
-
-  const rolesForMgr = await request('/admin/roles', { method: 'GET' });
-  const reportingManagerRole = rolesForMgr.data.roles?.find((r) => r.slug === 'reporting-manager');
-  await request(`/admin/users/${managerId}`, {
-    method: 'PATCH',
-    body: { roleId: reportingManagerRole?.id },
+  const managerId = await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Manager',
+    email: managerEmail,
+    mobile: managerMobile,
+    roleSlug: 'reporting-manager',
+    designation: 'QA Manager',
+    codePrefix: 'MG',
+    label: 'Manager user created',
   });
 
   await request(`/admin/users/${employeeId}`, {
@@ -926,7 +1010,13 @@ async function main() {
     body: { comment: 'Approved for verify test' },
   });
   assert(approveLeave.response.ok, 'Manager can approve leave');
-  assert(approveLeave.data.request?.status === 'approved', 'Leave status becomes approved');
+  assert(
+    approveLeave.data.request?.pendingDecision === 'approved',
+    'Approval is recorded as pending decision during the undo window',
+  );
+  await finalizePendingDecisions();
+  const finalizedLeave = await request(`/leave/requests/${leaveRequestId}`, { method: 'GET' });
+  assert(finalizedLeave.data.request?.status === 'approved', 'Leave status becomes approved after finalize');
 
   cookieHeader = '';
   await request('/auth/user/login', {
@@ -938,8 +1028,9 @@ async function main() {
   const clBalanceAfter = balancesAfterApprove.data.balances?.find((b) => b.leaveTypeCode === 'CL');
   assert(clBalanceAfter?.used === 2, 'Approved leave increments used balance');
 
-  const pendingCancelStart = `${year}-04-07`;
-  const pendingCancelEnd = `${year}-04-07`;
+  // Cancellation is blocked once leave dates pass, so use future dates.
+  const pendingCancelStart = getISTDateInputValue(new Date(Date.now() + 35 * 86400000));
+  const pendingCancelEnd = pendingCancelStart;
   const pendingLeave = await request('/leave/requests', {
     method: 'POST',
     body: {
@@ -972,7 +1063,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const holidayDate = `${year}-08-15`;
@@ -1002,7 +1093,7 @@ async function main() {
   cookieHeader = '';
   const adminForLeadSetup = await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   assert(
     adminForLeadSetup.response.ok,
@@ -1011,32 +1102,24 @@ async function main() {
 
   const leadEmail = `lead.verify.${Date.now()}@grubpac.test`;
   const deputyEmail = `deputy.verify.${Date.now()}@grubpac.test`;
-  const leadRegister = await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Lead',
-      email: leadEmail,
-      mobile: `6${String(Date.now()).slice(-9)}`,
-      password: employeePassword,
-      joiningDate: '2026-01-01',
-    },
+  const leadId = await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Lead',
+    email: leadEmail,
+    mobile: `6${String(Date.now()).slice(-9)}`,
+    reportingManagerId: managerId,
+    codePrefix: 'LD',
+    label: 'Lead user registration works',
   });
-  const deputyRegister = await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Deputy',
-      email: deputyEmail,
-      mobile: `9${String(Date.now() + 1).slice(-9)}`,
-      password: employeePassword,
-      joiningDate: '2026-01-01',
-    },
+  const deputyId = await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Deputy',
+    email: deputyEmail,
+    mobile: `9${String(Date.now() + 1).slice(-9)}`,
+    reportingManagerId: managerId,
+    codePrefix: 'DP',
+    label: 'Deputy user registration works',
   });
-  assert(leadRegister.response.status === 201, `Lead user registration works (${leadRegister.data?.message ?? leadRegister.response.status})`);
-  assert(deputyRegister.response.status === 201, `Deputy user registration works (${deputyRegister.data?.message ?? deputyRegister.response.status})`);
-  const leadId = leadRegister.data.employee?.id;
-  const deputyId = deputyRegister.data.employee?.id;
   assert(leadId && deputyId, 'Lead and deputy ids are available');
   const devDept = departmentsList.data.departments.find((d) => d.code === 'DEV');
 
@@ -1097,7 +1180,7 @@ async function main() {
   cookieHeader = '';
   const adminRelogin = await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   assert(adminRelogin.response.ok, 'Admin relogin for leave admin tests');
 
@@ -1144,6 +1227,10 @@ async function main() {
   });
   assert(createTicket.response.status === 201, 'Employee can create help ticket');
   assert(createTicket.data.ticket?.status === 'open', 'New help ticket is open');
+  assert(
+    createTicket.data.ticket?.priority === 'medium',
+    'Employee-supplied priority is ignored on create (defaults to medium)',
+  );
   const helpTicketId = createTicket.data.ticket?.id;
 
   const invalidTicket = await request('/help/tickets', {
@@ -1187,6 +1274,19 @@ async function main() {
   assert(mgrUpdateStatus.response.ok, 'Manager can update ticket status');
   assert(mgrUpdateStatus.data.ticket?.status === 'in_progress', 'Ticket status becomes in_progress');
 
+  const mgrUpdatePriority = await request(`/help/tickets/${helpTicketId}`, {
+    method: 'PATCH',
+    body: { priority: 'high' },
+  });
+  assert(mgrUpdatePriority.response.ok, 'Manager can set ticket priority');
+  assert(mgrUpdatePriority.data.ticket?.priority === 'high', 'Ticket priority becomes high');
+
+  const emptyUpdate = await request(`/help/tickets/${helpTicketId}`, {
+    method: 'PATCH',
+    body: {},
+  });
+  assert(emptyUpdate.response.status === 400, 'Empty ticket update is rejected');
+
   const mgrComment = await request(`/help/tickets/${helpTicketId}/comments`, {
     method: 'POST',
     body: { body: 'Please share your GPS accuracy reading.' },
@@ -1205,6 +1305,12 @@ async function main() {
   });
   assert(empComment.response.status === 201, 'Employee can comment on own ticket');
 
+  const empPriorityUpdate = await request(`/help/tickets/${helpTicketId}`, {
+    method: 'PATCH',
+    body: { priority: 'low' },
+  });
+  assert(empPriorityUpdate.response.status === 403, 'Employee cannot set ticket priority');
+
   const detailWithComments = await request(`/help/tickets/${helpTicketId}`, { method: 'GET' });
   assert(
     detailWithComments.data.comments?.length >= 2,
@@ -1214,21 +1320,18 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
   const otherEmployeeEmail = `emp3.verify.${Date.now()}@grubpac.test`;
-  const otherEmployeeRegister = await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Employee 3',
-      email: otherEmployeeEmail,
-      mobile: `6${String(Date.now() + 2).slice(-9)}`,
-      password: employeePassword,
-      joiningDate: '2026-01-01',
-    },
+  await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Employee 3',
+    email: otherEmployeeEmail,
+    mobile: `6${String(Date.now() + 2).slice(-9)}`,
+    reportingManagerId: managerId,
+    codePrefix: 'TE',
+    label: 'Third employee registered for help authz test',
   });
-  assert(otherEmployeeRegister.response.status === 201, 'Third employee registered for help authz test');
   cookieHeader = '';
   await request('/auth/user/login', {
     method: 'POST',
@@ -1240,7 +1343,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const allTickets = await request('/help/tickets?scope=all', { method: 'GET' });
@@ -1275,7 +1378,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const salaryMonth = getISTDateInputValue().slice(0, 7);
@@ -1360,7 +1463,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const exportRes = await fetch(`${BASE}/salary/export?month=${salaryMonth}`, {
@@ -1397,7 +1500,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const leaveTypesE = await request('/leave/types', { method: 'GET' });
@@ -1447,7 +1550,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const approveHalfDay = await request(`/leave/requests/${halfDayLeaveId}/approve`, {
@@ -1455,6 +1558,7 @@ async function main() {
     body: { comment: 'Approved for salary half-day test' },
   });
   assert(approveHalfDay.response.ok, 'Admin can approve half-day leave');
+  await finalizePendingDecisions();
 
   const halfDaySalaryMonth = halfDayDate.slice(0, 7);
   const halfDaySalarySummary = await request(
@@ -1488,7 +1592,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const encashResult = await request(`/leave/balances/${employeeId}/encash`, {
@@ -1516,27 +1620,17 @@ async function main() {
   assert(manualCarried.data.balance?.carried === 3, 'Manual credit sets carried balance');
 
   const delegateEmail = `delegate.verify.${Date.now()}@grubpac.test`;
-  const delegateRegister = await request('/admin/users', {
-    method: 'POST',
-    body: {
-      firstName: 'Verify',
-      lastName: 'Delegate',
-      email: delegateEmail,
-      mobile: `9${String(Date.now() + 3).slice(-9)}`,
-      password: employeePassword,
-      joiningDate: '2026-01-01',
-    },
+  const delegateId = await registerTestUser({
+    firstName: 'Verify',
+    lastName: 'Delegate',
+    email: delegateEmail,
+    mobile: `9${String(Date.now() + 3).slice(-9)}`,
+    roleSlug: 'reporting-manager',
+    designation: 'Delegate Manager',
+    codePrefix: 'DL',
+    label: 'Delegate user created',
   });
-  assert(delegateRegister.response.status === 201, `Delegate user created (${delegateRegister.data?.message ?? delegateRegister.response.status})`);
-  const delegateId = delegateRegister.data.employee?.id;
   assert(delegateId, 'Delegate user id is available');
-
-  const rolesForDelegate = await request('/admin/roles', { method: 'GET' });
-  const mgrRole = rolesForDelegate.data.roles?.find((r) => r.slug === 'reporting-manager');
-  await request(`/admin/users/${delegateId}`, {
-    method: 'PATCH',
-    body: { roleId: mgrRole?.id },
-  });
 
   await request(`/admin/users/${managerId}`, {
     method: 'PATCH',
@@ -1566,7 +1660,7 @@ async function main() {
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: delegateEmail, password: employeePassword },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
 
   const delegateApprove = await request(`/leave/requests/${delegateLeaveId}/approve`, {
@@ -1574,13 +1668,29 @@ async function main() {
     body: { comment: 'Approved by delegate' },
   });
   assert(delegateApprove.response.ok, 'Delegate approver can approve leave');
-  assert(delegateApprove.data.request?.status === 'approved', 'Delegate approval sets status approved');
+  assert(
+    delegateApprove.data.request?.pendingDecision === 'approved',
+    'Delegate approval is recorded as pending decision during the undo window',
+  );
+  await finalizePendingDecisions();
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
+  });
+  const finalizedDelegateLeave = await request(`/leave/requests/${delegateLeaveId}`, { method: 'GET' });
+  assert(finalizedDelegateLeave.data.request?.status === 'approved', 'Delegate approval sets status approved');
 
   cookieHeader = '';
   await request('/auth/admin/login', {
     method: 'POST',
-    body: { identifier: 'admin@grubpac.com', password: 'Grubpac@Admin2026' },
+    body: { identifier: 'admin@grubpac.com', password: ADMIN_PASSWORD },
   });
+  const carryForwardRun = await request('/leave/carry-forward', {
+    method: 'POST',
+    body: { fromYear: year - 1, userId: employeeId },
+  });
+  assert(carryForwardRun.response.ok, 'Admin can run year-end carry-forward');
   const phaseEAudits = await request('/admin/audit-logs?page=1&limit=100', { method: 'GET' });
   assert(
     phaseEAudits.data.logs?.some((log) => log.action === 'leave_encashment_recorded'),
@@ -1594,7 +1704,18 @@ async function main() {
   const logout = await request('/auth/logout', { method: 'POST' });
   assert(logout.response.ok, 'Logout clears session');
 
-  httpServer.close();
+  // Orderly shutdown: wait for the HTTP server to stop accepting connections,
+  // drain in-flight fire-and-forget audit persists, then disconnect the DB.
+  // (Skipping the drain races AuditLog.create() against disconnect and logs
+  // audit_persist_failed noise.)
+  // closeAllConnections first: undici keep-alive sockets from the harness's
+  // own fetch calls would otherwise keep close() waiting forever.
+  if (typeof httpServer.closeAllConnections === 'function') {
+    httpServer.closeAllConnections();
+  }
+  await new Promise((resolve) => httpServer.close(resolve));
+  const { flushAuditLogs } = await import('../server/src/utils/auditLog.js');
+  await flushAuditLogs();
   await disconnectDatabase();
 
   console.log(`\nResult: ${passed} passed, ${failed} failed`);

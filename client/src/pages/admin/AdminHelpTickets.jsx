@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
+import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
 
 const STATUS_FILTER_OPTIONS = [
   { value: '', label: 'All' },
@@ -15,6 +17,12 @@ const STATUS_FILTER_OPTIONS = [
   { value: 'closed', label: 'Closed' },
 ];
 
+const PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
 export default function AdminHelpTickets() {
   const [tickets, setTickets] = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -22,6 +30,8 @@ export default function AdminHelpTickets() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [updatingPriorityId, setUpdatingPriorityId] = useState('');
+  const { showSuccess, showError } = useToast();
 
   async function loadTickets(nextPage = page) {
     setLoading(true);
@@ -46,6 +56,21 @@ export default function AdminHelpTickets() {
   useEffect(() => {
     loadTickets(page);
   }, [page, statusFilter]);
+
+  const handlePriorityChange = useCallback(async (ticketId, newPriority) => {
+    setUpdatingPriorityId(ticketId);
+    try {
+      await helpApi.updateTicketStatus(ticketId, { priority: newPriority });
+      setTickets((prev) =>
+        prev.map((t) => (t.id === ticketId ? { ...t, priority: newPriority } : t)),
+      );
+      showSuccess('Priority updated.');
+    } catch (err) {
+      showError(getErrorMessage(err));
+    } finally {
+      setUpdatingPriorityId('');
+    }
+  }, [showSuccess, showError]);
 
   return (
     <div className="page">
@@ -82,9 +107,11 @@ export default function AdminHelpTickets() {
                 <tr>
                   <th>Employee</th>
                   <th>Title</th>
+                  <th>Priority</th>
+                  <th>Set Priority</th>
                   <th>Status</th>
                   <th>Created</th>
-                  <th></th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -94,11 +121,23 @@ export default function AdminHelpTickets() {
                     <td data-label="Title" className="cell-ellipsis" title={item.title}>
                       {item.title}
                     </td>
+                    <td data-label="Priority">
+                      <HelpPriorityBadge priority={item.priority} />
+                    </td>
+                    <td data-label="Set Priority">
+                      <SelectField
+                        value={item.priority ?? 'medium'}
+                        onChange={(value) => handlePriorityChange(item.id, value)}
+                        options={PRIORITY_OPTIONS}
+                        aria-label={`Set priority for ${item.title}`}
+                        disabled={updatingPriorityId === item.id}
+                      />
+                    </td>
                     <td data-label="Status">
                       <HelpStatusBadge status={item.status} />
                     </td>
                     <td data-label="Created" className="muted small">{formatISTDateTime(item.createdAt)}</td>
-                    <td data-label="Action" className="cell-actions">
+                    <td data-label="Actions" className="cell-actions">
                       <Link to={`/admin/help/tickets/${item.id}`} className="btn btn-ghost btn-sm">
                         View
                       </Link>

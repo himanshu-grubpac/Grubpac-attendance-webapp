@@ -19,14 +19,14 @@ export const env = {
   port: Number(process.env.PORT ?? 5000),
   mongoUri: required('MONGODB_URI', 'mongodb://127.0.0.1:27017/attendance_web'),
   jwtSecret: required('JWT_SECRET', 'local-dev-attendance-secret-change-in-production'),
-  /** Short-lived access token (v1 — no refresh-token rotation yet). */
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '2h',
+  /** Short-lived access token (v1 — no refresh-token rotation yet). Default matches template.yaml JwtExpiresIn so token and cookie (JWT_COOKIE_MAX_AGE_MS) expire together. */
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '12h',
   jwtCookieMaxAgeMs: Number(process.env.JWT_COOKIE_MAX_AGE_MS ?? 2 * 60 * 60 * 1000),
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   apiOrigin: process.env.API_ORIGIN ?? process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
-  adminPin: process.env.ADMIN_PIN ?? '123456',
+  adminPin: process.env.ADMIN_PIN ?? '1234',
   adminName: process.env.ADMIN_NAME ?? 'System Admin',
   /** Window for login/check-in device or IP conflict detection (default 24h). */
   deviceConflictWindowMs: Number(
@@ -43,7 +43,9 @@ export const env = {
     pool: bool(process.env.SMTP_POOL, true),
   },
   emailFrom: {
-    address: process.env.EMAIL_FROM ?? 'jha.piyush@grubpac.com',
+    // Empty by default (matches template.yaml): email stays disabled until
+    // EMAIL_FROM is configured. sendEmail() degrades to console logging.
+    address: process.env.EMAIL_FROM ?? '',
     name: process.env.EMAIL_FROM_NAME ?? 'Grubpac Attendance',
   },
   /** Lifetime of a password-reset magic link (default 5 minutes). */

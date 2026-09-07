@@ -22,23 +22,32 @@ const DEFAULT_COLUMNS = {
     { key: 'name', order: 0, width: 200, pinned: null },
     { key: 'employeeCode', order: 1, width: 140, pinned: null },
     { key: 'department', order: 2, width: 150, pinned: null },
-    { key: 'status', order: 3, width: 120, pinned: null },
-    { key: 'checkIn', order: 4, width: 120, pinned: null },
-    { key: 'checkOut', order: 5, width: 120, pinned: null },
+    { key: 'role', order: 3, width: 120, pinned: null },
+    { key: 'status', order: 4, width: 120, pinned: null },
+    { key: 'checkIn', order: 5, width: 120, pinned: null },
+    { key: 'checkOut', order: 6, width: 120, pinned: null },
   ],
   attendanceHistory: [
-    { key: 'date', order: 0, width: 120, pinned: null },
-    { key: 'status', order: 1, width: 100, pinned: null },
-    { key: 'checkIn', order: 2, width: 120, pinned: null },
-    { key: 'checkOut', order: 3, width: 120, pinned: null },
-    { key: 'workingHours', order: 4, width: 120, pinned: null },
+    { key: 'employee', order: 0, width: 200, pinned: null },
+    { key: 'department', order: 1, width: 150, pinned: null },
+    { key: 'date', order: 2, width: 120, pinned: null },
+    { key: 'type', order: 3, width: 120, pinned: null },
+    { key: 'status', order: 4, width: 100, pinned: null },
+    { key: 'mode', order: 5, width: 120, pinned: null },
+    { key: 'time', order: 6, width: 120, pinned: null },
+    { key: 'checkIn', order: 7, width: 120, pinned: null },
+    { key: 'checkOut', order: 8, width: 120, pinned: null },
+    { key: 'workingHours', order: 9, width: 120, pinned: null },
   ],
   leaveList: [
-    { key: 'type', order: 0, width: 120, pinned: null },
-    { key: 'startDate', order: 1, width: 120, pinned: null },
-    { key: 'endDate', order: 2, width: 120, pinned: null },
-    { key: 'status', order: 3, width: 120, pinned: null },
-    { key: 'reason', order: 4, width: 200, pinned: null },
+    { key: 'employee', order: 0, width: 200, pinned: null },
+    { key: 'type', order: 1, width: 120, pinned: null },
+    { key: 'period', order: 2, width: 160, pinned: null },
+    { key: 'days', order: 3, width: 100, pinned: null },
+    { key: 'status', order: 4, width: 120, pinned: null },
+    { key: 'startDate', order: 5, width: 120, pinned: null },
+    { key: 'endDate', order: 6, width: 120, pinned: null },
+    { key: 'reason', order: 7, width: 200, pinned: null },
   ],
 };
 
@@ -124,12 +133,14 @@ export function validateColumns(tableKey, requestedKeys, userPermissions) {
 export async function getPreference(userId, tableKey, userPermissions) {
   const preference = await TablePreference.findOne({ userId, tableKey });
   if (!preference) {
-    return { ...getDefaultPreference(tableKey), tableKey };
+    // No saved preference: `saved: false` lets the client fall back to its own
+    // UI default instead of rendering the full server column registry.
+    return { ...getDefaultPreference(tableKey), tableKey, saved: false };
   }
 
   const prefObj = preference.toJSON();
   prefObj.columns = filterColumnsByPermission(prefObj.columns, tableKey, userPermissions);
-  return prefObj;
+  return { ...prefObj, saved: true };
 }
 
 export async function upsertPreference(userId, tableKey, update, userPermissions) {
@@ -172,7 +183,7 @@ export async function upsertPreference(userId, tableKey, update, userPermissions
 
   const prefObj = preference.toJSON();
   prefObj.columns = filterColumnsByPermission(prefObj.columns, tableKey, userPermissions);
-  return prefObj;
+  return { ...prefObj, saved: true };
 }
 
 export async function deletePreference(userId, tableKey) {

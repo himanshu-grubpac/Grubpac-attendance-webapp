@@ -12,24 +12,24 @@
  *
  * Run:  node scripts/e2e-auto-checkout-comprehensive.mjs
  */
-import { app } from '../src/index.js';
-import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { AttendanceRecord } from '../src/models/AttendanceRecord.js';
-import { User } from '../src/models/User.js';
-import { OfficeSettings } from '../src/models/OfficeSettings.js';
-import { JobLock } from '../src/models/JobLock.js';
-import { getOfficeSettings } from '../src/services/geoService.js';
-import { buildAdminSyntheticGeoFields } from '../src/utils/geoFields.js';
-import { filterSpilloverAutoCheckouts } from '../src/services/attendanceService.js';
-import { runAutoCheckoutJob, computeAutoCheckoutDeadline } from '../src/jobs/autoCheckoutJob.js';
-import { acquireJobLock, releaseJobLock } from '../src/utils/jobLock.js';
+import { app } from '../../src/index.js';
+import { connectDatabase, disconnectDatabase } from '../../src/config/db.js';
+import { AttendanceRecord } from '../../src/models/AttendanceRecord.js';
+import { User } from '../../src/models/User.js';
+import { OfficeSettings } from '../../src/models/OfficeSettings.js';
+import { JobLock } from '../../src/models/JobLock.js';
+import { getOfficeSettings } from '../../src/services/geoService.js';
+import { buildAdminSyntheticGeoFields } from '../../src/utils/geoFields.js';
+import { filterSpilloverAutoCheckouts } from '../../src/services/attendanceService.js';
+import { runAutoCheckoutJob, computeAutoCheckoutDeadline } from '../../src/jobs/autoCheckoutJob.js';
+import { acquireJobLock, releaseJobLock } from '../../src/utils/jobLock.js';
 import bcrypt from 'bcryptjs';
 import {
   getISTDateInputValue,
   buildISTTimestampFromDayAndTime,
   startOfDayIST,
   endOfDayIST,
-} from '../src/utils/istDate.js';
+} from '../../src/utils/istDate.js';
 
 // ── Test harness ──────────────────────────────────────────────────────────────
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
@@ -682,3 +682,4 @@ if (failures.length > 0) {
 }
 console.log('══════════════════════════════════════════════════════════════');
 process.exit(failed === 0 ? 0 : 1);
+

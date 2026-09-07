@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
 import { env } from './config/env.js';
+import { pinSchema } from '../../shared/validation/auth.js';
 import {
   SEED_DEPARTMENTS,
   SYSTEM_ROLE_SLUGS,
@@ -900,6 +901,9 @@ export async function seedDatabase({ wipe = false } = {}) {
     admin = await User.findOne({ role: 'admin' });
   }
 
+  // Validate first: a non-4-digit ADMIN_PIN would hash into a credential
+  // that can never verify (and the system admin has no PIN API fallback).
+  pinSchema.parse(env.adminPin);
   if (!admin) {
     await User.create({
       role: 'admin',
@@ -912,7 +916,7 @@ export async function seedDatabase({ wipe = false } = {}) {
       designation: 'System Administrator',
       joiningDate: new Date(),
       passwordHash: await bcrypt.hash(env.adminPassword, 12),
-      pinHash: await bcrypt.hash(env.adminPin, 12),
+      pin4Hash: await bcrypt.hash(env.adminPin, 12),
       isActive: true,
     });
     console.log(`Seeded admin: ${adminEmail}`);
@@ -922,7 +926,7 @@ export async function seedDatabase({ wipe = false } = {}) {
     admin.name = env.adminName;
     admin.email = adminEmail;
     admin.passwordHash = await bcrypt.hash(env.adminPassword, 12);
-    admin.pinHash = await bcrypt.hash(env.adminPin, 12);
+    admin.pin4Hash = await bcrypt.hash(env.adminPin, 12);
     admin.isActive = true;
     admin.role = 'admin';
     admin.roleId = adminRole._id;

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { adminResetPasswordSchema } from '@shared/validation/auth.js';
+import { adminResetPasswordSchema, adminResetPinSchema } from '@shared/validation/auth.js';
 import { buildEmployeeProfileUpdateSchema } from '@shared/validation/employee.js';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage, getFieldErrors, salaryApi } from '../../services/api.js';
@@ -28,6 +28,11 @@ import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 const emptyResetForm = {
   newPassword: '',
   confirmPassword: '',
+};
+
+const emptyPinForm = {
+  newPin: '',
+  confirmPin: '',
 };
 
 const emptyOrgForm = {
@@ -353,9 +358,13 @@ export default function AdminEmployeeDetail() {
   const orgSectionRef = useRef(null);
   const resetModalRef = useRef(null);
   const resetPreviouslyFocusedRef = useRef(null);
+  const pinModalRef = useRef(null);
+  const pinPreviouslyFocusedRef = useRef(null);
   const editParamHandledRef = useRef('');
   const resetModalTitleId = useId();
   const resetModalDescId = useId();
+  const pinModalTitleId = useId();
+  const pinModalDescId = useId();
 
   const [employee, setEmployee] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -375,6 +384,12 @@ export default function AdminEmployeeDetail() {
   const [resetFieldErrors, setResetFieldErrors] = useState({});
   const [resetError, setResetError] = useState('');
   const [resetSubmitting, setResetSubmitting] = useState(false);
+
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinForm, setPinForm] = useState(emptyPinForm);
+  const [pinFieldErrors, setPinFieldErrors] = useState({});
+  const [pinError, setPinError] = useState('');
+  const [pinSubmitting, setPinSubmitting] = useState(false);
 
   async function loadEmployee() {
     setLoading(true);
@@ -483,6 +498,22 @@ export default function AdminEmployeeDetail() {
     clearEditParam();
   }
 
+  function openPinReset() {
+    setPinForm(emptyPinForm);
+    setPinFieldErrors({});
+    setPinError('');
+    setPinOpen(true);
+    setOrgEditing(false);
+  }
+
+  function closePinReset() {
+    if (pinSubmitting) return;
+    setPinOpen(false);
+    setPinForm(emptyPinForm);
+    setPinFieldErrors({});
+    setPinError('');
+  }
+
   useEffect(() => {
     editParamHandledRef.current = '';
   }, [id]);
@@ -555,16 +586,66 @@ export default function AdminEmployeeDetail() {
       }
     }
 
-    resetModalRef.current?.addEventListener('keydown', handleKeyDown);
+    const resetNode = resetModalRef.current;
+    resetNode?.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      resetModalRef.current?.removeEventListener('keydown', handleKeyDown);
+      resetNode?.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = previousOverflow;
       if (resetPreviouslyFocusedRef.current instanceof HTMLElement) {
         resetPreviouslyFocusedRef.current.focus();
       }
     };
   }, [resetOpen, resetSubmitting]);
+
+  useEscapeKey(pinOpen && !pinSubmitting, closePinReset);
+
+  useEffect(() => {
+    if (!pinOpen) return undefined;
+
+    pinPreviouslyFocusedRef.current = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    requestAnimationFrame(() => {
+      document.getElementById('reset-new-pin')?.focus();
+    });
+
+    function handleKeyDown(event) {
+      if (event.key !== 'Tab' || pinSubmitting) return;
+      const root = pinModalRef.current;
+      if (!root) return;
+
+      const focusables = root.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+
+      const list = Array.from(focusables);
+      const first = list[0];
+      const last = list[list.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    const pinNode = pinModalRef.current;
+    pinNode?.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      pinNode?.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (pinPreviouslyFocusedRef.current instanceof HTMLElement) {
+        pinPreviouslyFocusedRef.current.focus();
+      }
+    };
+  }, [pinOpen, pinSubmitting]);
 
   async function handleOrgSave(event) {
     event.preventDefault();
@@ -677,6 +758,37 @@ export default function AdminEmployeeDetail() {
     setResetSubmitting(false);
   }
 
+  async function handleResetPin(event) {
+    event.preventDefault();
+    if (!employee) return;
+
+    setPinSubmitting(true);
+    setPinError('');
+
+    const validation = validateForm(adminResetPinSchema, pinForm);
+    if (!validation.data) {
+      setPinFieldErrors(validation.errors);
+      setPinSubmitting(false);
+      return;
+    }
+
+    setPinFieldErrors({});
+
+    await requestConfirm({
+      title: 'Reset PIN?',
+      message: `Set a new 4-digit PIN for ${employee.name} (${employee.email})? Their existing sessions will be signed out.`,
+      confirmLabel: 'Reset PIN',
+      variant: 'danger',
+      onConfirm: async () => {
+        const result = await adminApi.resetEmployeePin(employee.id, validation.data);
+        showSuccess(result.message || 'PIN reset successfully.');
+        setPinForm(emptyPinForm);
+        setPinOpen(false);
+      },
+    });
+    setPinSubmitting(false);
+  }
+
   async function toggleStatus() {
     if (!employee) return;
     const nextActive = !employee.isActive;
@@ -744,6 +856,11 @@ export default function AdminEmployeeDetail() {
           key: 'reset',
           label: 'Reset password',
           onClick: openReset,
+        },
+        {
+          key: 'reset-pin',
+          label: 'Reset PIN',
+          onClick: openPinReset,
         },
         {
           key: 'toggle',
@@ -1030,6 +1147,94 @@ export default function AdminEmployeeDetail() {
                     </button>
                     <button type="submit" className="btn btn-primary" disabled={resetSubmitting}>
                       {resetSubmitting ? 'Saving…' : 'Reset password'}
+                    </button>
+                  </footer>
+                </form>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {pinOpen && canWriteUsers
+        ? createPortal(
+            <div
+              className="modal__backdrop"
+              role="presentation"
+              onClick={pinSubmitting ? undefined : closePinReset}
+            >
+              <div
+                ref={pinModalRef}
+                className="modal modal--compact"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={pinModalTitleId}
+                aria-describedby={pinModalDescId}
+                tabIndex={-1}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="modal__header">
+                  <h2 id={pinModalTitleId} className="modal__title">
+                    Reset PIN
+                  </h2>
+                  <p id={pinModalDescId} className="modal__lead muted">
+                    Set a new 4-digit sign-in PIN for {employee.email}.
+                  </p>
+                </header>
+
+                <form className="modal__form" onSubmit={handleResetPin} noValidate>
+                  <div className="modal__body">
+                    <label className="modal__field">
+                      <DetailLabel>New PIN</DetailLabel>
+                      <input
+                        id="reset-new-pin"
+                        className="input"
+                        type="password"
+                        inputMode="numeric"
+                        value={pinForm.newPin}
+                        onChange={(e) =>
+                          setPinForm({ ...pinForm, newPin: e.target.value })
+                        }
+                        placeholder="Enter 4-digit PIN"
+                        autoComplete="new-password"
+                        maxLength={4}
+                        disabled={pinSubmitting}
+                      />
+                      <FieldError message={pinFieldErrors.newPin} />
+                    </label>
+                    <label className="modal__field">
+                      <DetailLabel>Confirm new PIN</DetailLabel>
+                      <input
+                        className="input"
+                        type="password"
+                        inputMode="numeric"
+                        value={pinForm.confirmPin}
+                        onChange={(e) =>
+                          setPinForm({ ...pinForm, confirmPin: e.target.value })
+                        }
+                        placeholder="Confirm 4-digit PIN"
+                        autoComplete="new-password"
+                        maxLength={4}
+                        disabled={pinSubmitting}
+                      />
+                      <FieldError message={pinFieldErrors.confirmPin} />
+                    </label>
+                    {pinError ? (
+                      <div className="alert alert--error modal__alert">{pinError}</div>
+                    ) : null}
+                  </div>
+
+                  <footer className="modal__footer">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={closePinReset}
+                      disabled={pinSubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={pinSubmitting}>
+                      {pinSubmitting ? 'Saving…' : 'Reset PIN'}
                     </button>
                   </footer>
                 </form>
