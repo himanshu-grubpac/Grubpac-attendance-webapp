@@ -39,6 +39,8 @@ import {
 import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 
+export { buildAdminSyntheticGeoFields };
+
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -1233,9 +1235,6 @@ function serializeAdminAttendanceListRecord(record) {
     ...serializeEditMetadata(record),
   };
 }
-
-/** Synthetic geo fields for admin-created attendance (no live device location). */
-export { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 
 /**
  * Returns a block reason when admins must not create attendance for dayKey, else null.
