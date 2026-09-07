@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { getDefaultRoute, canAccessRoute, canAccessPortalRoute } from '../config/nav.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
@@ -11,6 +11,7 @@ export default function ProtectedRoute({
   portal,
 }) {
   const { user, loginPortal, loading, loggingOut } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -38,7 +39,9 @@ export default function ProtectedRoute({
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    // Preserve the full deep link (including ?decision&requestId from email
+    // links) so login can return the user to it instead of dropping it.
+    return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
 
   if (role && user.role !== role) {

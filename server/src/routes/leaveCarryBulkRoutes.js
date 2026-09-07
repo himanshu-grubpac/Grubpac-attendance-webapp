@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { requirePermission } from '../middleware/auth.js';
+import { singleFileUpload } from '../middleware/upload.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   downloadCarryAuditReport,
@@ -42,7 +43,7 @@ router.get(
 router.post(
   '/carry-bulk/upload',
   requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
-  upload.single('file'),
+  singleFileUpload(upload),
   asyncHandler(uploadCarryBulk),
 );
 

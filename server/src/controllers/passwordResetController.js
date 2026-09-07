@@ -21,51 +21,57 @@ import {
   resetPasswordVerifySchema,
 } from '../../../shared/validation/auth.js';
 
-function isEmployeeEligible(user) {
-  return Boolean(user && user.isActive && user.role === 'employee');
+function isResetEligible(user) {
+  return Boolean(user && user.isActive);
 }
 
 /**
  * Step 1 — request a reset link.
- * Always returns a generic success message to avoid account enumeration —
- * the response never reveals whether the email is registered.
- * Only active employees receive an email. In non-production, the magic link is
- * also returned in the response so local/e2e testing does not need a real inbox.
+ * Validates that the email is registered to an active account before sending.
+ * Unknown or inactive emails receive a 404 so the UI can show
+ * "this email doesn't exist". Active users (any role) receive an email.
+ * NOTE: the 404 reveals account existence (enumeration). This is a deliberate
+ * product tradeoff for clearer UX — abuse is contained by the route
+ * rate-limiter (see authRoutes). Revisit if abuse is observed.
+ * In non-production, the magic link is also returned in the response so
+ * local/e2e testing does not need a real inbox.
  */
 export async function requestPasswordReset(body, auditContext = {}) {
   const { email } = forgotPasswordSchema.parse(body);
   const user = await User.findOne({ email });
 
-  let resetLink = null;
-  if (isEmployeeEligible(user)) {
-    const token = createPasswordResetToken(user);
-    resetLink = `${env.clientOrigin}/reset-password?token=${encodeURIComponent(token)}`;
-    const { subject, html, text } = renderPasswordResetEmail({
-      name: user.firstName || user.name,
-      resetLink,
-    });
-    await sendEmail({ to: user.email, subject, html, text, tag: 'password-reset' });
-    // WhatsApp disabled — see import note above.
-    // if (user.whatsappOptIn && user.mobile) {
-    //   const mins = Math.max(1, Math.round(env.passwordResetExpiresMs / 60000));
-    //   await sendWhatsAppText({
-    //     to: user.mobile,
-    //     message: `Grubpac Attendance: password reset requested. Reset here (expires in ${mins} min, single use): ${resetLink}`,
-    //   });
-    // }
-    auditLog('password_reset_requested', {
-      userId: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      ...auditContext,
-    });
-  } else {
+  if (!isResetEligible(user)) {
     auditLog('password_reset_requested', {
       email,
-      reason: !user ? 'no_user' : !user.isActive ? 'inactive' : 'not_employee',
+      reason: !user ? 'no_user' : 'inactive',
       ...auditContext,
     });
+    const error = new Error("This email doesn't exist in our system.");
+    error.statusCode = 404;
+    throw error;
   }
+
+  const token = createPasswordResetToken(user);
+  const resetLink = `${env.clientOrigin}/reset-password?token=${encodeURIComponent(token)}`;
+  const { subject, html, text } = renderPasswordResetEmail({
+    name: user.firstName || user.name,
+    resetLink,
+  });
+  await sendEmail({ to: user.email, subject, html, text, tag: 'password-reset' });
+  // WhatsApp disabled — see import note above.
+  // if (user.whatsappOptIn && user.mobile) {
+  //   const mins = Math.max(1, Math.round(env.passwordResetExpiresMs / 60000));
+  //   await sendWhatsAppText({
+  //     to: user.mobile,
+  //     message: `Grubpac Attendance: password reset requested. Reset here (expires in ${mins} min, single use): ${resetLink}`,
+  //   });
+  // }
+  auditLog('password_reset_requested', {
+    userId: user._id.toString(),
+    email: user.email,
+    role: user.role,
+    ...auditContext,
+  });
 
   const response = {
     message: 'We have sent password reset instructions.',
@@ -90,7 +96,7 @@ export async function verifyPasswordReset(body) {
     const payload = verifyPasswordResetToken(token);
     const user = await loadAuthenticatedUser(payload.sub);
 
-    if (!isEmployeeEligible(user)) {
+    if (!isResetEligible(user)) {
       return { valid: false, reason: 'unavailable' };
     }
     if (payload.tv !== (user.tokenVersion ?? 0)) {
@@ -119,7 +125,7 @@ export async function resetPassword(body, auditContext = {}) {
   const payload = verifyPasswordResetToken(token);
 
   const user = await User.findById(payload.sub);
-  if (!isEmployeeEligible(user)) {
+  if (!isResetEligible(user)) {
     const error = new Error(
       'This account is no longer available for password reset.',
     );

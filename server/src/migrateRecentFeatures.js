@@ -7,6 +7,8 @@
  * - AttendanceRecord lateNote + edit history fields (schemaless — index sync only)
  * - LeaveCarryForwardEntry, WeekAttendanceConfirmation, SalaryTransfer collections
  * - LeavePolicy.year backfill + compound index (leaveTypeId + year)
+ * - LeaveRequest provisional→final lifecycle fields (revision, pendingRevision,
+ *   undoExpiresAt, finalizedAt) + finalizer sweep indexes
  * - User.managedDepartmentIds backfill
  * - Dual-portal system role permissions (HR attendance.read_own)
  * - DemoFaqItem collection indexes + demo_faq.* role permissions
@@ -37,6 +39,7 @@ import { Department } from './models/Department.js';
 import { LeaveType } from './models/LeaveType.js';
 import { LeavePolicy } from './models/LeavePolicy.js';
 import { LeaveBalance } from './models/LeaveBalance.js';
+import { LeaveRequest } from './models/LeaveRequest.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
 import { DemoFaqItem } from './models/DemoFaqItem.js';
 import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears } from './services/leaveBalanceService.js';
@@ -58,6 +61,7 @@ const INDEX_MODELS = [
   LeaveType,
   LeavePolicy,
   LeaveBalance,
+  LeaveRequest,
   OfficeSettings,
   DemoFaqItem,
 ];
@@ -156,8 +160,82 @@ async function auditKeyUsers() {
   });
 }
 
+/**
+ * Backfills the provisional→final lifecycle fields on existing leave requests.
+ * Idempotent — only touches documents missing the new fields.
+ * - revision defaults to 0 for pre-lifecycle requests.
+ * - In-flight staged decisions (pendingDecision set, old notifyAfter semantics
+ *   where notifyAfter == undo expiry): split into undoExpiresAt (= old
+ *   notifyAfter) and notifyAfter (= old notifyAfter + notification delay).
+ * - Legacy plain-pending submissions (never notified, no undoExpiresAt): grant
+ *   a fresh finite undo window measured from migration time. Without this,
+ *   the withdraw claim (which requires undoExpiresAt in the future) would
+ *   reject them with a misleading "already sent" error even though no
+ *   notification was ever delivered.
+ */
+async function migrateLeaveRequestUndoLifecycle() {
+  const delayMs = Number(process.env.LEAVE_NOTIFICATION_DELAY_MS ?? 2500);
+  const submitWindowMs = Number(process.env.LEAVE_SUBMIT_UNDO_WINDOW_MS ?? 10000);
+
+  const missingRevision = await LeaveRequest.updateMany(
+    { revision: { $exists: false } },
+    { $set: { revision: 0 } },
+  );
+
+  const inFlight = await LeaveRequest.find({
+    pendingDecision: { $ne: null },
+    undoExpiresAt: { $exists: false },
+    notifyAfter: { $ne: null },
+  }).select('_id notifyAfter');
+
+  let split = 0;
+  for (const doc of inFlight) {
+    const expiry = doc.notifyAfter;
+    await LeaveRequest.updateOne(
+      { _id: doc._id, undoExpiresAt: { $exists: false } },
+      {
+        $set: {
+          undoExpiresAt: expiry,
+          pendingRevision: 0,
+          notifyAfter: new Date(new Date(expiry).getTime() + delayMs),
+        },
+      },
+    );
+    split += 1;
+  }
+
+  const migrationNow = Date.now();
+  const legacyPending = await LeaveRequest.updateMany(
+    {
+      status: 'pending',
+      pendingDecision: null,
+      undoExpiresAt: { $exists: false },
+      submitNotificationsSent: { $ne: true },
+      notificationsSent: false,
+    },
+    {
+      $set: {
+        undoExpiresAt: new Date(migrationNow + submitWindowMs),
+        notifyAfter: new Date(migrationNow + submitWindowMs + delayMs),
+      },
+    },
+  );
+
+  return {
+    missingRevision: missingRevision.modifiedCount ?? 0,
+    inFlightSplit: split,
+    legacyPendingWindowed: legacyPending.modifiedCount ?? 0,
+  };
+}
+
 async function migrateRecentFeatures() {
   await connectDatabase();
+
+  console.log('\n=== Leave request undo-lifecycle backfill ===');
+  const undoBackfill = await migrateLeaveRequestUndoLifecycle();
+  console.log(
+    `revision defaulted on ${undoBackfill.missingRevision} request(s); split notifyAfter on ${undoBackfill.inFlightSplit} in-flight staged decision(s); granted fresh undo windows to ${undoBackfill.legacyPendingWindowed} legacy pending submission(s).`,
+  );
 
   console.log('\n=== Leave policy year backfill ===');
   const backfilled = await migrateLeavePolicyYears();

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { loginSchema } from '@shared/validation/auth.js';
 import { getDefaultRoute } from '../config/nav.js';
 import { BRANDING } from '../config/branding.js';
@@ -21,6 +21,17 @@ const HERO_FEATURES = [
 export default function LoginPage() {
   const { user, login, loginPortal } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Internal return path saved by ProtectedRoute (e.g. an approvals deep
+  // link with ?decision&requestId). Strictly same-origin paths only.
+  function returnPath() {
+    const from = location.state?.from;
+    if (typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/login')) {
+      return from;
+    }
+    return null;
+  }
   const [role, setRole] = useState('employee');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -30,7 +41,7 @@ export default function LoginPage() {
   const [forgotOpen, setForgotOpen] = useState(false);
 
   if (user) {
-    return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
+    return <Navigate to={returnPath() ?? getDefaultRoute(user, loginPortal)} replace />;
   }
 
   async function handleSubmit(event) {
@@ -49,7 +60,7 @@ export default function LoginPage() {
         validation.data.identifier,
         validation.data.password,
       );
-      navigate(getDefaultRoute(loggedIn, signedInPortal));
+      navigate(returnPath() ?? getDefaultRoute(loggedIn, signedInPortal));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

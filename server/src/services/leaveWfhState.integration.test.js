@@ -59,9 +59,19 @@ after(async () => {
   await memoryServer.stop();
 });
 
+// Advance by working days (skips Sat/Sun) so fixtures stay valid no
+// matter which weekday the suite runs on. Plain +N calendar arithmetic
+// lands on weekends for most weekdays and fails working-day validation.
 function nextDay(dayKey, days = 1) {
-  const day = parseDateInputAsISTDay(dayKey);
-  return getISTDateInputValue(new Date(day.getTime() + days * 24 * 60 * 60 * 1000));
+  let day = parseDateInputAsISTDay(dayKey);
+  const step = days < 0 ? -1 : 1;
+  let remaining = Math.abs(days);
+  while (remaining > 0) {
+    day = new Date(day.getTime() + step * 24 * 60 * 60 * 1000);
+    const dow = day.getUTCDay();
+    if (dow !== 0 && dow !== 6) remaining -= 1;
+  }
+  return getISTDateInputValue(day);
 }
 
 async function createUser(name, { role = 'employee', reportingManagerId = null } = {}) {

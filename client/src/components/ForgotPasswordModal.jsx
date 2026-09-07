@@ -74,10 +74,10 @@ export default function ForgotPasswordModal({ open, onClose }) {
     setSubmitting(true);
     try {
       const result = await authApi.forgotPassword(validation.data.email);
-      // The API never reveals whether the email is registered (anti-enumeration),
-      // so every valid submission lands on the same success state.
+      // The API validates the email exists before sending; only registered
+      // active accounts reach this success state.
       setSent(true);
-      showSuccess('If the account exists, a reset link has been sent.');
+      showSuccess('Reset link sent. Check your inbox.');
       // Surface the dev link in non-production for local testing.
       if (result?.devResetLink) {
         // Helpful during local development; ignore in production (never returned).
@@ -112,8 +112,7 @@ export default function ForgotPasswordModal({ open, onClose }) {
             Reset your password
           </h2>
           <p className="modal__lead">
-            Enter your work email and we'll send a reset link if an employee
-            account exists for it.
+            Enter your work email and we'll send a reset link.
           </p>
         </div>
 

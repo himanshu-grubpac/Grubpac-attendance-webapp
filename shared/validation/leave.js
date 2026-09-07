@@ -113,7 +113,8 @@ export const adjustLeaveBalanceSchema = z.object({
   entitled: z.number().min(0).max(365).optional(),
   used: z.number().min(0).max(365).optional(),
   pending: z.number().min(0).max(365).optional(),
-  carried: z.number().min(0).max(365).optional(),
+  // Negative carried stock is allowed as a deduction (reduces available balance).
+  carried: z.number().min(-365).max(365).optional(),
   encashed: z.number().min(0).max(365).optional(),
   reason: z.string().trim().min(3).max(500),
 });

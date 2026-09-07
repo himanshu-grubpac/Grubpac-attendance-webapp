@@ -35,6 +35,7 @@ import {
   validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
+import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
   resolveLeaveApprovalUserIds,
   resolveTeamScopedUserIds,
@@ -45,8 +46,10 @@ import {
   sendEmail,
   renderLeaveManagerEmail,
   renderLeaveApplicantEmail,
+  renderLeaveApplicantSubmittedEmail,
   renderLeaveCancelledEmail,
   renderLeaveCancelledForApproverEmail,
+  renderLeaveCancelledForManagerEmail,
 } from './emailService.js';
 import { sendSms } from './smsService.js';
 // WhatsApp disabled for now (whatsappService is a no-op stub — no provider
@@ -60,26 +63,48 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
-// Manager notification (in-app + email + SMS) is deferred: when a request is submitted it is
-// scheduled to notify the manager after LEAVE_SUBMIT_UNDO_WINDOW_MS. If the employee "undoes" the
-// submission within that window, the scheduled send is cancelled and the request is withdrawn — so the
-// manager is only notified when the employee does NOT undo. See dispatchSubmitNotifications /
-// undoSubmittedLeaveRequest.
-const LEAVE_SUBMIT_UNDO_WINDOW_MS = Number(
-  process.env.LEAVE_SUBMIT_UNDO_WINDOW_MS ?? 10000,
-);
+// Provisional → undoable → finalized lifecycle.
+//
+// Every undoable action (submit, edit, approve/reject stage, approved-cancel
+// stage) records an explicit undo deadline (`undoExpiresAt`) and a finalize
+// time (`notifyAfter = undoExpiresAt + LEAVE_NOTIFICATION_DELAY_MS`). Only the
+// background finalizer may send notifications, and only after `notifyAfter`
+// has passed for the CURRENT revision (`pendingRevision`). Undo clears the
+// pending state and never sends email. See dispatchSubmitNotifications /
+// undoSubmittedLeaveRequest / processLeaveDecision / runLeaveDecisionNotifyJob.
+const LEAVE_SUBMIT_UNDO_WINDOW_MS = env.leaveSubmitUndoMs;
+const LEAVE_NOTIFICATION_DELAY_MS = env.leaveNotificationDelayMs;
+
+/**
+ * Computes the two timestamps for a new provisional action.
+ * @returns {{ undoExpiresAt: Date, notifyAfter: Date }}
+ */
+function provisionalTiming(windowMs, fromTime = Date.now()) {
+  const undoExpiresAt = new Date(fromTime + windowMs);
+  const notifyAfter = new Date(undoExpiresAt.getTime() + LEAVE_NOTIFICATION_DELAY_MS);
+  return { undoExpiresAt, notifyAfter };
+}
 
 const pendingSubmitTimers = new Map();
 
-function scheduleSubmitNotification(requestId) {
+/** Single-flight guard so the in-memory timer and the sweeper job never dispatch the same request concurrently. */
+const pendingSubmitDispatch = new Set();
+
+function scheduleSubmitNotification(requestId, dueAt = null) {
   if (process.env.NODE_ENV === 'test') return;
   if (pendingSubmitTimers.has(requestId)) return;
+  // Fire at notifyAfter (undo window + notification delay): dispatch bails
+  // while notifyAfter is in the future, so scheduling at the bare window
+  // would always no-op and leave delivery to the sweeper.
+  const delayMs = dueAt
+    ? Math.max(0, new Date(dueAt).getTime() - Date.now())
+    : LEAVE_SUBMIT_UNDO_WINDOW_MS + LEAVE_NOTIFICATION_DELAY_MS;
   const timer = setTimeout(() => {
     pendingSubmitTimers.delete(requestId);
     dispatchSubmitNotifications(requestId).catch((err) =>
       console.error('[leave] deferred submit notification failed', requestId, err?.message),
     );
-  }, LEAVE_SUBMIT_UNDO_WINDOW_MS);
+  }, delayMs);
   if (timer.unref) timer.unref();
   pendingSubmitTimers.set(requestId, timer);
 }
@@ -87,21 +112,26 @@ function scheduleSubmitNotification(requestId) {
 export async function recoverPendingSubmitNotifications() {
   const stale = await LeaveRequest.find({
     status: 'pending',
+    pendingDecision: null,
     notificationsSent: false,
     submitNotificationsSent: { $ne: true },
-  }).select('_id createdAt');
+  }).select('_id createdAt notifyAfter');
 
   let recovered = 0;
   for (const req of stale) {
-    const age = Date.now() - new Date(req.createdAt).getTime();
-    if (age >= LEAVE_SUBMIT_UNDO_WINDOW_MS) {
+    // New documents carry an explicit finalize time; legacy ones fall back
+    // to createdAt + window (pre-lifecycle semantics).
+    const dueAt = req.notifyAfter
+      ? new Date(req.notifyAfter).getTime()
+      : new Date(req.createdAt).getTime() + LEAVE_SUBMIT_UNDO_WINDOW_MS;
+    if (Date.now() >= dueAt) {
       pendingSubmitTimers.delete(req._id.toString());
       await dispatchSubmitNotifications(req._id).catch((err) =>
         console.error('[leave] recovered submit notification failed', req._id?.toString(), err?.message),
       );
       recovered += 1;
     } else {
-      scheduleSubmitNotification(req._id.toString());
+      scheduleSubmitNotification(req._id.toString(), req.notifyAfter ?? null);
     }
   }
   return { recovered };
@@ -293,25 +323,77 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
 
   // Nothing changes until the undo window expires. The status, balance, and
   // WFH markers all stay frozen while the admin can still undo.
-  request.pendingDecision = pendingDecision;
-  request.approverId = actor._id;
-  request.decidedAt = new Date();
-  request.decisionComment = decisionComment;
-  if (adminException) request.adminException = true;
-  request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
-  request.notificationsSent = false;
-  request.submitNotificationsSent = true;
-  request.decisionTokens = [];
-  await request.save();
+  //
+  // Atomic claim: concurrent approves (double-click, two admins, email link
+  // vs portal) resolve to exactly one staged decision; losers get a 409.
+  // The staged outcome is bound to the new revision so a stale finalizer can
+  // never apply it to later state.
+  const stagedAt = new Date();
+  const stageTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS, stagedAt.getTime());
+  const setUpdate = {
+    pendingDecision,
+    approverId: actor._id,
+    decidedAt: stagedAt,
+    decisionComment,
+    undoExpiresAt: stageTiming.undoExpiresAt,
+    notifyAfter: stageTiming.notifyAfter,
+    notificationsSent: false,
+    submitNotificationsSent: true,
+    decisionTokens: [],
+    finalizedAt: null,
+  };
+  if (adminException) setUpdate.adminException = true;
+
+  // Atomic pipeline claim: revision and pendingRevision derive from the LIVE
+  // document inside the update itself, so a stale in-memory `request` can
+  // never bind the staged outcome to the wrong revision. (`updatePipeline`
+  // is Mongoose's required opt-in for aggregation-pipeline updates.)
+  const claimed = await LeaveRequest.findOneAndUpdate(
+    { _id: request._id, status: 'pending', pendingDecision: null },
+    [
+      {
+        $set: {
+          ...setUpdate,
+          revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+          pendingRevision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+        },
+      },
+    ],
+    { returnDocument: 'after', updatePipeline: true },
+  );
+
+  if (!claimed) {
+    const current = await LeaveRequest.findById(request._id).select('status pendingDecision');
+    if (!current || current.status !== 'pending') {
+      throwError('Only pending requests can be approved or rejected.', 409);
+    }
+    throwError('A decision is already pending. Undo it first before acting again.', 409);
+  }
+
+  // Sync in-memory state from the atomically staged document.
+  for (const [key, value] of Object.entries(setUpdate)) {
+    request[key] = value;
+  }
+  request.revision = claimed.revision;
+  request.pendingRevision = claimed.pendingRevision;
+
+  // Lambda precision: wake the finalizer at this decision's finalize time.
+  await scheduleLeaveFinalize({
+    requestId: request._id.toString(),
+    kind: 'decision',
+    notifyAfter: setUpdate.notifyAfter,
+    revision: request.revision,
+  });
 
   auditLog(isApproved ? 'leave_request_approved' : 'leave_request_rejected', {
     adminId: actor._id.toString(),
     userId: userId.toString(),
     requestId: request._id.toString(),
     comment: decisionComment,
+    revision: request.revision,
   });
 
-  return request.toSafeJSON();
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 async function notifyApplicantDecision({ applicant, request, leaveType, status, decisionComment, sendChannels = true }) {
   const userId = applicant._id?.toString?.() ?? applicant._id ?? request.userId;
@@ -697,6 +779,12 @@ export async function createLeaveRequest(userId, payload) {
       const autoApprove = isAutoApproveLeaveType(validated.leaveType);
       autoApproved = autoApprove;
 
+      // Non-auto-approved requests enter the provisional (undoable) state:
+      // no notification may be sent until the undo window expires and the
+      // finalizer runs. Timing is stored on the document so the backend —
+      // not browser memory — is authoritative (refresh/close safe).
+      const submitTiming = autoApprove ? null : provisionalTiming(LEAVE_SUBMIT_UNDO_WINDOW_MS);
+
       const [request] = await LeaveRequest.create(
         [
           {
@@ -710,6 +798,11 @@ export async function createLeaveRequest(userId, payload) {
             status: 'pending',
             documentUrl: payload.documentUrl ?? null,
             adminException,
+            revision: 0,
+            pendingRevision: null,
+            undoExpiresAt: submitTiming?.undoExpiresAt ?? null,
+            notifyAfter: submitTiming?.notifyAfter ?? null,
+            finalizedAt: null,
           },
         ],
         { session },
@@ -734,6 +827,9 @@ export async function createLeaveRequest(userId, payload) {
           year: validated.year,
           session,
         });
+        // Auto-approved types (SL) are the single exception to the undo
+        // lifecycle: immediate, final, no provisional state.
+        request.finalizedAt = new Date();
       }
 
       createdRequest = request;
@@ -757,6 +853,14 @@ export async function createLeaveRequest(userId, payload) {
       });
     } else {
       scheduleSubmitNotification(createdRequest._id.toString());
+      // Lambda precision: one SQS wake-up targeted at this request's
+      // finalize time (fail-open; the sweep remains the safety net).
+      await scheduleLeaveFinalize({
+        requestId: createdRequest._id.toString(),
+        kind: 'submit',
+        notifyAfter: createdRequest.notifyAfter,
+        revision: createdRequest.revision ?? 0,
+      });
       auditLog('leave_request_created', {
         userId: userId.toString(),
         requestId: createdRequest._id.toString(),
@@ -816,43 +920,188 @@ async function notifyApproversOnSubmit(requester, request, leaveType = null) {
   );
 }
 
-export async function dispatchSubmitNotifications(requestId) {
-  const request = await LeaveRequest.findById(requestId).populate(LEAVE_REQUEST_POPULATE);
-  if (!request) return;
-  if (
-    request.status !== 'pending'
-    || request.notificationsSent
-    || request.submitNotificationsSent
-  ) return;
-  await notifyApproversOnSubmit(request.userId, request, request.leaveTypeId);
-  await sendLeaveManagerEmail(requestId);
-  request.notificationsSent = true;
-  request.submitNotificationsSent = true;
-  await request.save();
+/**
+ * Final submit notification (applicant + reporting manager). Runs ONLY from
+ * the finalizer path (in-memory fast-path timer or the sweep job) after the
+ * submit undo window has expired — never for withdrawn or superseded
+ * submissions. Single-flight per process; the flag claim below makes a
+ * concurrent dispatcher a no-op.
+ */
+async function notifyApplicantOnSubmit(request) {
+  const userId = request.userId?._id?.toString?.() ?? request.userId?.toString?.();
+  const applicant = await User.findById(userId).select('name email mobile whatsappOptIn');
+  if (!applicant) return;
+  const leaveTypeName =
+    request.leaveTypeId?.name || request.leaveTypeId?.code || 'leave';
+  const dateText = formatLeaveDateText(request);
+  const timeText = formatLeaveTimeText(request);
+  try {
+    if (applicant.email) {
+      const { subject, html, text } = renderLeaveApplicantSubmittedEmail({
+        leaveTypeName,
+        reason: request.reason,
+        dateText,
+        timeText,
+      });
+      await sendEmail({ to: applicant.email, subject, html, text, tag: 'leave-submitted' });
+    }
+    if (applicant.mobile) {
+      await sendSms({
+        to: applicant.mobile,
+        message: `Your ${leaveTypeName} leave request (${dateText}) was submitted.`,
+      });
+    }
+  } catch (err) {
+    console.error('[leave] applicant submit notification failed', request._id?.toString(), err?.message);
+  }
 }
 
+export async function dispatchSubmitNotifications(requestId, now = new Date()) {
+  const key = String(requestId);
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (pendingSubmitDispatch.has(key)) return;
+  pendingSubmitDispatch.add(key);
+  try {
+    const request = await LeaveRequest.findById(requestId).populate(LEAVE_REQUEST_POPULATE);
+    if (!request) return;
+    if (
+      request.status !== 'pending'
+      || request.pendingDecision
+      || request.notificationsSent
+      || request.submitNotificationsSent
+    ) return;
+    // Final-state check: only the surviving revision may notify. A withdraw
+    // cancels the request (status != pending); an edit bumps revision and
+    // pushes notifyAfter out, so stale timers/sweeps for older revisions
+    // arrive either too early (notifyAfter in future → skip) or for a
+    // revision whose flags were already consumed.
+    if (request.notifyAfter && new Date(request.notifyAfter).getTime() > nowMs) return;
+    // Atomic claim FIRST so concurrent dispatchers (timer vs sweep, retries,
+    // double-fires) deliver exactly once. The loser returns without sending.
+    const claimed = await LeaveRequest.findOneAndUpdate(
+      {
+        _id: request._id,
+        status: 'pending',
+        pendingDecision: null,
+        notificationsSent: false,
+        submitNotificationsSent: { $ne: true },
+      },
+      { $set: { notificationsSent: true, submitNotificationsSent: true } },
+    );
+    if (!claimed) return;
+    try {
+      await notifyApproversOnSubmit(request.userId, request, request.leaveTypeId);
+      await sendLeaveManagerEmail(requestId);
+      await notifyApplicantOnSubmit(request);
+    } catch (err) {
+      // Sending failed after the claim: release the claim so a later sweep
+      // can retry instead of dropping the notification silently.
+      await LeaveRequest.updateOne(
+        { _id: request._id },
+        { $set: { notificationsSent: false, submitNotificationsSent: false } },
+      ).catch(() => {});
+      console.error('[leave] submit notification send failed', key, err?.message);
+      return;
+    }
+    auditLog('leave_submit_finalized', {
+      userId: (request.userId?._id ?? request.userId)?.toString?.(),
+      requestId: request._id.toString(),
+    });
+  } finally {
+    pendingSubmitDispatch.delete(key);
+  }
+}
+
+/**
+ * Withdraws a freshly submitted request inside its undo window.
+ * CRITICAL: this path is SILENT — it must never send any email/SMS. The old
+ * implementation reused cancelLeaveRequest, which fired a cancellation email
+ * on every Undo. Withdrawal releases the reserved balance and clears WFH
+ * markers, cancels the pending submit timer, and returns the request to the
+ * employee for editing + resubmission (which starts a brand-new undo window).
+ */
 export async function undoSubmittedLeaveRequest(requestId, actor) {
   const request = await loadLeaveRequest(requestId);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   if (requesterId !== actor._id.toString()) {
     throwError('You can only undo your own leave requests.', 403);
   }
-  if (request.status !== 'pending') {
-    throwError('This request can no longer be undone.', 409);
-  }
-  if (request.notificationsSent) {
+
+  // Atomic claim: exactly one of {withdraw, submit-dispatch, edit} wins.
+  // If notifications already went out, the request is finalized and the
+  // undo is rejected so the UI can reflect the final state.
+  // The undo window is enforced in the claim: an expired window loses the
+  // race the same way a dispatched notification does.
+  const now = new Date();
+  const claimed = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      status: 'pending',
+      pendingDecision: null,
+      notificationsSent: false,
+      submitNotificationsSent: { $ne: true },
+      undoExpiresAt: { $gt: now },
+    },
+    {
+      $set: {
+        status: 'cancelled',
+        decidedAt: new Date(),
+        approverId: null,
+        decisionTokens: [],
+        notifyAfter: null,
+        undoExpiresAt: null,
+        pendingRevision: null,
+        finalizedAt: new Date(),
+        notificationsSent: true,
+        submitNotificationsSent: true,
+      },
+      $inc: { revision: 1 },
+    },
+  );
+
+  if (!claimed) {
+    const current = await LeaveRequest.findById(request._id).select('status notificationsSent submitNotificationsSent undoExpiresAt');
+    if (!current || current.status !== 'pending') {
+      throwError('This request can no longer be undone.', 409);
+    }
+    if (current.undoExpiresAt && new Date(current.undoExpiresAt).getTime() <= now.getTime()) {
+      throwError('The undo window for this request has expired.', 410);
+    }
     throwError('This request was already sent to your manager.', 409);
   }
 
-  const result = await cancelLeaveRequest(requestId, actor);
-
-  const existing = pendingSubmitTimers.get(requestId);
+  const existing = pendingSubmitTimers.get(String(requestId));
   if (existing) {
     clearTimeout(existing);
-    pendingSubmitTimers.delete(requestId);
+    pendingSubmitTimers.delete(String(requestId));
   }
 
-  return result;
+  // Release the reserved balance + WFH markers. No notification of any kind.
+  // NB: use the populated pre-claim `request` (not the bare `claimed` doc)
+  // so WFH leave-type detection works.
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const userId = request.userId?._id ?? request.userId;
+      const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+      const year = getISTYear(request.startDate);
+      await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+      await updateWfhAttendanceForRequest(request, {
+        fromStatuses: ['pending', 'rejected'],
+        legacyAnyMode: true,
+        session,
+      });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  auditLog('leave_request_withdrawn', {
+    userId: actor._id.toString(),
+    requestId: request._id.toString(),
+  });
+
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 export async function cancelLeaveRequest(requestId, actor) {
@@ -910,16 +1159,50 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
     // Approved-leave cancellation: nothing changes until the undo window
     // expires. Status, balance and WFH markers all stay frozen. Preserve the
     // original approval metadata (approverId/decidedAt) so an undo restores it.
-    if (request.pendingDecision) {
-      throwError('Another decision is already pending. Undo it first before cancelling.');
+    // Atomic claim so concurrent cancels resolve to exactly one staged action.
+    const cancelTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS);
+    const setUpdate = {
+      pendingDecision: 'cancelled',
+      undoExpiresAt: cancelTiming.undoExpiresAt,
+      notifyAfter: cancelTiming.notifyAfter,
+      notificationsSent: false,
+      submitNotificationsSent: true,
+      decisionTokens: [],
+      finalizedAt: null,
+    };
+    if (decisionComment) setUpdate.decisionComment = decisionComment;
+
+    // Atomic pipeline claim (see processLeaveDecision): revision binding
+    // derives from the live document. The status guard prevents staging a
+    // cancellation on a request that concurrently left the approved state.
+    const claimed = await LeaveRequest.findOneAndUpdate(
+      { _id: request._id, status: 'approved', pendingDecision: null },
+      [
+        {
+          $set: {
+            ...setUpdate,
+            revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+            pendingRevision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+          },
+        },
+      ],
+      { returnDocument: 'after', updatePipeline: true },
+    );
+    if (!claimed) {
+      throwError('This leave is no longer in a cancellable state. Refresh and try again.', 409);
     }
-    request.pendingDecision = 'cancelled';
-    request.notifyAfter = new Date(Date.now() + LEAVE_DECISION_UNDO_MS);
-    request.notificationsSent = false;
-    request.submitNotificationsSent = true;
-    request.decisionTokens = [];
-    if (decisionComment) request.decisionComment = decisionComment;
-    await request.save();
+    // Keep the caller's in-memory document consistent (callers serialize it).
+    for (const [key, value] of Object.entries(setUpdate)) {
+      request[key] = value;
+    }
+    request.revision = claimed.revision;
+    request.pendingRevision = claimed.pendingRevision;
+    await scheduleLeaveFinalize({
+      requestId: request._id.toString(),
+      kind: 'cancel',
+      notifyAfter: setUpdate.notifyAfter,
+      revision: request.revision,
+    });
   } else {
     // Pending-leave cancellation: immediate, no undo needed.
     const year = getISTYear(request.startDate);
@@ -939,7 +1222,13 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
         request.decidedAt = new Date();
         request.approverId = null;
         request.decisionTokens = [];
+        // Fully terminal: clear every provisional-lifecycle field so no
+        // stale undo expiry / staged revision survives on the cancelled doc.
         request.notifyAfter = null;
+        request.undoExpiresAt = null;
+        request.pendingDecision = null;
+        request.pendingRevision = null;
+        request.finalizedAt = new Date();
         request.notificationsSent = true;
         request.submitNotificationsSent = true;
         await request.save({ session });
@@ -963,10 +1252,22 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
 export async function undoLeaveCancellation(requestId, actor, permissions) {
   const request = await loadLeaveRequest(requestId);
   if (request.pendingDecision !== 'cancelled') {
+    // A finalized cancellation (status already cancelled) reports finality;
+    // anything else simply has no staged cancellation to undo.
+    if (request.status === 'cancelled') {
+      throwError('The cancellation is now final and can no longer be undone.', 410);
+    }
     throwError('No pending cancellation to undo.', 400);
   }
 
-  if (request.notifyAfter && Date.now() > new Date(request.notifyAfter).getTime()) {
+  // Undo deadline is undoExpiresAt (notifyAfter includes the deliberate
+  // post-expiry notification delay and must not extend the undo window).
+  // Legacy documents fall back to decidedAt + window; the atomic claim below
+  // is authoritative either way.
+  const undoDeadline = request.undoExpiresAt
+    ? new Date(request.undoExpiresAt).getTime()
+    : new Date(request.decidedAt).getTime() + LEAVE_DECISION_UNDO_MS;
+  if (Number.isFinite(undoDeadline) && Date.now() > undoDeadline) {
     throwError('The undo window has expired. The cancellation is now final.', 410);
   }
 
@@ -978,16 +1279,50 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
   }
 
   const userId = request.userId?._id ?? request.userId;
+  const now = new Date();
+  const stagedRevision = request.revision ?? 0;
 
-  // Nothing changed during the undo window — status, balance and WFH markers
-  // are all untouched. Just clear the pending decision fields. Keep the
-  // original approval metadata (approverId/decidedAt) intact.
-  request.pendingDecision = null;
-  request.notifyAfter = null;
-  request.notificationsSent = false;
-  request.submitNotificationsSent = true;
-  request.decisionTokens = [];
-  await request.save();
+  // Atomic claim, same expiry-boundary semantics as undoLeaveDecision.
+  const undoCutoff = request.undoExpiresAt
+    ? new Date(request.undoExpiresAt)
+    : new Date(new Date(request.decidedAt).getTime() + LEAVE_DECISION_UNDO_MS);
+  const claimed = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      pendingDecision: 'cancelled',
+      revision: stagedRevision,
+      $or: [
+        { undoExpiresAt: { $gt: now } },
+        { undoExpiresAt: null, decidedAt: { $gt: new Date(now.getTime() - LEAVE_DECISION_UNDO_MS) } },
+      ],
+    },
+    {
+      // Nothing changed during the undo window — status, balance and WFH
+      // markers are all untouched. Just clear the pending decision fields.
+      // Keep the original approval metadata (approverId/decidedAt) intact.
+      $set: {
+        pendingDecision: null,
+        notifyAfter: null,
+        undoExpiresAt: null,
+        pendingRevision: null,
+        notificationsSent: false,
+        submitNotificationsSent: true,
+        decisionTokens: [],
+      },
+      $inc: { revision: 1 },
+    },
+  );
+
+  if (!claimed) {
+    const current = await LeaveRequest.findById(request._id).select('pendingDecision revision undoExpiresAt decidedAt status');
+    if (!current || current.pendingDecision !== 'cancelled' || (current.revision ?? 0) !== stagedRevision) {
+      throwError('The cancellation is now final and can no longer be undone.', 410);
+    }
+    if (now >= undoCutoff) {
+      throwError('The undo window has expired. The cancellation is now final.', 410);
+    }
+    throwError('This cancellation was already updated. Refresh and try again.', 409);
+  }
 
   await createNotification({
     userId,
@@ -1004,7 +1339,8 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
     requestId: request._id.toString(),
   });
 
-  return request.toSafeJSON();
+  // Refetch: the pre-claim `request` still carries the cleared pendingDecision.
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 /**
@@ -1021,16 +1357,16 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
   const timeText = formatLeaveTimeText(request);
 
   try {
-    if (wasApproved) {
-      await createNotification({
-        userId,
-        type: 'leave.cancelled',
-        title: 'Leave cancelled',
-        body: `Your ${leaveTypeName} leave (${dateText}) was cancelled. The leave days have been returned to your balance.`,
-        link: '/employee/leave/requests',
-        metadata: { requestId: request._id.toString() },
-      });
-    }
+    await createNotification({
+      userId,
+      type: 'leave.cancelled',
+      title: wasApproved ? 'Leave cancelled' : 'Leave request cancelled',
+      body: wasApproved
+        ? `Your ${leaveTypeName} leave (${dateText}) was cancelled. The leave days have been returned to your balance.`
+        : `Your ${leaveTypeName} leave request (${dateText}) was cancelled.`,
+      link: '/employee/leave/requests',
+      metadata: { requestId: request._id.toString() },
+    });
 
     if (!sendChannels) return;
 
@@ -1055,8 +1391,52 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
     console.error('[leave] cancelled notification failed', request._id?.toString(), err?.message);
   }
 
-  // Notify the original approver that the approved leave was cancelled.
+  // Notify the reporting chain that the leave was cancelled. The original
+  // approver (if any) gets the approver-specific template; the reporting
+  // manager / delegate get a neutral cancellation notice unless they are the
+  // approver (no duplicate mails to the same person).
   if (!sendChannels) return;
+  const notifiedUserIds = new Set();
+  if (approverId) notifiedUserIds.add(String(approverId));
+  try {
+    const requesterDoc = await User.findById(userId).select('name reportingManagerId delegateApproverId');
+    const managerIds = collectManagerIds(requesterDoc).map((id) => String(id)).filter((id) => !notifiedUserIds.has(id));
+    const managers = managerIds.length
+      ? await User.find({ _id: { $in: managerIds }, isActive: true }).select('name email mobile')
+      : [];
+    const applicantName = applicant?.name || requesterDoc?.name || 'An employee';
+    for (const manager of managers) {
+      notifiedUserIds.add(String(manager._id));
+      if (manager.email) {
+        const { subject, html, text } = renderLeaveCancelledForManagerEmail({
+          applicantName,
+          leaveTypeName,
+          dateText,
+          timeText,
+          wasApproved,
+        });
+        await sendEmail({ to: manager.email, subject, html, text, tag: 'leave-cancelled-manager' });
+      }
+      if (manager.mobile) {
+        await sendSms({
+          to: manager.mobile,
+          message: `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
+        });
+      }
+      await createNotification({
+        userId: manager._id,
+        type: 'leave.cancelled',
+        title: wasApproved ? 'Approved leave cancelled' : 'Leave request cancelled',
+        body: `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
+        link: '/admin/leave/approvals',
+        metadata: { requestId: request._id.toString() },
+      });
+    }
+  } catch (err) {
+    console.error('[leave] manager cancellation notice failed', request._id?.toString(), err?.message);
+  }
+
+  // Notify the original approver that the approved leave was cancelled.
   if (wasApproved && approverId) {
     try {
       const approver = await User.findById(approverId).select('name email mobile whatsappOptIn');
@@ -1070,6 +1450,12 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
           timeText,
         });
         await sendEmail({ to: approver.email, subject, html, text, tag: 'leave-cancelled-approver' });
+      }
+      if (approver.mobile) {
+        await sendSms({
+          to: approver.mobile,
+          message: `${applicantName} cancelled their approved ${leaveTypeName} leave (${dateText}).`,
+        });
       }
       await createNotification({
         userId: approverId,
@@ -1093,6 +1479,9 @@ export async function editLeaveRequest(requestId, actor, payload) {
   }
   if (request.status !== 'pending') {
     throwError('Only pending leave requests can be edited.');
+  }
+  if (request.pendingDecision) {
+    throwError('A decision is already pending. Undo it first before editing.');
   }
 
   const userId = request.userId?._id ?? request.userId;
@@ -1139,6 +1528,18 @@ export async function editLeaveRequest(requestId, actor, payload) {
       request.status = 'pending';
       request.notificationsSent = false;
       request.submitNotificationsSent = false;
+      // A resubmission starts a brand-new undo window bound to a new
+      // revision; any stale timer/sweep for the previous revision notifies
+      // nothing (flags + timing no longer match it).
+      const editTiming = provisionalTiming(LEAVE_SUBMIT_UNDO_WINDOW_MS);
+      request.undoExpiresAt = editTiming.undoExpiresAt;
+      request.notifyAfter = editTiming.notifyAfter;
+      request.pendingDecision = null;
+      request.pendingRevision = null;
+      request.finalizedAt = null;
+      // Old submit email links must not be able to decide the edited dates.
+      request.decisionTokens = [];
+      request.revision = (request.revision ?? 0) + 1;
       await request.save({ session });
 
       if (isWfhLeaveType(validated.leaveType)) {
@@ -1159,7 +1560,13 @@ export async function editLeaveRequest(requestId, actor, payload) {
     requestId: request._id.toString(),
   });
 
-  scheduleSubmitNotification(request._id.toString());
+  scheduleSubmitNotification(request._id.toString(), request.notifyAfter);
+  await scheduleLeaveFinalize({
+    requestId: request._id.toString(),
+    kind: 'submit',
+    notifyAfter: request.notifyAfter,
+    revision: request.revision ?? 0,
+  });
 
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
@@ -1229,6 +1636,9 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
   if (request.status !== 'pending') {
     throwError('Only pending requests can be approved or rejected.');
   }
+  if (request.pendingDecision) {
+    throwError('A decision is already pending. Undo it first before acting again.', 409);
+  }
 
   const isReject = decision === 'reject' || decision === 'rejected';
   const comment = (payload.comment ?? '').trim() || null;
@@ -1249,14 +1659,12 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
 export async function undoLeaveDecision(requestId, actor, permissions) {
   const request = await loadLeaveRequest(requestId);
   if (!request.pendingDecision) {
-    throwError('No pending decision to undo.', 400);
-  }
-
-  if (request.decidedAt) {
-    const elapsed = Date.now() - new Date(request.decidedAt).getTime();
-    if (elapsed > LEAVE_DECISION_UNDO_MS) {
-      throwError('The undo window has expired. The decision is now final.', 410);
+    // A decided (finalized) request reports finality so the UI can settle on
+    // the outcome; a plain pending request simply has nothing to undo.
+    if (request.status !== 'pending' || request.finalizedAt) {
+      throwError('The decision is now final and can no longer be undone.', 410);
     }
+    throwError('No pending decision to undo.', 400);
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
@@ -1265,19 +1673,57 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
   }
 
   const userId = request.userId?._id ?? request.userId;
+  const now = new Date();
+  const stagedDecision = request.pendingDecision;
+  const stagedRevision = request.revision ?? 0;
 
-  // Nothing changed during the undo window — status, balance and WFH markers
-  // are all untouched. Just clear the pending decision fields.
-  request.pendingDecision = null;
-  request.approverId = null;
-  request.decidedAt = null;
-  request.decisionComment = null;
-  request.adminException = false;
-  request.notifyAfter = null;
-  request.notificationsSent = false;
-  request.submitNotificationsSent = true;
-  request.decisionTokens = [];
-  await request.save();
+  // Atomic claim against the exact staged revision inside its undo window.
+  // Exactly one of {undo, finalizer} wins at the expiry boundary — the
+  // loser observes the winner's state and reports it deterministically.
+  // Legacy documents without undoExpiresAt fall back to decidedAt + window.
+  const undoCutoff = request.undoExpiresAt
+    ? new Date(request.undoExpiresAt)
+    : new Date(new Date(request.decidedAt).getTime() + LEAVE_DECISION_UNDO_MS);
+  const claimed = await LeaveRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      pendingDecision: stagedDecision,
+      revision: stagedRevision,
+      $or: [
+        { undoExpiresAt: { $gt: now } },
+        { undoExpiresAt: null, decidedAt: { $gt: new Date(now.getTime() - LEAVE_DECISION_UNDO_MS) } },
+      ],
+    },
+    {
+      // Nothing changed during the undo window — status, balance and WFH
+      // markers are all untouched. Just clear the pending decision fields.
+      $set: {
+        pendingDecision: null,
+        approverId: null,
+        decidedAt: null,
+        decisionComment: null,
+        adminException: false,
+        notifyAfter: null,
+        undoExpiresAt: null,
+        pendingRevision: null,
+        notificationsSent: false,
+        submitNotificationsSent: true,
+        decisionTokens: [],
+      },
+      $inc: { revision: 1 },
+    },
+  );
+
+  if (!claimed) {
+    const current = await LeaveRequest.findById(request._id).select('pendingDecision revision undoExpiresAt decidedAt status');
+    if (!current?.pendingDecision || (current.revision ?? 0) !== stagedRevision) {
+      throwError('The decision is now final and can no longer be undone.', 410);
+    }
+    if (now >= undoCutoff) {
+      throwError('The undo window has expired. The decision is now final.', 410);
+    }
+    throwError('This decision was already updated. Refresh and try again.', 409);
+  }
 
   await createNotification({
     userId,
@@ -1294,7 +1740,8 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
     requestId: request._id.toString(),
   });
 
-  return request.toSafeJSON();
+  // Refetch: the pre-claim `request` still carries the cleared pendingDecision.
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 async function expirePendingWfhAttendance(now) {
@@ -1321,75 +1768,191 @@ async function expirePendingWfhAttendance(now) {
   return expired;
 }
 
+/**
+ * Finalizer sweep. Commits provisional actions whose undo window has expired
+ * (plus the deliberate post-expiry notification delay) and sends exactly one
+ * notification per finalized action. Covers BOTH staged decisions/cancels
+ * AND deferred submit notifications, so browser close/refresh, Lambda
+ * timer loss, and worker restarts all converge to the correct final state.
+ *
+ * Safety properties:
+ * - A due item is finalized only if its live revision still matches the
+ *   revision bound at stage time (`pendingRevision`); stale items are
+ *   skipped as no-ops (a newer undo/edit already superseded them).
+ * - Balance + status + flags commit atomically in ONE transaction, so a
+ *   crash can never double-apply balance moves on retry.
+ * - Notifications go out only AFTER the transaction commits. A notification
+ *   failure is logged and never rolls back the finalized business state.
+ * - Each item is isolated in try/catch: one bad request can no longer abort
+ *   the whole sweep and freeze every other pending request.
+ */
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const expiredPendingWfh = await expirePendingWfhAttendance(now);
-  const due = await LeaveRequest.find({
+  const dueDecisions = await LeaveRequest.find({
     pendingDecision: { $ne: null },
     notifyAfter: { $ne: null, $lte: now },
     notificationsSent: false,
   }).populate(LEAVE_REQUEST_POPULATE);
+  const dueSubmits = await LeaveRequest.find({
+    status: 'pending',
+    pendingDecision: null,
+    submitNotificationsSent: { $ne: true },
+    notificationsSent: false,
+    notifyAfter: { $ne: null, $lte: now },
+  }).select('_id');
 
   let processed = 0;
-  for (const request of due) {
+  let submitNotified = 0;
+  const skippedStale = [];
+  const failed = [];
+
+  for (const request of dueDecisions) {
     const decision = request.pendingDecision;
-    const userId = request.userId?._id ?? request.userId;
-    const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
-    const year = getISTYear(request.startDate);
+    const requestKey = request._id.toString();
+    try {
+      // Stale-guard: only the revision that staged this outcome may finalize
+      // it. Anything else means a newer action superseded it — no-op.
+      // Legacy staged rows without pendingRevision predate revisions and are
+      // finalized on the flag match alone (one-shot migration path).
+      if (request.pendingRevision != null && (request.revision ?? 0) !== request.pendingRevision) {
+        skippedStale.push(requestKey);
+        continue;
+      }
 
-    if (decision === 'approved') {
-      // Finalise approval: consume the reserved pending days, mark WFH approved.
-      await approvePendingDays(userId, leaveTypeId, request.days, year);
-      await updateWfhAttendanceForRequest(request, {
-        fromStatuses: ['pending', 'rejected'],
-        toStatus: 'approved',
-        legacyAnyMode: true,
+      const userId = request.userId?._id ?? request.userId;
+      const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+      const year = getISTYear(request.startDate);
+      const finalStatus = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'cancelled';
+
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          // Re-read inside the transaction: an undo racing finalization
+          // loses deterministically when its revision no longer matches.
+          const live = await LeaveRequest.findOne({
+            _id: request._id,
+            pendingDecision: decision,
+            ...(request.pendingRevision != null ? { revision: request.pendingRevision } : {}),
+          }).session(session);
+          if (!live) {
+            throw Object.assign(new Error('Stale provisional action; superseded before finalize.'), { code: 'STALE_PROVISIONAL' });
+          }
+
+          if (decision === 'approved') {
+            // Finalise approval: consume the reserved pending days, mark WFH approved.
+            await approvePendingDays(userId, leaveTypeId, request.days, year, session);
+            await updateWfhAttendanceForRequest(request, {
+              fromStatuses: ['pending', 'rejected'],
+              toStatus: 'approved',
+              legacyAnyMode: true,
+              session,
+            });
+          } else if (decision === 'rejected') {
+            // Finalise rejection: release the reserved pending days, mark WFH rejected.
+            await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+            await updateWfhAttendanceForRequest(request, {
+              fromStatuses: ['pending'],
+              toStatus: 'rejected',
+              legacyAnyMode: true,
+              session,
+            });
+          } else if (decision === 'cancelled') {
+            // Finalise cancellation: release consumed days, unset WFH markers.
+            await releaseApprovedDays(userId, leaveTypeId, request.days, year, session);
+            await updateWfhAttendanceForRequest(request, {
+              fromStatuses: ['approved', 'pending'],
+              legacyAnyMode: true,
+              session,
+            });
+          }
+
+          live.status = finalStatus;
+          live.pendingDecision = null;
+          live.pendingRevision = null;
+          live.notifyAfter = null;
+          live.undoExpiresAt = null;
+          live.notificationsSent = true;
+          live.finalizedAt = new Date();
+          live.revision = (live.revision ?? 0) + 1;
+          await live.save({ session });
+        });
+      } finally {
+        session.endSession();
+      }
+
+      // Deferred notification — post-commit only, never blocking finality.
+      try {
+        if (decision === 'cancelled') {
+          const approverId = request.approverId?._id?.toString?.()
+            ?? request.approverId?.toString?.()
+            ?? null;
+          await notifyLeaveCancelled(request, true, approverId, { sendChannels: true });
+        } else {
+          const requester = await loadRequester(userId);
+          await notifyApplicantDecision({
+            applicant: requester,
+            request,
+            leaveType: request.leaveTypeId,
+            status: decision === 'approved' ? 'approved' : 'rejected',
+            decisionComment: request.decisionComment,
+            sendChannels: true,
+          });
+        }
+      } catch (notifyErr) {
+        // Final state stands; delivery failure is logged for ops follow-up.
+        // No retry by design (the decision is final) — surface request context
+        // so a missed applicant/manager email can be found and re-sent manually.
+        console.error('[leave] finalized notification failed', {
+          requestId: requestKey,
+          decision,
+          revision: request.pendingRevision ?? request.revision,
+          error: notifyErr?.message,
+        });
+        auditLog('leave_finalized_notification_failed', {
+          requestId: requestKey,
+          decision,
+          error: notifyErr?.message ?? 'unknown',
+        });
+      }
+
+      auditLog('leave_request_finalized', {
+        userId: userId?.toString?.(),
+        requestId: requestKey,
+        decision,
+        revision: (request.revision ?? 0) + 1,
       });
-      request.status = 'approved';
-    } else if (decision === 'rejected') {
-      // Finalise rejection: release the reserved pending days, mark WFH rejected.
-      await releasePendingDays(userId, leaveTypeId, request.days, year);
-      await updateWfhAttendanceForRequest(request, {
-        fromStatuses: ['pending'],
-        toStatus: 'rejected',
-        legacyAnyMode: true,
-      });
-      request.status = 'rejected';
-    } else if (decision === 'cancelled') {
-      // Finalise cancellation: release consumed days, unset WFH markers.
-      await releaseApprovedDays(userId, leaveTypeId, request.days, year);
-      await updateWfhAttendanceForRequest(request, {
-        fromStatuses: ['approved', 'pending'],
-        legacyAnyMode: true,
-      });
-      request.status = 'cancelled';
+      processed += 1;
+    } catch (err) {
+      if (err?.code === 'STALE_PROVISIONAL') {
+        skippedStale.push(requestKey);
+        continue;
+      }
+      console.error('[leave] decision finalize failed', requestKey, err?.message);
+      failed.push({ requestId: requestKey, error: err?.message });
     }
-
-    // Send the deferred email / SMS / WhatsApp notification.
-    if (decision === 'cancelled') {
-      const approverId = request.approverId?._id?.toString?.()
-        ?? request.approverId?.toString?.()
-        ?? null;
-      await notifyLeaveCancelled(request, true, approverId, { sendChannels: true });
-    } else {
-      const requester = await loadRequester(userId);
-      await notifyApplicantDecision({
-        applicant: requester,
-        request,
-        leaveType: request.leaveTypeId,
-        status: decision === 'approved' ? 'approved' : 'rejected',
-        decisionComment: request.decisionComment,
-        sendChannels: true,
-      });
-    }
-
-    request.pendingDecision = null;
-    request.notifyAfter = null;
-    request.notificationsSent = true;
-    await request.save();
-    processed += 1;
   }
 
-  return { processed, expiredPendingWfh, runAt: now.toISOString() };
+  for (const stub of dueSubmits) {
+    try {
+      // Pass the sweep's clock: dispatch's final-state timing check must use
+      // the same `now` the sweep query used otherwise due items would bail
+      // against wall-clock time.
+      await dispatchSubmitNotifications(stub._id, now);
+      submitNotified += 1;
+    } catch (err) {
+      console.error('[leave] submit sweep failed', stub._id?.toString(), err?.message);
+      failed.push({ requestId: stub._id?.toString(), error: err?.message });
+    }
+  }
+
+  return {
+    processed,
+    submitNotified,
+    skippedStale,
+    failed,
+    expiredPendingWfh,
+    runAt: now.toISOString(),
+  };
 }
 
 export async function listLeaveRequests(actor, permissions, query) {
@@ -1456,10 +2019,11 @@ export async function listLeaveRequests(actor, permissions, query) {
 
   const skip = (query.page - 1) * query.limit;
   const resolvedStatus = filter.status ?? query.status;
+  // _id tiebreaker keeps offset pagination stable when timestamps tie.
   const sort =
     resolvedStatus === 'approved' || resolvedStatus === 'rejected'
-      ? { decidedAt: -1, createdAt: -1 }
-      : { createdAt: -1 };
+      ? { decidedAt: -1, createdAt: -1, _id: -1 }
+      : { createdAt: -1, _id: -1 };
   const [requests, total] = await Promise.all([
     LeaveRequest.find(filter)
       .populate(LEAVE_REQUEST_POPULATE)

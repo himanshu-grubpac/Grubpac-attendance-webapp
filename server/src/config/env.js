@@ -72,6 +72,19 @@ export const env = {
   leaveDecisionTokenTtlMs: Number(process.env.LEAVE_DECISION_TOKEN_TTL_MS ?? 48 * 60 * 60 * 1000),
   /** Window (ms) during which an approve/reject leave decision can be undone before the applicant is emailed. */
   leaveDecisionUndoMs: Number(process.env.LEAVE_DECISION_UNDO_MS ?? 15000),
+  /** Window (ms) during which a submitted leave request can be undone before manager/applicant notifications are sent. */
+  leaveSubmitUndoMs: Number(process.env.LEAVE_SUBMIT_UNDO_WINDOW_MS ?? 10000),
+  /**
+   * Deliberate delay (ms) between undo-window expiry and notification
+   * dispatch. Finalize time = undo expiry + this delay.
+   */
+  leaveNotificationDelayMs: Number(process.env.LEAVE_NOTIFICATION_DELAY_MS ?? 2500),
+  /**
+   * SQS queue URL for per-action delayed leave finalization on Lambda.
+   * Empty (local/EC2/tests) disables SQS scheduling — the in-process timer
+   * and the 5s poller cover those environments.
+   */
+  leaveFinalizeQueueUrl: process.env.LEAVE_FINALIZE_QUEUE_URL ?? '',
 
   defaultOffice: {
     name: process.env.DEFAULT_OFFICE_NAME ?? 'Grubpac Technologies - Jhandewalan Office',

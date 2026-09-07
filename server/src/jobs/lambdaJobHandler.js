@@ -27,6 +27,45 @@ export const handler = async (event, context) => {
     return DB_UNAVAILABLE_RESPONSE;
   }
 
+  // SQS wake-ups from per-action delayed finalization (see
+  // services/leaveFinalizeQueue.js). Each message targets one request's
+  // finalize time; the sweep below is revision-guarded and idempotent, so
+  // duplicate/redelivered messages are harmless no-ops. Batch size is 1.
+  if (Array.isArray(event?.Records) && event.Records[0]?.eventSource === 'aws:sqs') {
+    const messageIds = event.Records.map((record) => record?.messageId).filter(Boolean);
+    console.log(JSON.stringify({
+      msg: 'Job started',
+      jobName: 'leave-decision-notify',
+      trigger: 'sqs',
+      batchSize: event.Records.length,
+      requestId: context?.awsRequestId,
+    }));
+    try {
+      await recoverPendingSubmitNotificationsSafe();
+      const result = await runLeaveDecisionNotifyJob();
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ job: 'leave-decision-notify', trigger: 'sqs', ...result }),
+        batchItemFailures: [],
+      };
+    } catch (error) {
+      console.error(JSON.stringify({
+        msg: 'Job leave-decision-notify failed',
+        trigger: 'sqs',
+        error: error?.name ?? 'Error',
+        message: error?.message,
+        requestId: context?.awsRequestId,
+      }));
+      // Report the batch as failed so SQS retries, then DLQs after
+      // maxReceiveCount; the 1-minute EventBridge sweep still backs this up.
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ job: 'leave-decision-notify', trigger: 'sqs', retried: true }),
+        batchItemFailures: messageIds.map((itemIdentifier) => ({ itemIdentifier })),
+      };
+    }
+  }
+
   const jobName = event?.jobName || event?.detail?.jobName;
   const jobFn = JOBS[jobName];
 

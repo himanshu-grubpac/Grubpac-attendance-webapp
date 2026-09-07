@@ -8,7 +8,8 @@ const leaveBalanceSchema = new mongoose.Schema(
     entitled: { type: Number, default: 0, min: 0 },
     used: { type: Number, default: 0, min: 0 },
     pending: { type: Number, default: 0, min: 0 },
-    carried: { type: Number, default: 0, min: 0 },
+    // Negative carried stock is allowed as a deduction (reduces available balance).
+    carried: { type: Number, default: 0, min: -365 },
     encashed: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true },

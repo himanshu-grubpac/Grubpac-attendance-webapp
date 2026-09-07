@@ -166,10 +166,14 @@ export default function EmployeeApplyLeave() {
     }
 
     setFieldErrors({});
+    // Fresh idempotency key per logical submit: transport retries replay the
+    // stored response instead of creating duplicate requests.
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     try {
       const response = isEditing
-        ? await leaveApi.updateRequest(editId, validation.data)
-        : await leaveApi.createRequest(validation.data);
+        ? await leaveApi.updateRequest(editId, validation.data, { idempotencyKey })
+        : await leaveApi.createRequest(validation.data, { idempotencyKey });
       const req = response?.request ?? {};
 
       if (isEditing) {
@@ -181,11 +185,23 @@ export default function EmployeeApplyLeave() {
       const snapshot = { ...form };
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
-      showToast('Leave request submitted.', {
-        variant: 'success',
-        durationMs: UNDO_WINDOW_MS,
-        action: { label: 'Undo', onClick: () => handleUndo(req.id, snapshot) },
-      });
+      // Undo countdown follows the server-authoritative expiry when present
+      // (backend remains correct across refresh/close); local fallback only.
+      const serverUndoMs = Date.parse(req.decisionUndoExpiresAt ?? '');
+      const undoMs = Number.isFinite(serverUndoMs)
+        ? Math.max(0, serverUndoMs - Date.now())
+        : UNDO_WINDOW_MS;
+      // A zero/negative window (expiry already passed or clock skew) would
+      // render an instantly-vanishing Undo toast — fall back to plain success.
+      if (undoMs > 0) {
+        showToast('Leave request submitted.', {
+          variant: 'success',
+          durationMs: undoMs,
+          action: { label: 'Undo', onClick: () => handleUndo(req.id, snapshot) },
+        });
+      } else {
+        showSuccess('Leave request submitted.');
+      }
       const year = new Date().getFullYear();
       leaveApi
         .getMyBalances({ year })
@@ -207,8 +223,17 @@ export default function EmployeeApplyLeave() {
       }
       showToast('Request reverted. Edit and submit again when ready.', { variant: 'info' });
     } catch (err) {
+      const message = getErrorMessage(err) || 'Could not undo the request.';
+      // Finalized requests (undo window expired / already notified) still
+      // exist as live pending requests — send the employee to edit that
+      // request instead of restoring a stale new-submit snapshot.
+      if (err?.response?.status === 409 || err?.response?.status === 410) {
+        showToast(`${message} Opening your requests to edit it there.`, { variant: 'error' });
+        navigate('/employee/leave/requests');
+        return;
+      }
       if (snapshot) setForm(snapshot);
-      showToast(getErrorMessage(err) || 'Could not undo the request.', { variant: 'error' });
+      showToast(message, { variant: 'error' });
     }
   }
 

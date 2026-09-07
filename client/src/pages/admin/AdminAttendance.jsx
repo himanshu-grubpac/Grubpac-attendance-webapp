@@ -8,6 +8,7 @@ import TimeField, { isValidHHmmTime, normalizeHHmmTime } from '../../components/
 import SelectField from '../../components/SelectField.jsx';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
+import { mergeAppendUnique } from '../../utils/listMerge.js';
 import {
   IST_TIMEZONE,
   getISTDateInputValue,
@@ -492,12 +493,14 @@ async function fetchWeekRecords(weekStartKey) {
 }
 
 async function fetchActiveEmployees() {
-  const employees = [];
+  // Dedupe by id: name-tied rows can straddle page boundaries and
+  // concurrent writes (register/deactivate) can shift offsets mid-loop.
+  let employees = [];
   let page = 1;
   let totalPages = 1;
   do {
     const data = await adminApi.listEmployees({ page, limit: 100, isActive: 'true' });
-    employees.push(...(data.employees ?? []));
+    employees = mergeAppendUnique(employees, data.employees ?? []);
     totalPages = data.pagination?.totalPages ?? 1;
     page += 1;
   } while (page <= totalPages);

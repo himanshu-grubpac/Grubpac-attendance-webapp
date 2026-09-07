@@ -266,7 +266,15 @@ export async function getTodayStatus(userId) {
   return status;
 }
 
-export async function getTeamTodayStatusService(actor, permissions) {
+export async function getTeamTodayStatusService(actor, permissions, options = {}) {
+  const paginate = options.paginate === true;
+  const page = Number.isInteger(options.page) && options.page > 0 ? options.page : 1;
+  const limit =
+    Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
+  const searchNeedle = String(options.search ?? '').trim().toLowerCase();
+
+  const emptySummary = { present: 0, absent: 0, onLeave: 0, total: 0 };
+
   const todayStart = startOfDayIST();
   const todayEnd = endOfDayIST();
   const todayKey = getISTDateInputValue();
@@ -332,7 +340,12 @@ export async function getTeamTodayStatusService(actor, permissions) {
   }
 
   if (userIds.length === 0) {
-    return [];
+    if (!paginate) return [];
+    return {
+      teamStatus: [],
+      pagination: { page, limit, total: 0, totalPages: 1 },
+      summary: emptySummary,
+    };
   }
 
   const office = await getOfficeSettings();
@@ -453,7 +466,55 @@ export async function getTeamTodayStatusService(actor, permissions) {
     };
   });
 
-  return teamStatus;
+  if (!paginate) {
+    return teamStatus;
+  }
+
+  // Stable sort so offset pages are deterministic across scroll fetches.
+  const sorted = [...teamStatus].sort((a, b) => {
+    const nameA = (a.name || a.firstName || '').toLowerCase();
+    const nameB = (b.name || b.firstName || '').toLowerCase();
+    if (nameA < nameB) return -1;
+    if (nameA > nameB) return 1;
+    if (a.userId < b.userId) return -1;
+    if (a.userId > b.userId) return 1;
+    return 0;
+  });
+
+  // Summary always describes the whole team (unaffected by search/page),
+  // matching the stat-cards-stay-global convention of the employee list.
+  const summary = { ...emptySummary, total: sorted.length };
+  for (const member of sorted) {
+    if (member.status === 'on_leave') summary.onLeave += 1;
+    else if (member.status === 'checked_in' || member.status === 'wfh') summary.present += 1;
+    else summary.absent += 1;
+  }
+
+  const searched = searchNeedle
+    ? sorted.filter((member) => {
+        const name = (member.name || member.firstName || '').toLowerCase();
+        const code = (member.employeeCode || '').toLowerCase();
+        const dept = (member.department || '').toLowerCase();
+        const role = (member.roleName || '').toLowerCase();
+        return (
+          name.includes(searchNeedle) ||
+          code.includes(searchNeedle) ||
+          dept.includes(searchNeedle) ||
+          role.includes(searchNeedle)
+        );
+      })
+    : sorted;
+
+  const total = searched.length;
+  const totalPages = Math.ceil(total / limit) || 1;
+  const safePage = Math.min(page, totalPages);
+  const rows = searched.slice((safePage - 1) * limit, safePage * limit);
+
+  return {
+    teamStatus: rows,
+    pagination: { page: safePage, limit, total, totalPages },
+    summary,
+  };
 }
 
 export async function markAttendance(userId, type, payload, auditContext = {}) {
@@ -664,7 +725,8 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
   const skip = (page - 1) * limit;
   const [allRecords, total] = await Promise.all([
     AttendanceRecord.find({ userId })
-      .sort({ timestamp: -1 })
+      // _id tiebreaker keeps offset pagination stable when timestamps tie.
+      .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
       .limit(limit * 2),
     AttendanceRecord.countDocuments({ userId }),
@@ -744,7 +806,8 @@ export async function getAdminAttendance({
   const [allRecords, total] = await Promise.all([
     AttendanceRecord.find(query)
       .populate('userId', 'name email mobile employeeCode department')
-      .sort({ timestamp: -1 })
+      // _id tiebreaker keeps offset pagination stable when timestamps tie.
+      .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
       .limit(limit * 2),
     AttendanceRecord.countDocuments(query),

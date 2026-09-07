@@ -209,6 +209,36 @@ test('handler: includes requestId in logs', async () => {
   }
 });
 
+test('handler: SQS finalize wake-up runs the sweep and reports no failures', async () => {
+  await setup();
+  try {
+    const event = {
+      Records: [
+        {
+          messageId: 'sqs-msg-1',
+          eventSource: 'aws:sqs',
+          body: JSON.stringify({
+            type: 'leave-finalize',
+            requestId: '507f1f77bcf86cd799439013',
+            kind: 'decision',
+            notifyAfter: new Date().toISOString(),
+            revision: 1,
+          }),
+        },
+      ],
+    };
+    const result = await handler(event, makeContext());
+
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.batchItemFailures, []);
+    const body = JSON.parse(result.body);
+    assert.equal(body.job, 'leave-decision-notify');
+    assert.equal(body.trigger, 'sqs');
+  } finally {
+    await teardown();
+  }
+});
+
 test('handler: null event returns 400', async () => {
   await setup();
   try {

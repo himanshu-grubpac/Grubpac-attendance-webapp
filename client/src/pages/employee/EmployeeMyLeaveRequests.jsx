@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
@@ -7,6 +7,11 @@ import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+
+// Quiet background settle cadence for rows with a staged (undoable)
+// cancellation. Capped so a stuck staged row stops polling after ~2 minutes.
+const PENDING_SETTLE_POLL_MS = 5000;
+const MAX_SETTLE_POLLS = 24;
 
 /** True when the leave request can still be cancelled (end date has not passed, IST). */
 function canCancelLeaveRequest(item) {
@@ -26,9 +31,11 @@ export default function EmployeeMyLeaveRequests() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  async function loadRequests(nextPage = page) {
-    setLoading(true);
-    setError('');
+  async function loadRequests(nextPage = page, { quiet = false } = {}) {
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const data = await leaveApi.listRequests({ scope: 'mine', page: nextPage, limit: 20 });
       setRequests(data.requests ?? []);
@@ -36,13 +43,31 @@ export default function EmployeeMyLeaveRequests() {
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      // A quiet settle poll must never clear a foreground skeleton.
+      if (!quiet) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadRequests(page);
   }, [page]);
+
+  // Settle polling: while any row carries a staged (undoable) cancellation,
+  // silently refetch so the row settles to its finalized status promptly.
+  // Stops once nothing is staged (or after MAX_SETTLE_POLLS if stuck).
+  const settlePollsRef = useRef(0);
+  useEffect(() => {
+    if (!requests.some((item) => item.pendingDecision)) {
+      settlePollsRef.current = 0;
+      return undefined;
+    }
+    if (settlePollsRef.current >= MAX_SETTLE_POLLS) return undefined;
+    const timer = setInterval(() => {
+      settlePollsRef.current += 1;
+      loadRequests(page, { quiet: true });
+    }, PENDING_SETTLE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [requests, page]);
 
   async function handleCancel(item) {
     const isApproved = item.status === 'approved';
@@ -69,6 +94,7 @@ export default function EmployeeMyLeaveRequests() {
                 loadRequests(page);
               } catch (err) {
                 showError(getErrorMessage(err));
+                loadRequests(page);
               }
             },
             durationMs,
