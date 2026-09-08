@@ -13,7 +13,7 @@ const BULK_RULES = [
   'Fill the Carry columns and the reason column only. Do NOT edit pre-filled Entitled, Used, or Remaining columns.',
   'Each filled Carry cell becomes one carry entry for that employee, leave type, and target year. Rows with a blank Carry are skipped.',
   'employeeCode and leave type columns identify each record. Do not rename leave type group headers like "Casual Leave (CL)".',
-  'Carried days must be 0–365. Reason is optional and is recorded in audit history.',
+  'Carried days must be -365–365 (negative values record LOP deductions). Reason is optional and is recorded in audit history.',
   'Duplicate employee + leave type + year rows inside the same file are reported without action.',
   'File must be Excel (.xlsx or .xls), up to 5 MB.',
 ];

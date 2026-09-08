@@ -11,7 +11,10 @@ export const leaveAdjustmentBatchItemSchema = z.object({
   userId: objectIdSchema,
   leaveTypeId: objectIdSchema,
   year: z.coerce.number().int().min(2000).max(2100),
-  carried: z.number().min(0).max(365),
+  // Negative carried stock is allowed as a LOP deduction (reduces available
+  // balance). Core balance math already tolerates negatives (available may go
+  // negative; combined pools and carry-forward clamp per-type at 0).
+  carried: z.number().min(-365, 'Carried days must be between -365 and 365.').max(365, 'Carried days must be between -365 and 365.'),
   reason: z.string().trim().min(3).max(500).optional(),
 });
 
