@@ -134,6 +134,42 @@ function submitPayload(leaveType, dayKey, reason = 'Family function') {
   };
 }
 
+async function seedSLSetup() {
+  const manager = await createUser('SLManager');
+  const applicant = await createUser('SLApplicant', { reportingManagerId: manager._id });
+  const leaveType = await LeaveType.create({ code: 'SL', name: 'Sick Leave', isActive: true });
+  const dayKey = nextWorkingDay(getISTDateInputValue(), 5);
+  const year = getISTYear(parseDateInputAsISTDay(dayKey));
+  await LeavePolicy.create({
+    leaveTypeId: leaveType._id,
+    year,
+    annualQuota: 12,
+    accrualPerMonth: 0,
+    paid: true,
+    isActive: true,
+  });
+  return { manager, applicant, leaveType, dayKey, year };
+}
+
+function submitHalfDayPayload(leaveType, dayKey, reason = 'Fever') {
+  return {
+    leaveTypeId: leaveType._id,
+    startDate: dayKey,
+    endDate: dayKey,
+    halfDay: 'am',
+    reason,
+  };
+}
+
+async function balanceUsed(applicant, leaveType, year) {
+  const balance = await LeaveBalance.findOne({
+    userId: applicant._id,
+    leaveTypeId: leaveType._id,
+    year,
+  }).lean();
+  return balance?.used ?? null;
+}
+
 const managerPerms = [PERMISSIONS.LEAVE_APPROVE];
 
 function emailsByTag(tag) {
@@ -423,4 +459,136 @@ test('withdraw after the submit notification went out is rejected', async () => 
   });
   // No duplicate delivery from the failed withdraw.
   assert.equal(emailsByTag('leave-manager').length, 1);
+});
+
+// ── 12. SL half-day follows the undo lifecycle (no instant approval) ────────
+test('SL half-day submit stays pending and undo is silent', async () => {
+  const { applicant, leaveType, dayKey, year } = await seedSLSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, dayKey));
+  assert.equal(created.status, 'pending', 'SL is provisional, not instantly approved');
+  assert.ok(created.decisionUndoExpiresAt, 'SL submit carries an undo expiry');
+  assert.equal(await balancePending(applicant, leaveType, year), 0.5);
+
+  const withdrawn = await undoSubmittedLeaveRequest(created.id, applicant);
+  assert.equal(withdrawn.status, 'cancelled');
+
+  assert.equal(testEmailOutbox.length, 0, 'no email on SL undo');
+  assert.equal(testSmsOutbox.length, 0, 'no SMS on SL undo');
+  assert.equal(await Notification.countDocuments({}), 0, 'no in-app notification on SL undo');
+  assert.equal(await balancePending(applicant, leaveType, year), 0, 'reserved half-day released');
+});
+
+// ── 13. SL auto-approves at expiry with applicant + manager info mail ───────
+test('SL finalizes to approved after the undo window with correct emails', async () => {
+  const { manager, applicant, leaveType, dayKey, year } = await seedSLSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, dayKey));
+  // Before expiry the sweep must not approve or notify.
+  const early = await runLeaveDecisionNotifyJob(new Date());
+  assert.equal(early.processed, 0);
+  assert.equal(testEmailOutbox.length, 0);
+
+  const dueAt = new Date(new Date(created.decisionUndoExpiresAt).getTime() + 5000);
+  const job = await runLeaveDecisionNotifyJob(dueAt);
+  assert.equal(job.submitNotified, 1);
+
+  const final = await LeaveRequest.findById(created.id).lean();
+  assert.equal(final.status, 'approved', 'SL auto-approved after expiry');
+  assert.ok(final.finalizedAt, 'finalization timestamp recorded');
+  assert.equal(await balanceUsed(applicant, leaveType, year), 0.5, 'pending converted to used');
+  assert.equal(await balancePending(applicant, leaveType, year), 0);
+
+  const statusMails = emailsByTag('leave-status');
+  assert.equal(statusMails.length, 1, 'applicant gets exactly one approval email');
+  assert.match(statusMails[0].subject, /approved/);
+  const managerMails = emailsByTag('leave-manager');
+  assert.equal(managerMails.length, 1, 'manager gets exactly one info email');
+  assert.equal(managerMails[0].to, manager.email);
+  assert.doesNotMatch(managerMails[0].text, /Take action here/, 'manager info mail has no Take Action link');
+  // No submit-phase emails for auto-approved types.
+  assert.equal(emailsByTag('leave-submitted').length, 0, 'no submit email for SL');
+});
+
+// ── 14. SL repeated undo notifies only the final approval ───────────────────
+test('SL repeated submit/undo cycles approve and notify only the survivor', async () => {
+  const { applicant, leaveType, dayKey, year } = await seedSLSetup();
+
+  const first = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, dayKey, 'v1'));
+  await undoSubmittedLeaveRequest(first.id, applicant);
+  const secondDay = nextWorkingDay(dayKey, 1);
+  const second = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, secondDay, 'v2'));
+  await undoSubmittedLeaveRequest(second.id, applicant);
+  const thirdDay = nextWorkingDay(dayKey, 2);
+  const third = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, thirdDay, 'final'));
+
+  const dueAt = new Date(new Date(third.decisionUndoExpiresAt).getTime() + 5000);
+  await runLeaveDecisionNotifyJob(dueAt);
+
+  assert.equal(emailsByTag('leave-status').length, 1, 'exactly one approval email');
+  assert.equal(emailsByTag('leave-manager').length, 1, 'exactly one manager info email');
+  assert.equal(testEmailOutbox.length, 2, 'nothing leaked for undone SL versions');
+  const final = await LeaveRequest.findById(third.id).lean();
+  assert.equal(final.status, 'approved');
+  assert.equal(await balanceUsed(applicant, leaveType, year), 0.5);
+});
+
+// ── 15. SL edit-in-window restarts the window, then approves ────────────────
+test('SL edit during the undo window restarts the window and approves after', async () => {
+  const { applicant, leaveType, dayKey, year } = await seedSLSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, dayKey, 'v1'));
+  const editedDay = nextWorkingDay(dayKey, 1);
+  const edited = await editLeaveRequest(
+    created.id,
+    applicant,
+    submitHalfDayPayload(leaveType, editedDay, 'v2'),
+  );
+  assert.equal(edited.status, 'pending');
+  assert.ok(edited.decisionUndoExpiresAt, 'edit restarts the SL undo window');
+
+  // Between the original expiry and the new finalize time, the sweep must
+  // not approve: the superseded revision's timing no longer matches.
+  const betweenAt = new Date(new Date(created.decisionUndoExpiresAt).getTime() + 1000);
+  const editedDoc = await LeaveRequest.findById(created.id).lean();
+  assert.ok(
+    new Date(editedDoc.notifyAfter).getTime() > betweenAt.getTime(),
+    'new finalize time is still in the future at the stale sweep',
+  );
+  await runLeaveDecisionNotifyJob(betweenAt);
+  const mid = await LeaveRequest.findById(created.id).lean();
+  assert.equal(mid.status, 'pending', 'superseded SL revision is not approved early');
+  assert.equal(testEmailOutbox.length, 0, 'no email for the superseded revision');
+
+  const dueAt = new Date(new Date(edited.decisionUndoExpiresAt).getTime() + 5000);
+  await runLeaveDecisionNotifyJob(dueAt);
+  const final = await LeaveRequest.findById(created.id).lean();
+  assert.equal(final.status, 'approved');
+  assert.equal(emailsByTag('leave-status').length, 1);
+  assert.equal(await balanceUsed(applicant, leaveType, year), 0.5);
+});
+
+// ── 16. Approved SL follows the staged cancel lifecycle ─────────────────────
+test('approved SL cancels through the undo lifecycle', async () => {
+  const { manager, applicant, leaveType, dayKey } = await seedSLSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitHalfDayPayload(leaveType, dayKey));
+  await runLeaveDecisionNotifyJob(new Date(new Date(created.decisionUndoExpiresAt).getTime() + 5000));
+  clearTestEmailOutbox();
+  clearTestSmsOutbox();
+
+  await cancelLeaveRequest(created.id, applicant);
+  await undoLeaveCancellation(created.id, applicant, []);
+  assert.equal(testEmailOutbox.length, 0, 'no cancel email on SL undo');
+  const restored = await LeaveRequest.findById(created.id).lean();
+  assert.equal(restored.status, 'approved', 'SL undo restores the approved state');
+
+  await cancelApprovedLeaveByApprover(created.id, manager, managerPerms, { decisionComment: 'recovered' });
+  const stagedCancel = await LeaveRequest.findById(created.id).lean();
+  assert.equal(stagedCancel.pendingDecision, 'cancelled');
+  const job = await runLeaveDecisionNotifyJob(new Date(new Date(stagedCancel.notifyAfter).getTime() + 1000));
+  assert.equal(job.processed, 1);
+  const final = await LeaveRequest.findById(created.id).lean();
+  assert.equal(final.status, 'cancelled');
+  assert.equal(emailsByTag('leave-cancelled').length, 1, 'applicant notified once');
 });

@@ -6451,6 +6451,10 @@ body::-webkit-scrollbar-thumb {
     padding: var(--space-3);
   }
 
+  .dash-hero__actions {
+    justify-content: flex-start;
+  }
+
   .dash-calendar-card .month-calendar {
     gap: var(--space-2);
   }

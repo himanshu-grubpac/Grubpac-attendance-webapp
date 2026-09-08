@@ -133,14 +133,16 @@ test('Flow A: withdraw accepts when actor is the owner', () => {
   assert.equal(requesterId, owner._id.toString());
 });
 
-test('Flow A: auto-approved (SL) requests skip undo window entirely', () => {
+test('Flow A: auto-approved (SL) requests start provisional like other types', () => {
   const slType = mockLeaveType({ code: 'SL' });
   assert.equal(isAutoApproveLeaveType(slType), true);
-  // Auto-approved requests are created with status=approved, not pending
-  const request = mockLeaveRequest({ status: 'approved', leaveTypeId: slType });
-  assert.equal(request.status, 'approved');
-  // Cannot withdraw an approved request
-  assert.notEqual(request.status, 'pending');
+  // Auto-approved requests are created with status=pending and an undo
+  // window; approval lands only when the finalizer runs after expiry.
+  const request = mockLeaveRequest({ status: 'pending', leaveTypeId: slType });
+  assert.equal(request.status, 'pending');
+  // Withdrawable while the undo window is open.
+  assert.equal(request.status, 'pending');
+  assert.equal(request.notificationsSent, false);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

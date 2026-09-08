@@ -14,7 +14,7 @@ test('formatLeaveTypeLabel combines code and name', () => {
   assert.equal(formatLeaveTypeLabel({ leaveTypeCode: 'WFH', leaveTypeName: 'Work From Home' }), 'WFH — Work From Home');
 });
 
-test('buildApplyLeaveNotice for SL auto-approves without pending or LOP warnings', () => {
+test('buildApplyLeaveNotice for SL auto-approves after the undo window', () => {
   const notice = buildApplyLeaveNotice({
     leaveTypeCode: 'SL',
     leaveTypeName: 'Sick Leave',
@@ -22,9 +22,9 @@ test('buildApplyLeaveNotice for SL auto-approves without pending or LOP warnings
   });
   assert.equal(notice.title, 'Before you submit');
   assert.equal(notice.lines.length, 2);
-  assert.match(notice.lines[0], /approved automatically/);
+  assert.match(notice.lines[0], /auto-approved after the undo window/);
   assert.match(notice.lines[1], /paid leave/);
-  assert.doesNotMatch(notice.lines.join(' '), /manager approves|pending|loss of pay \(LOP\)/);
+  assert.doesNotMatch(notice.lines.join(' '), /manager approves|loss of pay \(LOP\)/);
 });
 
 test('buildApplyLeaveNotice includes paid line for paid policies', () => {

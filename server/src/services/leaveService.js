@@ -167,18 +167,6 @@ export function isAutoApproveLeaveType(leaveType) {
   return AUTO_APPROVE_LEAVE_TYPE_CODES.has(String(leaveType?.code ?? '').toUpperCase());
 }
 
-async function applyLeaveApproval(
-  request,
-  { userId, leaveTypeId, days, year, session, approverId = null, comment = null },
-) {
-  await approvePendingDays(userId, leaveTypeId, days, year, session);
-  request.status = 'approved';
-  request.approverId = approverId;
-  request.decidedAt = new Date();
-  request.decisionComment = comment;
-  await request.save({ session });
-}
-
 export function formatLeaveDateText(request) {
   const start = getISTDateInputValue(request.startDate);
   const end = getISTDateInputValue(request.endDate);
@@ -754,14 +742,14 @@ async function validateLeadDeputyConflict(userId, startDate, endDate, adminExcep
 }
 
 export async function createLeaveRequest(userId, payload) {
-  const user = await loadRequester(userId);
+  // Validates the requester exists and is active; the applicant record for
+  // notifications is loaded at finalize time, not submit time.
+  await loadRequester(userId);
   const adminException = Boolean(payload.adminException);
 
   const session = await mongoose.startSession();
   try {
     let createdRequest;
-    let autoApproved = false;
-    let leaveTypeForNotify = null;
     await session.withTransaction(async () => {
       const validated = await validateLeaveRequestInput({
         userId,
@@ -773,17 +761,16 @@ export async function createLeaveRequest(userId, payload) {
         adminException,
       });
 
-      leaveTypeForNotify = validated.leaveType;
       await reserveValidatedLeaveBalance(validated.balance, validated.balancePendingDelta, session);
 
-      const autoApprove = isAutoApproveLeaveType(validated.leaveType);
-      autoApproved = autoApprove;
-
-      // Non-auto-approved requests enter the provisional (undoable) state:
-      // no notification may be sent until the undo window expires and the
-      // finalizer runs. Timing is stored on the document so the backend —
-      // not browser memory — is authoritative (refresh/close safe).
-      const submitTiming = autoApprove ? null : provisionalTiming(LEAVE_SUBMIT_UNDO_WINDOW_MS);
+      // EVERY request type — including auto-approved ones (SL) — enters the
+      // provisional (undoable) state: no notification may be sent and no
+      // approval is recorded until the undo window expires and the finalizer
+      // runs. Timing is stored on the document so the backend — not browser
+      // memory — is authoritative (refresh/close safe). Auto-approved types
+      // are approved by the finalizer (finalizeAutoApprovedSubmit) instead of
+      // waiting for a manager decision.
+      const submitTiming = provisionalTiming(LEAVE_SUBMIT_UNDO_WINDOW_MS);
 
       const [request] = await LeaveRequest.create(
         [
@@ -808,7 +795,7 @@ export async function createLeaveRequest(userId, payload) {
         { session },
       );
 
-      if (!autoApprove && isWfhLeaveType(validated.leaveType)) {
+      if (isWfhLeaveType(validated.leaveType)) {
         // A request can be submitted after the employee has already checked in.
         // Link that check-in now so later decisions update the exact record.
         await updateWfhAttendanceForRequest(request, {
@@ -819,57 +806,26 @@ export async function createLeaveRequest(userId, payload) {
         });
       }
 
-      if (autoApprove) {
-        await applyLeaveApproval(request, {
-          userId,
-          leaveTypeId: payload.leaveTypeId,
-          days: validated.days,
-          year: validated.year,
-          session,
-        });
-        // Auto-approved types (SL) are the single exception to the undo
-        // lifecycle: immediate, final, no provisional state.
-        request.finalizedAt = new Date();
-      }
-
       createdRequest = request;
     });
 
-    if (autoApproved) {
-      await notifyApplicantDecision({
-        applicant: user,
-        request: createdRequest,
-        leaveType: leaveTypeForNotify,
-        status: 'approved',
-        decisionComment: null,
-      });
-      auditLog('leave_request_auto_approved', {
-        userId: userId.toString(),
-        requestId: createdRequest._id.toString(),
-        leaveTypeId: payload.leaveTypeId,
-        days: createdRequest.days,
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-      });
-    } else {
-      scheduleSubmitNotification(createdRequest._id.toString());
-      // Lambda precision: one SQS wake-up targeted at this request's
-      // finalize time (fail-open; the sweep remains the safety net).
-      await scheduleLeaveFinalize({
-        requestId: createdRequest._id.toString(),
-        kind: 'submit',
-        notifyAfter: createdRequest.notifyAfter,
-        revision: createdRequest.revision ?? 0,
-      });
-      auditLog('leave_request_created', {
-        userId: userId.toString(),
-        requestId: createdRequest._id.toString(),
-        leaveTypeId: payload.leaveTypeId,
-        days: createdRequest.days,
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-      });
-    }
+    scheduleSubmitNotification(createdRequest._id.toString());
+    // Lambda precision: one SQS wake-up targeted at this request's
+    // finalize time (fail-open; the sweep remains the safety net).
+    await scheduleLeaveFinalize({
+      requestId: createdRequest._id.toString(),
+      kind: 'submit',
+      notifyAfter: createdRequest.notifyAfter,
+      revision: createdRequest.revision ?? 0,
+    });
+    auditLog('leave_request_created', {
+      userId: userId.toString(),
+      requestId: createdRequest._id.toString(),
+      leaveTypeId: payload.leaveTypeId,
+      days: createdRequest.days,
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+    });
 
     return (await LeaveRequest.findById(createdRequest._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
   } finally {
@@ -976,6 +932,13 @@ export async function dispatchSubmitNotifications(requestId, now = new Date()) {
     // arrive either too early (notifyAfter in future → skip) or for a
     // revision whose flags were already consumed.
     if (request.notifyAfter && new Date(request.notifyAfter).getTime() > nowMs) return;
+    // Auto-approved types (SL) skip the submit notification entirely: at
+    // finalize time the request is approved outright (applicant + manager
+    // info notification), never parked for a manager decision.
+    if (isAutoApproveLeaveType(request.leaveTypeId)) {
+      await finalizeAutoApprovedSubmit(request);
+      return;
+    }
     // Atomic claim FIRST so concurrent dispatchers (timer vs sweep, retries,
     // double-fires) deliver exactly once. The loser returns without sending.
     const claimed = await LeaveRequest.findOneAndUpdate(
@@ -1010,6 +973,84 @@ export async function dispatchSubmitNotifications(requestId, now = new Date()) {
   } finally {
     pendingSubmitDispatch.delete(key);
   }
+}
+
+/**
+ * Finalizes an auto-approved-type submission (SL) once its undo window has
+ * expired: the request is approved outright inside ONE transaction (guard
+ * re-check + balance move + status + flags commit atomically, so concurrent
+ * dispatchers and crash-recovery retries can neither double-apply nor stall),
+ * then the applicant "approved" notification and the manager info
+ * notification (existing withActions=false path: no token, no Take Action
+ * button) go out post-commit. A withdraw/edit/decision that lands first flips
+ * the guarded fields, turning this into a no-op for the superseded revision.
+ */
+async function finalizeAutoApprovedSubmit(request) {
+  const userId = request.userId?._id ?? request.userId;
+  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  const year = getISTYear(request.startDate);
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const live = await LeaveRequest.findOne({
+        _id: request._id,
+        status: 'pending',
+        pendingDecision: null,
+        notificationsSent: false,
+        submitNotificationsSent: { $ne: true },
+      }).session(session);
+      if (!live) {
+        throw Object.assign(new Error('Auto-approval superseded before finalize.'), { code: 'STALE_PROVISIONAL' });
+      }
+      await approvePendingDays(userId, leaveTypeId, request.days, year, session);
+      await updateWfhAttendanceForRequest(request, {
+        fromStatuses: ['pending', 'rejected'],
+        toStatus: 'approved',
+        legacyAnyMode: true,
+        session,
+      });
+      live.status = 'approved';
+      live.decidedAt = new Date();
+      live.decisionComment = null;
+      live.pendingDecision = null;
+      live.pendingRevision = null;
+      live.notifyAfter = null;
+      live.undoExpiresAt = null;
+      live.notificationsSent = true;
+      live.submitNotificationsSent = true;
+      live.finalizedAt = new Date();
+      live.revision = (live.revision ?? 0) + 1;
+      await live.save({ session });
+    });
+  } catch (err) {
+    if (err?.code === 'STALE_PROVISIONAL') return { finalized: false, stale: true };
+    throw err;
+  } finally {
+    session.endSession();
+  }
+
+  try {
+    const requester = await loadRequester(userId);
+    await notifyApplicantDecision({
+      applicant: requester,
+      request,
+      leaveType: request.leaveTypeId,
+      status: 'approved',
+      decisionComment: null,
+      sendChannels: true,
+    });
+    await sendLeaveManagerEmail(request._id.toString());
+  } catch (notifyErr) {
+    // Final state stands; delivery failure is logged for ops follow-up.
+    console.error('[leave] auto-approval notification failed', request._id.toString(), notifyErr?.message);
+  }
+
+  auditLog('leave_request_auto_approved', {
+    userId: userId?.toString?.(),
+    requestId: request._id.toString(),
+  });
+  return { finalized: true };
 }
 
 /**

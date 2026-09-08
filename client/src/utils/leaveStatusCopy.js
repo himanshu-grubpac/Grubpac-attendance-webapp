@@ -71,7 +71,10 @@ export function buildApplyLeaveNotice({ leaveTypeCode, leaveTypeName, policyPaid
       : `${label} is unpaid leave.`;
     return {
       title: 'Before you submit',
-      lines: ['Sick leave is approved automatically when you submit.', paidLine],
+      lines: [
+        'Sick leave is auto-approved after the undo window expires. Undo within the window to change it.',
+        paidLine,
+      ],
     };
   }
 
