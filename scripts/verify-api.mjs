@@ -23,12 +23,17 @@ const { env } = await import('../server/src/config/env.js');
 const ADMIN_PASSWORD = env.adminPassword;
 
 /**
- * Finalize deferred approve/reject decisions: decisions stay pending with a
- * 15s undo window and are finalized by the background job (EventBridge every
- * minute in prod). In-harness we wait out the window and run the job directly.
+ * Finalize deferred approve/reject decisions: decisions stay pending through
+ * the undo window plus the notification delay (notifyAfter = undoExpiresAt +
+ * LEAVE_NOTIFICATION_DELAY_MS) and are finalized by the background job
+ * (EventBridge every minute in prod). In-harness we wait out the full
+ * lifecycle (derived from the same env config the server uses, plus a
+ * margin) and run the job directly.
  */
+const FINALIZE_WAIT_MS =
+  (env.leaveDecisionUndoMs ?? 15000) + (env.leaveNotificationDelayMs ?? 2500) + 5000;
 async function finalizePendingDecisions() {
-  await new Promise((resolve) => setTimeout(resolve, 16000));
+  await new Promise((resolve) => setTimeout(resolve, FINALIZE_WAIT_MS));
   await runLeaveDecisionNotifyJob(new Date());
 }
 
@@ -588,6 +593,33 @@ async function main() {
   const listUsers = await request('/admin/users?page=1&limit=10', { method: 'GET' });
   assert(listUsers.response.ok, 'Admin employee list works');
   assert(listUsers.data.pagination, 'Admin employee list includes pagination');
+
+  const todayPage1 = await request('/admin/attendance/team-today?page=1&limit=2', { method: 'GET' });
+  assert(todayPage1.response.ok, 'Admin team-today paged fetch works');
+  assert(Array.isArray(todayPage1.data.teamStatus), 'Team-today page returns teamStatus array');
+  assert(todayPage1.data.pagination?.limit === 2, 'Team-today honors limit');
+  assert(todayPage1.data.summary, 'Team-today includes summary');
+  assert(
+    todayPage1.data.summary.present + todayPage1.data.summary.absent + todayPage1.data.summary.onLeave
+      === todayPage1.data.summary.total,
+    'Team-today summary parts add up to total',
+  );
+  const todayPage2 = await request('/admin/attendance/team-today?page=2&limit=2', { method: 'GET' });
+  assert(todayPage2.response.ok, 'Admin team-today page 2 works');
+  const page1Ids = new Set((todayPage1.data.teamStatus ?? []).map((m) => m.userId));
+  const overlap = (todayPage2.data.teamStatus ?? []).filter((m) => page1Ids.has(m.userId));
+  assert(overlap.length === 0, 'Team-today pages do not overlap');
+  assert(
+    todayPage2.data.summary?.total === todayPage1.data.summary?.total,
+    'Team-today summary total is stable across pages',
+  );
+  const todaySearch = await request('/admin/attendance/team-today?page=1&limit=25&search=zzz-no-such-member', { method: 'GET' });
+  assert(todaySearch.response.ok, 'Admin team-today search works');
+  assert(todaySearch.data.pagination?.total === 0, 'Team-today search with no match returns zero total');
+  assert(
+    todaySearch.data.summary?.total === todayPage1.data.summary?.total,
+    'Team-today summary stays global when searching',
+  );
 
   const me = await request('/auth/me', { method: 'GET' });
   assert(me.response.ok, '/auth/me works with cookie auth');

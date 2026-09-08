@@ -35,6 +35,25 @@ const leaveRequestSchema = new mongoose.Schema(
     /** True once the manager-facing submit notification has been delivered. */
     submitNotificationsSent: { type: Boolean, default: false },
     /**
+     * Provisional → final lifecycle (undoable actions).
+     * Every provisional action (submit, edit, approve/reject stage,
+     * approved-cancel stage) bumps `revision`. The staged outcome records the
+     * revision it was created at in `pendingRevision`, so a stale delayed job
+     * or timer can never finalize a newer revision.
+     */
+    revision: { type: Number, default: 0, min: 0 },
+    /** Revision bound when the current pendingDecision was staged. Null when no action is pending. */
+    pendingRevision: { type: Number, default: null },
+    /**
+     * Explicit end of the undo window for the current provisional action
+     * (submit deferral or staged decision/cancellation). Exposed to clients
+     * as `decisionUndoExpiresAt`. `notifyAfter` is the finalize/notify time
+     * (undo expiry + notification delay) and must NOT drive undo countdowns.
+     */
+    undoExpiresAt: { type: Date, default: null },
+    /** When the current outcome was finalized by the background job. Null until finalized. */
+    finalizedAt: { type: Date, default: null },
+    /**
      * When an admin acts (approve/reject/cancel) but the undo window is still
      * open, the intended final status is stored here. The actual `status` field
      * stays unchanged until the undo window expires and the decision is
@@ -51,6 +70,10 @@ const leaveRequestSchema = new mongoose.Schema(
 
 leaveRequestSchema.index({ userId: 1, status: 1, startDate: -1 });
 leaveRequestSchema.index({ status: 1, createdAt: -1 });
+/** Finalizer sweep: staged decisions/cancels due for finalize + notify. */
+leaveRequestSchema.index({ pendingDecision: 1, notifyAfter: 1 });
+/** Submit-notification sweep: submitted but not yet notified. */
+leaveRequestSchema.index({ status: 1, submitNotificationsSent: 1, notifyAfter: 1 });
 
 leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
   const typeDoc =
@@ -80,7 +103,9 @@ leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     decisionComment: this.decisionComment,
     adminException: this.adminException,
     pendingDecision: this.pendingDecision ?? null,
-    decisionUndoExpiresAt: this.notifyAfter,
+    revision: this.revision ?? 0,
+    finalizedAt: this.finalizedAt ?? null,
+    decisionUndoExpiresAt: this.undoExpiresAt ?? this.notifyAfter ?? null,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

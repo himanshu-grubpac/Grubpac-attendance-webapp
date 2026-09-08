@@ -75,23 +75,22 @@ async function main() {
     isActive: true,
   });
 
-  // 1. Forgot password — employee gets a dev link (non-prod), generic message
+  // 1. Forgot password — employee gets a dev link (non-prod)
   const forgotEmp = await jsonFetch(`${api}/auth/forgot-password`, { email: empEmail });
   check('forgot-password (employee) returns 200', forgotEmp.status === 200, forgotEmp.status);
   check('forgot-password (employee) generic message', /reset instructions/i.test(forgotEmp.data?.message ?? ''));
   check('forgot-password (employee) returns devResetLink in non-prod', typeof forgotEmp.data?.devResetLink === 'string');
 
-  // 2. Forgot password — admin does NOT get a link (employees only)
+  // 2. Forgot password — active admin also gets a link (any active user)
   const forgotAdmin = await jsonFetch(`${api}/auth/forgot-password`, { email: adminEmail });
   check('forgot-password (admin) returns 200', forgotAdmin.status === 200, forgotAdmin.status);
-  check('forgot-password (admin) returns NO devResetLink', !('devResetLink' in (forgotAdmin.data ?? {})));
+  check('forgot-password (admin) returns devResetLink in non-prod', typeof forgotAdmin.data?.devResetLink === 'string');
 
-  // 3. Forgot password — unknown email returns generic, no link (enumeration safe)
+  // 3. Forgot password — unknown email returns 404 with doesn't-exist message
   const forgotUnknown = await jsonFetch(`${api}/auth/forgot-password`, { email: 'nobody@nowhere.com' });
-  check('forgot-password (unknown) returns 200', forgotUnknown.status === 200, forgotUnknown.status);
+  check('forgot-password (unknown) returns 404', forgotUnknown.status === 404, forgotUnknown.status);
+  check("forgot-password (unknown) message says doesn't exist", /doesn't exist/i.test(forgotUnknown.data?.message ?? ''));
   check('forgot-password (unknown) returns NO devResetLink', !('devResetLink' in (forgotUnknown.data ?? {})));
-  check('forgot-password (employee) reveals NO exists flag', !('exists' in (forgotEmp.data ?? {})));
-  check('forgot-password (unknown) reveals NO exists flag', !('exists' in (forgotUnknown.data ?? {})));
 
   // 4. Forgot password — invalid email format -> 400
   const forgotBad = await jsonFetch(`${api}/auth/forgot-password`, { email: 'not-an-email' });
@@ -100,6 +99,11 @@ async function main() {
   // Extract token from devResetLink
   const token = new URL(forgotEmp.data.devResetLink).searchParams.get('token');
   check('reset token parsed from dev link', Boolean(token));
+
+  // 4b. Admin token verifies too (any active user is eligible)
+  const adminToken = new URL(forgotAdmin.data.devResetLink).searchParams.get('token');
+  const verifyAdmin = await jsonFetch(`${api}/auth/reset-password/verify`, { token: adminToken });
+  check('verify (admin token) returns valid:true', verifyAdmin.data?.valid === true, JSON.stringify(verifyAdmin.data));
 
   // 5. Verify token — valid
   const verifyValid = await jsonFetch(`${api}/auth/reset-password/verify`, { token });
@@ -200,6 +204,7 @@ async function main() {
     isActive: false,
   });
   const forgotInactive = await jsonFetch(`${api}/auth/forgot-password`, { email: inactive.email });
+  check('forgot-password (inactive employee) returns 404', forgotInactive.status === 404, forgotInactive.status);
   check('forgot-password (inactive employee) returns NO devResetLink', !('devResetLink' in (forgotInactive.data ?? {})));
 
   // Cleanup

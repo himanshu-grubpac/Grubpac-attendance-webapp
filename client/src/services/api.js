@@ -167,6 +167,9 @@ export const adminApi = {
   bulkUpload: (file) => {
     const form = new FormData();
     form.append('file', file);
+    // Explicit multipart type WITHOUT a boundary: the browser appends the
+    // boundary parameter itself (verified). Omitting the header lets the
+    // instance application/json default serialize the FormData to '{"file":{}}'.
     return api
       .post('/admin/users/bulk-upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -205,7 +208,8 @@ export const adminApi = {
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
-  getTeamTodayStatus: () => api.get('/admin/attendance/team-today').then((r) => r.data),
+  getTeamTodayStatus: (params = {}) =>
+    api.get('/admin/attendance/team-today', { params }).then((r) => r.data),
 };
 
 export const attendanceApi = {
@@ -294,6 +298,9 @@ export const leaveApi = {
   uploadCarryBulk: (file) => {
     const form = new FormData();
     form.append('file', file);
+    // Explicit multipart type WITHOUT a boundary: the browser appends the
+    // boundary parameter itself (verified). Omitting the header lets the
+    // instance application/json default serialize the FormData to '{"file":{}}'.
     return api
       .post('/leave/carry-bulk/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -302,9 +309,19 @@ export const leaveApi = {
   },
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
-  createRequest: (payload) => api.post('/leave/requests', payload).then((r) => r.data),
+  createRequest: (payload, { idempotencyKey } = {}) =>
+    api
+      .post('/leave/requests', payload, {
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      })
+      .then((r) => r.data),
   getRequest: (id) => api.get(`/leave/requests/${id}`).then((r) => r.data),
-  updateRequest: (id, payload) => api.put(`/leave/requests/${id}`, payload).then((r) => r.data),
+  updateRequest: (id, payload, { idempotencyKey } = {}) =>
+    api
+      .put(`/leave/requests/${id}`, payload, {
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      })
+      .then((r) => r.data),
   cancelRequest: (id) => api.post(`/leave/requests/${id}/cancel`).then((r) => r.data),
   notify: (id) => api.post(`/leave/requests/${id}/notify`).then((r) => r.data),
   withdrawSubmitted: (id) => api.post(`/leave/requests/${id}/withdraw`).then((r) => r.data),

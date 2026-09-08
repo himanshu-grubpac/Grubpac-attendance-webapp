@@ -70,7 +70,13 @@ export async function recoverPendingSubmitNotificationsSafe() {
   }
 }
 
-export function startLeaveDecisionNotifyScheduler(intervalMs = 30 * 1000) {
+/**
+ * Finalizer cadence. 5s keeps the deliberate ~2.5s post-expiry notification
+ * delay tight on long-run servers (each tick runs one indexed sweep +
+ * JobLock-guarded job). Lambda keeps its 1-minute EventBridge schedule
+ * (template.yaml) — delivery there lags accordingly by design.
+ */
+export function startLeaveDecisionNotifyScheduler(intervalMs = 5 * 1000) {
   if (process.env.NODE_ENV === 'test') return null;
   if (process.env.AWS_LAMBDA_FUNCTION_NAME) return null;
 

@@ -16,9 +16,17 @@ import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 
 const APPROVALS_PAGE_SIZE = 20;
 
-// Mirrors the server undo window (LEAVE_DECISION_UNDO_MS). The applicant email
-// is only sent once this window expires, so the popup countdown must match.
+// Fallback only: the popup countdown prefers the server-authoritative
+// `decisionUndoExpiresAt` (undo expiry; the applicant email follows ~2.5s
+// later via the finalizer, never during the undoable period).
 const DECISION_UNDO_MS = 15000;
+
+// Quiet background settle cadence for rows with a staged (undoable) action.
+// The API answers fast; final status lands via the ~5s server finalizer, so
+// the UI polls silently instead of hanging on PENDING. Capped so a stuck
+// staged row (finalizer down) stops polling after ~2 minutes.
+const PENDING_SETTLE_POLL_MS = 5000;
+const MAX_SETTLE_POLLS = 24;
 
 function decisionUndoDurationMs(request) {
   const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
@@ -338,12 +346,15 @@ export default function AdminLeaveApprovals() {
     nextYear = yearFilterRef.current,
     nextMonthPart = monthPartFilterRef.current,
     nextQueueStatus = queueStatusRef.current,
+    quiet = false,
 
 
   } = {}) => {
     const nextMonth = toMonthFilterValue(nextYear, nextMonthPart);
-    setLoading(true);
-    setError('');
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const params = {
         scope: 'approvals',
@@ -362,13 +373,32 @@ export default function AdminLeaveApprovals() {
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      // A quiet settle poll must never clear a foreground skeleton or error.
+      if (!quiet) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadRequests({ nextPage: 1 });
   }, [loadRequests]);
+
+  // Settle polling: while any visible row carries a staged (undoable) action,
+  // silently refetch so PENDING flips to the finalized status as soon as the
+  // server finalizer commits it. Stops automatically once nothing is staged
+  // (or after MAX_SETTLE_POLLS attempts if a row stays stuck).
+  const settlePollsRef = useRef(0);
+  useEffect(() => {
+    if (!requests.some((item) => item.pendingDecision)) {
+      settlePollsRef.current = 0;
+      return undefined;
+    }
+    if (settlePollsRef.current >= MAX_SETTLE_POLLS) return undefined;
+    const timer = setInterval(() => {
+      settlePollsRef.current += 1;
+      loadRequests({ nextPage: page, quiet: true });
+    }, PENDING_SETTLE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [requests, page, loadRequests]);
 
   useEffect(() => {
     setExpandedIds({});
@@ -500,6 +530,9 @@ export default function AdminLeaveApprovals() {
                 setDecisionModal({ open: true, item: item, comment: note });
               } catch (err) {
                 showError(getErrorMessage(err));
+                // Undo may have lost the expiry race and the request could be
+                // finalized — resync so the UI never shows a stale undoable row.
+                await loadRequests({ nextPage: page });
               }
             },
             durationMs,
@@ -531,21 +564,24 @@ export default function AdminLeaveApprovals() {
         showActionPopup({
           message: 'Leave request approved. If done by mistake, click Undo to revert it.',
           undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await leaveApi.undoDecision(id);
-              showSuccess('Leave decision undone.');
-              await loadRequests({ nextPage: page });
-              setDecisionModal({ open: true, item: item, comment: note });
-            } catch (err) {
-              showError(getErrorMessage(err));
-            }
-          },
-          durationMs,
-        });
-      } else {
-        showSuccess('Leave request approved.');
-      }
+            onUndo: async () => {
+              try {
+                await leaveApi.undoDecision(id);
+                showSuccess('Leave decision undone.');
+                await loadRequests({ nextPage: page });
+                setDecisionModal({ open: true, item: item, comment: note });
+              } catch (err) {
+                showError(getErrorMessage(err));
+                // Undo may have lost the expiry race and the request could be
+                // finalized — resync so the UI never shows a stale undoable row.
+                await loadRequests({ nextPage: page });
+              }
+            },
+            durationMs,
+          });
+        } else {
+          showSuccess('Leave request approved.');
+        }
       setComments((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -583,6 +619,7 @@ export default function AdminLeaveApprovals() {
                 await loadRequests({ nextPage: page });
               } catch (err) {
                 showError(getErrorMessage(err));
+                await loadRequests({ nextPage: page });
               }
             },
           durationMs,

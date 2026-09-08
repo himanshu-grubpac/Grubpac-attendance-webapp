@@ -17,7 +17,7 @@ const BULK_REGULATIONS = [
   '"password" and "pin" columns: leave BLANK to keep the existing password/pin. Fill them in ONLY to set new credentials.',
   'When a new employee is added (blank id), a typed password is REQUIRED: 8+ characters with uppercase, lowercase, and a number.',
   'When a new employee is added (blank id), firstName, email, mobile, designation, joiningDate, department, and reportingManagerEmail are also required.',
-  '"pin4Digite" sets the 4-digit login PIN for new and existing employees. "pin6Digite" is ignored.',
+  '"pin4Digite" sets the 4-digit login PIN for new and existing employees.',
   `Required columns for new employees: firstName, email, mobile, password, designation, joiningDate, reportingManagerEmail.`,
   `Optional columns: lastName, employeeCode, department, reportingManagerCode, dateOfBirth, endingDate, isActive.`,
   `employeeCode format: ${EMPLOYEE_CODE_FORMAT_HINT}`,

@@ -19,7 +19,21 @@ function normalizePhone(value) {
   return digits;
 }
 
+/**
+ * In-memory outbox used ONLY under NODE_ENV=test (mirrors emailService's
+ * testEmailOutbox): no provider calls from automated tests.
+ */
+export const testSmsOutbox = [];
+
+export function clearTestSmsOutbox() {
+  testSmsOutbox.length = 0;
+}
+
 export async function sendSms({ to, message }) {
+  if (process.env.NODE_ENV === 'test') {
+    testSmsOutbox.push({ to, message });
+    return { delivered: true };
+  }
   if (!isSmsConfigured()) {
     logInfo('sms:skipped', { reason: 'not configured' });
     return { delivered: false, skipped: true };

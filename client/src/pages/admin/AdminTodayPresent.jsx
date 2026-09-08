@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 
 const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
+const TODAY_PRESENT_PAGE_SIZE = 25;
 
 // Keys must exist in the backend attendanceToday registry (validateColumns
 // rejects unknown keys on save) — `name` renders as the Employee column.
@@ -16,6 +19,7 @@ const TODAY_PRESENT_COLUMNS = [
 ];
 
 const TODAY_PRESENT_DEFAULT_COLUMNS = ['name', 'department', 'role', 'status'];
+const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, total: 0 };
 
 function isPresent(member) {
   return member.status === 'checked_in' || member.status === 'wfh';
@@ -28,9 +32,17 @@ function isOnLeave(member) {
 export default function AdminTodayPresent() {
   const { setMeta } = usePageMetaContext();
   const [teamStatus, setTeamStatus] = useState([]);
+  const [summary, setSummary] = useState(EMPTY_SUMMARY);
+  const [pagination, setPagination] = useState(null);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const debouncedSearch = useDebouncedValue(query, 350);
+  const loadMoreRef = useRef(null);
+  const requestKeyRef = useRef('');
+  const skipDebouncedSearchRef = useRef(true);
   const {
     visibleColumns,
     columnsLoading,
@@ -52,52 +64,75 @@ export default function AdminTodayPresent() {
     });
   }, [setMeta]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ search = '', nextPage = 1, append = false } = {}) => {
+    const requestKey = `${search}|${nextPage}|${append}`;
+    requestKeyRef.current = requestKey;
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError('');
     try {
-      const data = await adminApi.getTeamTodayStatus();
-      setTeamStatus(data.teamStatus ?? []);
+      const params = { page: nextPage, limit: TODAY_PRESENT_PAGE_SIZE };
+      if (search.trim()) params.search = search.trim();
+      const data = await adminApi.getTeamTodayStatus(params);
+      if (requestKeyRef.current !== requestKey) return;
+      setTeamStatus((current) => {
+        const fresh = data.teamStatus ?? [];
+        if (!append) return fresh;
+        // Dedupe by userId: newly registered members can shift offsets
+        // between page fetches, returning overlapping rows.
+        return mergeAppendUnique(current, fresh, (item) => item?.userId);
+      });
+      setSummary(data.summary ?? EMPTY_SUMMARY);
+      setPagination(data.pagination ?? null);
+      setPage(data.pagination?.page ?? nextPage);
     } catch (err) {
+      if (requestKeyRef.current !== requestKey) return;
       setError(getErrorMessage(err));
-      setTeamStatus([]);
+      if (!append) {
+        setTeamStatus([]);
+        setSummary(EMPTY_SUMMARY);
+        setPagination(null);
+      }
     } finally {
-      setLoading(false);
+      if (requestKeyRef.current === requestKey) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    load();
+    load({ search: '', nextPage: 1 });
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return teamStatus;
-    return teamStatus.filter((member) => {
-      const name = (member.name || member.firstName || '').toLowerCase();
-      const code = (member.employeeCode || '').toLowerCase();
-      const dept = (member.department || '').toLowerCase();
-      const role = (member.roleName || '').toLowerCase();
-      return (
-        name.includes(needle) ||
-        code.includes(needle) ||
-        dept.includes(needle) ||
-        role.includes(needle)
-      );
-    });
-  }, [teamStatus, query]);
-
-  const summary = useMemo(() => {
-    let present = 0;
-    let absent = 0;
-    let onLeave = 0;
-    for (const member of teamStatus) {
-      if (member.status === 'on_leave') onLeave += 1;
-      else if (isPresent(member)) present += 1;
-      else absent += 1;
+  useEffect(() => {
+    if (skipDebouncedSearchRef.current) {
+      skipDebouncedSearchRef.current = false;
+      return;
     }
-    return { present, absent, onLeave, total: teamStatus.length };
-  }, [teamStatus]);
+    load({ search: debouncedSearch, nextPage: 1 });
+  }, [debouncedSearch, load]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries;
+        if (!entry?.isIntersecting || loading || loadingMore) return;
+        if (!pagination || page >= pagination.totalPages) return;
+        load({ search: debouncedSearch, nextPage: page + 1, append: true });
+      },
+      { rootMargin: '120px' },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [debouncedSearch, load, loading, loadingMore, page, pagination]);
 
   return (
     <div className="page page--admin-today-present">
@@ -156,66 +191,88 @@ export default function AdminTodayPresent() {
             <div className="skeleton skeleton--row" />
           </div>
         ) : (
-          <div className="table-wrap table-wrap--responsive">
-            <table className="table data-table today-present-table">
-              <thead>
-                <tr>
-                  <th scope="col" className="today-present-table__col-num">#</th>
-                  {isColumnVisible('name') && <th scope="col">Employee</th>}
-                  {isColumnVisible('department') && <th scope="col">Department</th>}
-                  {isColumnVisible('role') && <th scope="col">Role</th>}
-                  {isColumnVisible('status') && <th scope="col">Status</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
+          <>
+            <div className="table-wrap table-wrap--responsive">
+              <table className="table data-table today-present-table">
+                <thead>
                   <tr>
-                    <td colSpan={visibleColumns.length + 1} className="muted small today-present-table__empty">
-                      No team members found.
-                    </td>
+                    <th scope="col" className="today-present-table__col-num">#</th>
+                    {isColumnVisible('name') && <th scope="col">Employee</th>}
+                    {isColumnVisible('department') && <th scope="col">Department</th>}
+                    {isColumnVisible('role') && <th scope="col">Role</th>}
+                    {isColumnVisible('status') && <th scope="col">Status</th>}
                   </tr>
-                ) : (
-                  filtered.map((member, index) => {
-                    const present = isPresent(member);
-                    const onLeave = !present && isOnLeave(member);
-                    const badgeTone = present ? 'present' : onLeave ? 'leave' : 'absent';
-                    const badgeLabel = present ? 'Present' : onLeave ? 'On Leave' : 'Absent';
-                    return (
-                      <tr key={member.userId}>
-                        <td className="today-present-table__col-num">{index + 1}</td>
-                        {isColumnVisible('name') && (
-                          <td data-label="Employee" className="today-present-table__employee">
-                            <span className="today-present-table__name">
-                              {member.firstName ||
-                                member.name?.split(' ')[0] ||
-                                'Team Member'}
-                            </span>
-                            {member.employeeCode && (
-                              <span className="today-present-table__code muted small">
-                                {' '}
-                                ({member.employeeCode})
+                </thead>
+                <tbody>
+                  {teamStatus.length === 0 ? (
+                    <tr>
+                      <td colSpan={visibleColumns.length + 1} className="muted small today-present-table__empty">
+                        {query.trim() ? 'No team members match this search.' : 'No team members found.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    teamStatus.map((member, index) => {
+                      const present = isPresent(member);
+                      const onLeave = !present && isOnLeave(member);
+                      // Note: kept as if/else (not nested ternary) — oxlint's
+                      // parser rejects nested ternaries with a false error.
+                      let badgeTone = 'absent';
+                      let badgeLabel = 'Absent';
+                      if (present) {
+                        badgeTone = 'present';
+                        badgeLabel = 'Present';
+                      } else if (onLeave) {
+                        badgeTone = 'leave';
+                        badgeLabel = 'On Leave';
+                      }
+                      // Fall back to a positional key: rows without a userId must
+                      // never share a key (or mergeAppendUnique would drop them).
+                      const rowKey = member.userId ?? `row-${index}`;
+                      return (
+                        <tr key={rowKey}>
+                          <td className="today-present-table__col-num">{index + 1}</td>
+                          {isColumnVisible('name') && (
+                            <td data-label="Employee" className="today-present-table__employee">
+                              <span className="today-present-table__name">
+                                {member.firstName ||
+                                  member.name?.split(' ')[0] ||
+                                  'Team Member'}
                               </span>
-                            )}
-                          </td>
-                        )}
-                        {isColumnVisible('department') && <td data-label="Department">{member.department ?? '—'}</td>}
-                        {isColumnVisible('role') && <td data-label="Role">{member.roleName ?? '—'}</td>}
-                        {isColumnVisible('status') && (
-                          <td data-label="Status">
-                            <span
-                              className={`today-present-table__badge today-present-table__badge--${badgeTone}`}
-                            >
-                              {badgeLabel}
-                            </span>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                              {member.employeeCode && (
+                                <span className="today-present-table__code muted small">
+                                  {' '}
+                                  ({member.employeeCode})
+                                </span>
+                              )}
+                            </td>
+                          )}
+                          {isColumnVisible('department') && <td data-label="Department">{member.department ?? '—'}</td>}
+                          {isColumnVisible('role') && <td data-label="Role">{member.roleName ?? '—'}</td>}
+                          {isColumnVisible('status') && (
+                            <td data-label="Status">
+                              <span
+                                className={`today-present-table__badge today-present-table__badge--${badgeTone}`}
+                              >
+                                {badgeLabel}
+                              </span>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {pagination && teamStatus.length > 0 ? (
+              <p className="employees-scroll-hint muted small" role="status">
+                Showing {teamStatus.length} of {pagination.total} team members
+                {loadingMore ? ' · Loading more…' : ''}
+              </p>
+            ) : null}
+            <div ref={loadMoreRef} className="employees-scroll-sentinel" aria-hidden="true" />
+          </>
         )}
       </section>
 

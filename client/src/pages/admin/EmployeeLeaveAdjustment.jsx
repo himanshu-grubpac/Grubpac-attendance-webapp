@@ -50,7 +50,7 @@ function CarriedStepper({ value, disabled, onChange }) {
   const numericValue = Number(value) || 0;
 
   function step(delta) {
-    const next = Math.max(0, Math.min(365, Math.round((numericValue + delta) * 2) / 2));
+    const next = Math.max(-365, Math.min(365, Math.round((numericValue + delta) * 2) / 2));
     onChange(next);
   }
 
@@ -60,7 +60,7 @@ function CarriedStepper({ value, disabled, onChange }) {
         type="button"
         className="btn btn-sm btn-ghost leave-adjustment-stepper__btn"
         onClick={() => step(-1)}
-        disabled={disabled || numericValue <= 0}
+        disabled={disabled || numericValue <= -365}
         aria-label="Decrease carried days"
       >
         −

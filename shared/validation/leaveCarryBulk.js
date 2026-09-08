@@ -35,7 +35,8 @@ export const leaveCarryBulkRowSchema = z
     fromYear: z.coerce.number().int().min(2000).max(2100),
     toYear: z.coerce.number().int().min(2000).max(2100),
     leaveType: z.string().trim().min(1, 'Leave type is required.'),
-    carriedDays: z.coerce.number().min(0).max(365),
+    // Negative carry is allowed as a deduction (reduces available balance).
+    carriedDays: z.coerce.number().min(-365).max(365),
     reason: z.string().trim().max(500).optional().default(''),
     leaveTypeCode: z.string().trim().optional(),
   })

@@ -3,6 +3,7 @@ import multer from 'multer';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
+import { singleFileUpload } from '../middleware/upload.js';
 import {
   bulkUploadEmployees,
   downloadEmployeeTemplate,
@@ -124,7 +125,7 @@ router.patch('/users/:id', requirePermission(PERMISSIONS.USERS_WRITE), asyncHand
 router.post(
   '/users/bulk-upload',
   requirePermission(PERMISSIONS.USERS_WRITE),
-  upload.single('file'),
+  singleFileUpload(upload),
   asyncHandler(bulkUploadEmployees),
 );
 router.get('/users/:id', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(getEmployee));

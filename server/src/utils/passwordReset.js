@@ -16,7 +16,7 @@ export class PasswordResetTokenError extends Error {
   }
 }
 
-/** Create a short-lived, single-purpose JWT for an employee password reset. */
+/** Create a short-lived, single-purpose JWT for a password reset. */
 export function createPasswordResetToken(user) {
   return jwt.sign(
     {
@@ -33,7 +33,7 @@ export function createPasswordResetToken(user) {
 /**
  * Verify a password-reset token. Throws PasswordResetTokenError on any problem
  * (malformed, wrong purpose, expired, or otherwise invalid). Callers must still
- * confirm the user exists, is active, is an employee, and that `tv` matches.
+ * confirm the user exists, is active, and that `tv` matches.
  */
 export function verifyPasswordResetToken(token) {
   if (!token || typeof token !== 'string') {

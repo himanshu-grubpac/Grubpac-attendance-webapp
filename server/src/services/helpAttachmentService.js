@@ -51,6 +51,28 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
+/**
+ * Classifies an S3 HeadObject failure for the download path.
+ * Only a genuine missing object may flip the attachment row to `deleted` —
+ * permission blips (403), timeouts, 5xx and networking errors must leave the
+ * row alone so files don't vanish from the UI while S3 is fine.
+ * Pure — unit tested.
+ *
+ * @returns {'not-found'|'transient'}
+ */
+export function classifyDownloadHeadError(err) {
+  const name = err?.name ?? err?.Code ?? '';
+  if (name === 'NotFound' || name === 'NoSuchKey' || name === 'NoSuchBucket') {
+    return 'not-found';
+  }
+  const httpStatus =
+    err?.$metadata?.httpStatusCode ?? err?.statusCode ?? err?.$response?.statusCode;
+  if (httpStatus === 404) {
+    return 'not-found';
+  }
+  return 'transient';
+}
+
 export function getUploadsBucket() {
   const bucket = process.env.UPLOADS_BUCKET;
   if (!bucket) {
@@ -314,9 +336,12 @@ export async function getDownloadUrl(actor, ticketId, attachmentId, permissions)
     );
   } catch (s3Err) {
     console.error('[help-attachment] Download HEAD check failed:', s3Err?.message ?? s3Err);
-    attachment.status = 'deleted';
-    await attachment.save();
-    throwError('Attachment file not found on server.', 404);
+    if (classifyDownloadHeadError(s3Err) === 'not-found') {
+      attachment.status = 'deleted';
+      await attachment.save();
+      throwError('Attachment file not found on server.', 404);
+    }
+    throwError('Attachment is temporarily unavailable. Please try again.', 503);
   }
 
   const command = new GetObjectCommand({

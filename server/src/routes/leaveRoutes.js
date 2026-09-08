@@ -151,6 +151,7 @@ router.get(
 router.put(
   '/requests/:id',
   requirePermission(PERMISSIONS.LEAVE_APPLY),
+  idempotencyMiddleware,
   asyncHandler(editLeaveRequestHandler),
 );
 router.post(

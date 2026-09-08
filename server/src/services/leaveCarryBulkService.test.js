@@ -6,7 +6,8 @@ import {
   leaveCarryBulkRowSchema,
   leaveCarryBulkTemplateQuerySchema,
 } from '../../../shared/validation/leaveCarryBulk.js';
-import { parseCarryBulkWorkbook } from './leaveCarryBulkService.js';
+import { adjustLeaveBalanceSchema } from '../../../shared/validation/leave.js';
+import { applyCarryBulkRows, parseCarryBulkWorkbook } from './leaveCarryBulkService.js';
 
 test('leaveCarryBulkTemplateQuerySchema requires fromYear and toYear', () => {
   const result = leaveCarryBulkTemplateQuerySchema.safeParse({
@@ -341,4 +342,59 @@ test('parseCarryBulkWorkbook rejects files without a recognizable header row', (
     () => parseCarryBulkWorkbook(buffer),
     /Could not find header row with employeeName or employeeCode columns/,
   );
+});
+
+test('leaveCarryBulkRowSchema accepts negative carriedDays as a deduction', () => {
+  const result = leaveCarryBulkRowSchema.safeParse({
+    employeeCode: 'EMP001',
+    fromYear: 2025,
+    toYear: 2026,
+    leaveType: 'CL',
+    carriedDays: -5,
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.data.carriedDays, -5);
+});
+
+test('leaveCarryBulkRowSchema still bounds carriedDays to +-365', () => {
+  for (const carriedDays of [-366, 366]) {
+    const result = leaveCarryBulkRowSchema.safeParse({
+      employeeCode: 'EMP001',
+      fromYear: 2025,
+      toYear: 2026,
+      leaveType: 'CL',
+      carriedDays,
+    });
+    assert.equal(result.success, false, `carriedDays=${carriedDays} must be rejected`);
+  }
+});
+
+test('adjustLeaveBalanceSchema accepts negative carried as a deduction', () => {
+  const result = adjustLeaveBalanceSchema.safeParse({
+    leaveTypeId: '507f1f77bcf86cd799439011',
+    year: 2026,
+    carried: -3,
+    reason: 'Year-end correction',
+  });
+  assert.equal(result.success, true);
+});
+
+test('applyCarryBulkRows names the offending field in validation messages', async () => {
+  const { summary, results } = await applyCarryBulkRows(
+    [
+      {
+        rowNumber: 7,
+        data: {
+          employeeCode: '',
+          fromYear: 2025,
+          toYear: 2026,
+          leaveType: 'CL',
+          carriedDays: 3,
+        },
+      },
+    ],
+    '507f1f77bcf86cd799439011',
+  );
+  assert.equal(summary.validation_error, 1);
+  assert.match(results[0].message, /employeeCode:/);
 });

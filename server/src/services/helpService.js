@@ -196,7 +196,8 @@ export async function listHelpTickets(actor, permissions, query) {
   const [tickets, total] = await Promise.all([
     HelpTicket.find(filter)
       .populate(HELP_TICKET_POPULATE)
-      .sort({ createdAt: -1 })
+      // _id tiebreaker keeps offset pagination stable when timestamps tie.
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(query.limit),
     HelpTicket.countDocuments(filter),

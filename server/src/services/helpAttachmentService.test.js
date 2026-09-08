@@ -4,6 +4,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import {
   ALLOWED_MIME_TYPES,
   buildS3Key,
+  classifyDownloadHeadError,
   getS3Client,
   isAllowedMimeType,
   resetS3ClientForTests,
@@ -36,6 +37,27 @@ test('buildS3Key uses help-tickets prefix, ticket id, uuid, and sanitized filena
   const key = buildS3Key('507f1f77bcf86cd799439011', '../invoice.PDF', 'help-tickets');
   assert.match(key, /^help-tickets\/507f1f77bcf86cd799439011\/.+-invoice\.PDF$/);
   assert.doesNotMatch(key, /\.\./);
+});
+
+test('classifyDownloadHeadError treats missing objects as not-found', () => {
+  assert.equal(classifyDownloadHeadError({ name: 'NotFound' }), 'not-found');
+  assert.equal(classifyDownloadHeadError({ name: 'NoSuchKey' }), 'not-found');
+  assert.equal(classifyDownloadHeadError({ name: 'NoSuchBucket' }), 'not-found');
+  assert.equal(
+    classifyDownloadHeadError({ name: 'NotFoundException', $metadata: { httpStatusCode: 404 } }),
+    'not-found',
+  );
+  assert.equal(classifyDownloadHeadError({ $metadata: { httpStatusCode: 404 } }), 'not-found');
+});
+
+test('classifyDownloadHeadError treats blips as transient (row must stay)', () => {
+  assert.equal(classifyDownloadHeadError({ name: 'Forbidden', $metadata: { httpStatusCode: 403 } }), 'transient');
+  assert.equal(classifyDownloadHeadError({ name: 'TimeoutError' }), 'transient');
+  assert.equal(classifyDownloadHeadError({ name: 'InternalError', $metadata: { httpStatusCode: 500 } }), 'transient');
+  assert.equal(classifyDownloadHeadError({ name: 'ServiceUnavailable', $metadata: { httpStatusCode: 503 } }), 'transient');
+  assert.equal(classifyDownloadHeadError(new Error('socket hang up')), 'transient');
+  assert.equal(classifyDownloadHeadError(null), 'transient');
+  assert.equal(classifyDownloadHeadError(undefined), 'transient');
 });
 
 function stashAwsEnv() {

@@ -53,12 +53,27 @@ function buildFrom() {
 }
 
 /**
+ * In-memory outbox used ONLY under NODE_ENV=test so automated tests can
+ * assert exactly which emails a workflow emits (and that silent paths emit
+ * none) without touching a real SMTP provider. Production path untouched.
+ */
+export const testEmailOutbox = [];
+
+export function clearTestEmailOutbox() {
+  testEmailOutbox.length = 0;
+}
+
+/**
  * Send a transactional email. When SMTP is not configured (local/dev), the
  * email content is written to the server console instead of being delivered.
  * Returns `{ delivered }` so callers can decide whether a dev link must be
  * surfaced for local testing.
  */
 export async function sendEmail({ to, subject, html, text, tag }) {
+  if (process.env.NODE_ENV === 'test') {
+    testEmailOutbox.push({ to, subject, html, text, tag });
+    return { delivered: true };
+  }
   const transport = getTransport();
   const from = buildFrom();
 
@@ -203,6 +218,35 @@ ${withActions ? `Take action here: ${actionUrl}` : 'This leave type is auto-appr
   return { subject, html, text };
 }
 
+/** Applicant confirmation when a leave request survives its undo window and is finally submitted. */
+export function renderLeaveApplicantSubmittedEmail({ leaveTypeName, reason, dateText, timeText }) {
+  const subject = `Leave request submitted: ${leaveTypeName}`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your <strong>${leaveTypeName}</strong> leave request has been <strong>submitted</strong> and sent to your reporting manager for action.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${reason || '—'}</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your ${leaveTypeName} leave request has been submitted and sent to your reporting manager for action.
+Reason: ${reason || '—'}
+Date: ${dateText}
+Time: ${timeText}`;
+  return { subject, html, text };
+}
+
 /** Applicant notification when a leave request is approved or rejected. */
 export function renderLeaveApplicantEmail({ leaveTypeName, status, remarks, dateText, timeText }) {
   const subject = `Leave request ${status}: ${leaveTypeName}`;
@@ -261,6 +305,40 @@ export function renderLeaveCancelledEmail({ leaveTypeName, dateText, timeText, w
 Date: ${dateText}
 Time: ${timeText}
 ${wasApproved ? 'The approved leave days have been returned to your leave balance.' : ''}`;
+  return { subject, html, text };
+}
+
+/**
+ * Reporting-chain notification when an employee cancels a leave request.
+ * Neutral wording covers both pending-request and approved-leave cancels
+ * (the approver-specific template above stays for the original approver).
+ */
+export function renderLeaveCancelledForManagerEmail({ applicantName, leaveTypeName, dateText, timeText, wasApproved }) {
+  const subject = wasApproved
+    ? `Approved leave cancelled: ${leaveTypeName}`
+    : `Leave request cancelled: ${leaveTypeName}`;
+  const what = wasApproved ? 'approved' : 'pending';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has cancelled their ${what} <strong>${leaveTypeName}</strong> leave.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${applicantName} cancelled their ${what} ${leaveTypeName} leave.
+Date: ${dateText}
+Time: ${timeText}`;
   return { subject, html, text };
 }
 

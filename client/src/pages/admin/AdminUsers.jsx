@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { IST_TIMEZONE } from '../../utils/datetime.js';
+import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -321,9 +322,13 @@ export default function AdminUsers() {
 
       const data = await adminApi.listEmployees(params);
       if (requestKeyRef.current !== requestKey) return;
-      setEmployees((current) =>
-        append ? [...current, ...(data.employees ?? [])] : (data.employees ?? []),
-      );
+      setEmployees((current) => {
+        const fresh = data.employees ?? [];
+        if (!append) return fresh;
+        // Dedupe by id: concurrent writes (register/deactivate) can shift
+        // offsets between page fetches, returning overlapping rows.
+        return mergeAppendUnique(current, fresh);
+      });
       setPagination(data.pagination);
       setPage(nextPage);
       setListError('');

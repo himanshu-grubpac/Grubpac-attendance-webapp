@@ -201,7 +201,8 @@ export async function listEmployees(req, res) {
   const [employees, total] = await Promise.all([
     User.find(query)
       .populate(USER_POPULATE_FIELDS)
-      .sort({ name: 1 })
+      // _id tiebreaker keeps offset pagination stable when names tie.
+      .sort({ name: 1, _id: 1 })
       .skip(skip)
       .limit(limit),
     User.countDocuments(query),
@@ -221,9 +222,19 @@ pagination: {
     });
   }
 
+const teamTodayQuerySchema = paginationSchema.extend({
+  search: z.string().trim().max(100).optional(),
+});
+
 export async function getTeamTodayStatusAdmin(req, res) {
-  const status = await getTeamTodayStatusService(req.user, req.userPermissions);
-  res.json({ teamStatus: status });
+  const parsed = teamTodayQuerySchema.parse(req.query);
+  const result = await getTeamTodayStatusService(req.user, req.userPermissions, {
+    paginate: true,
+    page: parsed.page,
+    limit: parsed.limit,
+    search: parsed.search ?? '',
+  });
+  res.json(result);
 }
 
 export async function getEmployeeStats(req, res) {
@@ -1019,7 +1030,8 @@ export async function listAuditLogs(req, res) {
   }
 
   [logs, total] = await Promise.all([
-    AuditLog.find(query).sort({ timestamp: -1 }).skip(skip).limit(limit),
+      // _id tiebreaker keeps offset pagination stable when timestamps tie.
+      AuditLog.find(query).sort({ timestamp: -1, _id: -1 }).skip(skip).limit(limit),
     AuditLog.countDocuments(query),
   ]);
 

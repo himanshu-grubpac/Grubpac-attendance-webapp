@@ -266,7 +266,7 @@ function parseWideLeaveGroups(groupRow, subRow, reasonCol) {
     ) {
       const code = extractLeaveTypeCodeFromGroupHeader(groupRow[columnIndex]);
       if (!code) {
-        throw new Error(
+        throwError(
           `Could not determine leave type code for column group starting at column ${columnIndex + 1}. Use headers like "Casual Leave (CL)".`,
         );
       }
@@ -282,7 +282,7 @@ function parseWideLeaveGroups(groupRow, subRow, reasonCol) {
   }
 
   if (groups.length === 0) {
-    throw new Error(
+    throwError(
       'Wide-format sheet is missing leave type column groups with Entitled, Used, Remaining, and Carry sub-columns.',
     );
   }
@@ -298,7 +298,7 @@ function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
   const dataRows = aoa.slice(groupHeaderRowIndex + 2);
 
   if (dataRows.length > MAX_BULK_UPLOAD_ROWS) {
-    throw new Error(
+    throwError(
       `The file contains ${dataRows.length} rows. Maximum allowed is ${MAX_BULK_UPLOAD_ROWS}.`,
     );
   }
@@ -341,7 +341,7 @@ function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
   });
 
   if (mappedRows.length > MAX_BULK_UPLOAD_ROWS) {
-    throw new Error(
+    throwError(
       `The file expands to ${mappedRows.length} carry entries. Maximum allowed is ${MAX_BULK_UPLOAD_ROWS}.`,
     );
   }
@@ -355,7 +355,7 @@ function mapWorksheetRows(aoa, headerRowIndex) {
   const dataRows = aoa.slice(headerRowIndex + 1);
 
   if (dataRows.length > MAX_BULK_UPLOAD_ROWS) {
-    throw new Error(
+    throwError(
       `The file contains ${dataRows.length} rows. Maximum allowed is ${MAX_BULK_UPLOAD_ROWS}.`,
     );
   }
@@ -592,7 +592,7 @@ export function parseCarryBulkWorkbook(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
-    throw new Error('The uploaded Excel file does not contain any sheets.');
+    throwError('The uploaded Excel file does not contain any sheets.');
   }
 
   const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
@@ -602,7 +602,7 @@ export function parseCarryBulkWorkbook(buffer) {
 
   const headerRowIndex = findCarryBulkHeaderRowIndex(rawRows);
   if (headerRowIndex < 0) {
-    throw new Error(
+    throwError(
       'Could not find header row with employeeName or employeeCode columns. Download a fresh template and try again.',
     );
   }
@@ -756,7 +756,15 @@ export async function applyCarryBulkRows(rows, adjustedBy) {
           status: 'validation_error',
           employeeCode,
           employeeName,
-          message: error.issues.map((issue) => issue.message).join(' '),
+          // Include the field path so the message names the offending
+          // column (e.g. "carriedDays: Too small...") instead of a bare
+          // constraint message repeated across rows.
+          message: error.issues
+            .map((issue) => {
+              const path = (issue.path ?? []).join('.');
+              return path ? `${path}: ${issue.message}` : issue.message;
+            })
+            .join(' '),
         });
         continue;
       }

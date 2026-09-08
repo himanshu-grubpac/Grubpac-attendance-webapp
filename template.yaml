@@ -106,6 +106,14 @@ Parameters:
     Type: String
     Default: '15000'
     Description: Undo window (ms) before a leave decision is finalized and mailed
+  LeaveSubmitUndoWindowMs:
+    Type: String
+    Default: '10000'
+    Description: Undo window (ms) before a submitted leave request notifies manager and applicant
+  LeaveNotificationDelayMs:
+    Type: String
+    Default: '2500'
+    Description: Deliberate delay (ms) between undo-window expiry and notification dispatch
   # Auto-checkout tuning. Consumed when the office-settings doc is first created
   # (thereafter the DB doc wins). Wired into both functions so a fresh staging
   # DB seeds with the intended schedule.
@@ -199,6 +207,9 @@ Resources:
           SMS_SENDER: !Ref SmsSender
           SMS_DEFAULT_COUNTRY_CODE: !Ref SmsDefaultCountryCode
           LEAVE_DECISION_UNDO_MS: !Ref LeaveDecisionUndoMs
+          LEAVE_SUBMIT_UNDO_WINDOW_MS: !Ref LeaveSubmitUndoWindowMs
+          LEAVE_NOTIFICATION_DELAY_MS: !Ref LeaveNotificationDelayMs
+          LEAVE_FINALIZE_QUEUE_URL: !Ref LeaveFinalizeQueue
           AUTO_CHECKOUT_ENABLED: !Ref AutoCheckoutEnabled
           AUTO_CHECKOUT_OFFICE_DAY: !Ref AutoCheckoutOfficeDay
           AUTO_CHECKOUT_OFFICE_TIME: !Ref AutoCheckoutOfficeTime
@@ -214,6 +225,10 @@ Resources:
                 - s3:DeleteObject
                 - s3:HeadObject
               Resource: !Sub 'arn:aws:s3:::${HelpUploadsBucketName}/help-tickets/*'
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt LeaveFinalizeQueue.Arn
       Events:
         ProxyApi:
           Type: HttpApi
@@ -251,6 +266,25 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt WarmupScheduleRule.Arn
 
+  # Per-action delayed leave finalization. The API schedules ONE message per
+  # provisional action with DelaySeconds targeted at its finalize time
+  # (undo window + ~2.5s notification delay), so Lambda delivery lands in
+  # seconds instead of waiting for the 1-minute EventBridge sweep below
+  # (kept as the safety net). Standard queue: duplicates are harmless —
+  # finalization is revision-guarded and notifications are claimed once.
+  LeaveFinalizeDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600 # 14 days for ops inspection
+
+  LeaveFinalizeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 135 # > JobFunction timeout (120s) so a slow sweep is never double-processed
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LeaveFinalizeDLQ.Arn
+        maxReceiveCount: 5
+
   JobFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -259,6 +293,15 @@ Resources:
       CodeUri: lambda-package/
       Timeout: 120
       MemorySize: 512
+      Events:
+        LeaveFinalizeSQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt LeaveFinalizeQueue.Arn
+            BatchSize: 1
+            MaximumBatchingWindowInSeconds: 0
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
       Environment:
         Variables:
           NODE_ENV: production
@@ -278,6 +321,8 @@ Resources:
           SMS_SENDER: !Ref SmsSender
           SMS_DEFAULT_COUNTRY_CODE: !Ref SmsDefaultCountryCode
           LEAVE_DECISION_UNDO_MS: !Ref LeaveDecisionUndoMs
+          LEAVE_SUBMIT_UNDO_WINDOW_MS: !Ref LeaveSubmitUndoWindowMs
+          LEAVE_NOTIFICATION_DELAY_MS: !Ref LeaveNotificationDelayMs
           AUTO_CHECKOUT_ENABLED: !Ref AutoCheckoutEnabled
           AUTO_CHECKOUT_OFFICE_DAY: !Ref AutoCheckoutOfficeDay
           AUTO_CHECKOUT_OFFICE_TIME: !Ref AutoCheckoutOfficeTime
@@ -312,7 +357,7 @@ Resources:
   LeaveNotifyScheduleRule:
     Type: AWS::Events::Rule
     Properties:
-      Description: Finalize leave decisions and send applicant mail shortly after the 15s undo window
+      Description: Safety-net sweep for leave finalization (SQS wake-ups deliver in seconds; this catches anything missed)
       ScheduleExpression: rate(1 minute)
       State: ENABLED
       Targets:

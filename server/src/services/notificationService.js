@@ -23,7 +23,8 @@ export async function listNotifications(userId, { page, limit }) {
 
   const [notifications, total, unreadCount] = await Promise.all([
     Notification.find(filter)
-      .sort({ createdAt: -1 })
+      // _id tiebreaker keeps offset pagination stable when timestamps tie.
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit),
     Notification.countDocuments(filter),
