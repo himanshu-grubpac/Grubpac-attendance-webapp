@@ -1,8 +1,10 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
 import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob, recoverPendingSubmitNotifications } from '../services/leaveService.js';
 import { cleanupStalePendingAttachments } from '../services/helpAttachmentService.js';
+import { settleMonthPayroll } from '../services/lopSettlementService.js';
+import { MonthSettlement } from '../models/MonthSettlement.js';
 import { User } from '../models/User.js';
-import { getISTYear } from '../utils/istDate.js';
+import { getISTDateInputValue, getISTYear } from '../utils/istDate.js';
 import { logError } from '../utils/logger.js';
 import { acquireJobLock, releaseJobLock } from '../utils/jobLock.js';
 
@@ -91,4 +93,75 @@ export function startLeaveDecisionNotifyScheduler(intervalMs = 5 * 1000) {
   };
   run();
   return setInterval(run, intervalMs);
+}
+
+/**
+ * Auto month-end settlement: settles the previous month if not already settled.
+ * Runs daily. Idempotent — safe to call multiple times.
+ * Uses a system actor ID (null) since this is an automated job.
+ */
+export async function runMonthEndSettlementJob(now = new Date()) {
+  const lock = await acquireJobLock('month-end-settlement', { ttlMs: 300_000 });
+  if (!lock.acquired) {
+    return { skipped: true, reason: lock.reason };
+  }
+  try {
+    // Compute previous month in YYYY-MM format
+    const todayKey = getISTDateInputValue(now);
+    const [yearStr, monthStr] = todayKey.split('-');
+    let prevYear = Number(yearStr);
+    let prevMonth = Number(monthStr) - 1;
+    if (prevMonth < 1) {
+      prevMonth = 12;
+      prevYear -= 1;
+    }
+    const prevMonthKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+
+    // Check if already settled
+    const existing = await MonthSettlement.findOne({ periodKey: prevMonthKey });
+    if (existing) {
+      return {
+        settled: false,
+        alreadySettled: true,
+        periodKey: prevMonthKey,
+        job: 'month-end-settlement',
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    // Settle previous month (system actor = null)
+    const result = await settleMonthPayroll(prevMonthKey, null);
+
+    return {
+      ...result,
+      job: 'month-end-settlement',
+      completedAt: new Date().toISOString(),
+    };
+  } finally {
+    await releaseJobLock('month-end-settlement', lock.lockId);
+  }
+}
+
+/**
+ * Daily scheduler for month-end settlement. Checks once per day if the
+ * previous month needs settling. Runs at 00:05 IST (5 minutes after midnight).
+ */
+export function startMonthEndSettlementScheduler() {
+  if (process.env.NODE_ENV === 'test') return null;
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME) return null;
+
+  const run = () => {
+    runMonthEndSettlementJob().catch((err) => {
+      logError('month_end_settlement_job_failed', { error: err?.message });
+    });
+  };
+
+  // Run once on startup (delayed 10s to avoid boot contention)
+  const initial = setTimeout(() => { run(); }, 10_000);
+  if (initial.unref) initial.unref();
+
+  // Run every 24 hours
+  const timer = setInterval(run, 24 * 60 * 60 * 1000);
+  if (timer.unref) timer.unref();
+  return timer;
 }

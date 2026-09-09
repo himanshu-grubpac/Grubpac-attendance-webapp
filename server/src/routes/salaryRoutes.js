@@ -11,6 +11,7 @@ import {
   listSalaryStructureHandler,
   listSalarySummariesHandler,
   listSalaryTransfersHandler,
+  settleMonthHandler,
   updateSalarySettingsHandler,
   updateSalaryTransferHandler,
   updateUserSalaryHandler,
@@ -85,6 +86,12 @@ router.post(
   '/transfers/generate',
   requirePermission(PERMISSIONS.SALARY_WRITE),
   asyncHandler(generateSalaryTransfersHandler),
+);
+
+router.post(
+  '/settle',
+  requireAllPermissions(PERMISSIONS.SALARY_WRITE, PERMISSIONS.USERS_READ),
+  asyncHandler(settleMonthHandler),
 );
 
 router.patch(

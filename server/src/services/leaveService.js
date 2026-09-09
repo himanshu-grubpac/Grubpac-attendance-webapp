@@ -35,6 +35,7 @@ import {
   validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
+import { createLopOnApproval } from './lopSettlementService.js';
 import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
   resolveLeaveApprovalUserIds,
@@ -1004,6 +1005,7 @@ async function finalizeAutoApprovedSubmit(request) {
         throw Object.assign(new Error('Auto-approval superseded before finalize.'), { code: 'STALE_PROVISIONAL' });
       }
       await approvePendingDays(userId, leaveTypeId, request.days, year, session);
+      await createLopOnApproval(userId, leaveTypeId, request._id, request.startDate, request.days, session);
       await updateWfhAttendanceForRequest(request, {
         fromStatuses: ['pending', 'rejected'],
         toStatus: 'approved',
@@ -1882,6 +1884,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
           if (decision === 'approved') {
             // Finalise approval: consume the reserved pending days, mark WFH approved.
             await approvePendingDays(userId, leaveTypeId, request.days, year, session);
+            await createLopOnApproval(userId, leaveTypeId, request._id, request.startDate, request.days, session);
             await updateWfhAttendanceForRequest(request, {
               fromStatuses: ['pending', 'rejected'],
               toStatus: 'approved',

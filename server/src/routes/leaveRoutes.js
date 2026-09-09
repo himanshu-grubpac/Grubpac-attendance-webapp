@@ -27,6 +27,7 @@ import {
   getLeaveBalances,
   getLeaveRequestHandler,
   getMyLeaveBalances,
+  getLopRecordsHandler,
   getTeamCalendarHandler,
   initUserBalancesHandler,
   listHolidays,
@@ -253,5 +254,11 @@ router.post(
 );
 
 router.use(leaveCarryBulkRoutes);
+
+router.get(
+  '/lop-records/:userId',
+  requirePermission(PERMISSIONS.LEAVE_READ_ALL, PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_READ),
+  asyncHandler(getLopRecordsHandler),
+);
 
 export default router;

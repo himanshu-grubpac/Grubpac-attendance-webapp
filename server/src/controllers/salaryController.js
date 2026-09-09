@@ -21,6 +21,7 @@ import {
   listSalarySummariesForMonth,
   listSalaryTransfers,
   loadSalarySubject,
+  settleMonthPayroll,
   updateSalarySettings,
   updateSalaryTransferStatus,
   updateUserSalary,
@@ -175,4 +176,10 @@ export async function updateSalaryTransferHandler(req, res) {
   });
 
   res.json({ transfer });
+}
+
+export async function settleMonthHandler(req, res) {
+  const parsed = generateSalaryTransfersSchema.parse(req.body);
+  const result = await settleMonthPayroll(parsed.month, req.user._id);
+  res.json(result);
 }

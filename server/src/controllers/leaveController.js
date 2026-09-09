@@ -683,3 +683,20 @@ export async function runLeaveAccrualJobHandler(req, res) {
 
   res.json(result);
 }
+
+export async function getLopRecordsHandler(req, res) {
+  const { userId } = req.params;
+  const year = req.query.year ? Number(req.query.year) : getISTYear();
+
+  if (!userId) {
+    return res.status(400).json({ message: 'userId is required.' });
+  }
+
+  const { LopRecord } = await import('../models/LopRecord.js');
+  const records = await LopRecord.find({ userId, year })
+    .sort({ periodKey: -1, createdAt: -1 })
+    .populate('leaveTypeId', 'name code')
+    .populate('leaveRequestId', 'startDate endDate days status');
+
+  res.json({ records });
+}
