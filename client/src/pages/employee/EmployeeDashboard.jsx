@@ -91,6 +91,11 @@ export default function EmployeeDashboard() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  // Synchronous in-flight guards: state updates only apply on re-render, so
+  // rapid double-taps (especially during the slow GPS fix) would otherwise
+  // fire duplicate attendance/undo requests. Refs block re-entry instantly.
+  const attendanceInFlightRef = useRef(false);
+  const undoInFlightRef = useRef(false);
   const [clock, setClock] = useState(getCurrentISTClock());
   const [calendarMonth, setCalendarMonth] = useState(getISTMonthInputValue());
   const [calendarDays, setCalendarDays] = useState({});
@@ -209,6 +214,8 @@ export default function EmployeeDashboard() {
       : 'office';
 
   async function handleAttendance(type, lateNote) {
+    if (attendanceInFlightRef.current) return;
+    attendanceInFlightRef.current = true;
     setActionLoading(true);
     setError('');
     setResult(null);
@@ -279,12 +286,14 @@ export default function EmployeeDashboard() {
       setError(message);
       showError(message);
     } finally {
+      attendanceInFlightRef.current = false;
       setActionLoading(false);
     }
   }
 
   async function performUndo(token) {
-    if (!token) return;
+    if (!token || undoInFlightRef.current) return;
+    undoInFlightRef.current = true;
     setActionLoading(true);
     setError('');
     setResult(null);
@@ -298,6 +307,7 @@ export default function EmployeeDashboard() {
       setError(message);
       showError(message);
     } finally {
+      undoInFlightRef.current = false;
       setActionLoading(false);
     }
   }
@@ -404,9 +414,7 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__actions">
           <button
             type="button"
-            className={`btn btn-lg dash-hero__cta ${
-              primaryAction === 'check_out' ? 'btn-secondary' : 'btn-primary'
-            }`}
+            className="btn btn-lg dash-hero__cta btn-primary"
             disabled={
               (primaryAction === 'check_in'
                 ? !today?.canCheckIn

@@ -1623,11 +1623,17 @@ export async function undoAttendance(
         throwError('Attendance record not found', 404);
       }
 
-      // 3. Find LAST attendance
+      // 3. Find LAST effective attendance. Rejected attempts are persisted
+      // as audit markers but perform no action, so they must not poison the
+      // "last action" comparison (e.g. double-tapped check-in whose retry was
+      // rejected would otherwise make the genuine check-in un-undoable).
+      // _id tiebreaker: ObjectIds are time-ordered, so same-millisecond
+      // records resolve deterministically instead of flapping the 409.
       const lastAttendance = await AttendanceRecord.findOne({
         userId,
+        status: 'allowed',
       })
-        .sort({ timestamp: -1 })
+        .sort({ timestamp: -1, _id: -1 })
         .session(session);
 
       // 4. Only last action can be undone
