@@ -23,11 +23,14 @@ import AdminEmployeeDetail from './pages/admin/AdminEmployeeDetail.jsx';
 import AdminRegisterEmployee from './pages/admin/AdminRegisterEmployee.jsx';
 import AdminAuditLogs from './pages/admin/AdminAuditLogs.jsx';
 import AdminLeaveApprovals from './pages/admin/AdminLeaveApprovals.jsx';
+import AdminCompOffRequests from './pages/admin/AdminCompOffRequests.jsx';
 import AdminLeavePolicies from './pages/admin/AdminLeavePolicies.jsx';
 import AdminTeamLeaveCalendar from './pages/admin/AdminTeamLeaveCalendar.jsx';
 import AdminStreaks from './pages/admin/AdminStreaks.jsx';
 import EmployeeDashboard from './pages/employee/EmployeeDashboard.jsx';
 import EmployeeApplyLeave from './pages/employee/EmployeeApplyLeave.jsx';
+import EmployeeApplyWfh from './pages/employee/EmployeeApplyWfh.jsx';
+import EmployeeCompOff from './pages/employee/EmployeeCompOff.jsx';
 import EmployeeLeaveBalances from './pages/employee/EmployeeLeaveBalances.jsx';
 import EmployeeMyLeaveRequests from './pages/employee/EmployeeMyLeaveRequests.jsx';
 import EmployeeHelp from './pages/employee/EmployeeHelp.jsx';
@@ -181,6 +184,14 @@ export default function App() {
                 }
               />
               <Route
+                path="admin/leave/comp-off"
+                element={
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_APPROVE}>
+                    <AdminCompOffRequests />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="admin/leave/team-calendar"
                 element={
                   <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
@@ -271,6 +282,22 @@ export default function App() {
                 element={
                   <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_APPLY}>
                     <EmployeeApplyLeave />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="employee/leave/apply-wfh"
+                element={
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_APPLY}>
+                    <EmployeeApplyWfh />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="employee/leave/comp-off"
+                element={
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_READ}>
+                    <EmployeeCompOff />
                   </ProtectedRoute>
                 }
               />

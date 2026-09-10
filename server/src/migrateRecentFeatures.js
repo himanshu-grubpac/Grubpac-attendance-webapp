@@ -9,6 +9,7 @@
  * - LeavePolicy.year backfill + compound index (leaveTypeId + year)
  * - LeaveRequest provisional→final lifecycle fields (revision, pendingRevision,
  *   undoExpiresAt, finalizedAt) + finalizer sweep indexes
+ * - LeaveBalance.compOffEarned backfill + CompOffRequest collection (comp-off module)
  * - User.managedDepartmentIds backfill
  * - Dual-portal system role permissions (HR attendance.read_own)
  * - DemoFaqItem collection indexes + demo_faq.* role permissions
@@ -40,6 +41,7 @@ import { LeaveType } from './models/LeaveType.js';
 import { LeavePolicy } from './models/LeavePolicy.js';
 import { LeaveBalance } from './models/LeaveBalance.js';
 import { LeaveRequest } from './models/LeaveRequest.js';
+import { CompOffRequest } from './models/CompOffRequest.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
 import { DemoFaqItem } from './models/DemoFaqItem.js';
 import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears } from './services/leaveBalanceService.js';
@@ -62,6 +64,7 @@ const INDEX_MODELS = [
   LeavePolicy,
   LeaveBalance,
   LeaveRequest,
+  CompOffRequest,
   OfficeSettings,
   DemoFaqItem,
 ];
@@ -228,6 +231,18 @@ async function migrateLeaveRequestUndoLifecycle() {
   };
 }
 
+/**
+ * Backfills the comp-off earned-credit field on leave balances.
+ * Idempotent — only touches documents missing the new field.
+ */
+async function migrateCompOffEarnedField() {
+  const result = await LeaveBalance.updateMany(
+    { compOffEarned: { $exists: false } },
+    { $set: { compOffEarned: 0 } },
+  );
+  return result.modifiedCount ?? 0;
+}
+
 async function migrateRecentFeatures() {
   await connectDatabase();
 
@@ -235,6 +250,12 @@ async function migrateRecentFeatures() {
   const undoBackfill = await migrateLeaveRequestUndoLifecycle();
   console.log(
     `revision defaulted on ${undoBackfill.missingRevision} request(s); split notifyAfter on ${undoBackfill.inFlightSplit} in-flight staged decision(s); granted fresh undo windows to ${undoBackfill.legacyPendingWindowed} legacy pending submission(s).`,
+  );
+
+  console.log('\n=== Comp-off earned credit backfill ===');
+  const compOffBackfill = await migrateCompOffEarnedField();
+  console.log(
+    `compOffEarned defaulted on ${compOffBackfill} leave balance(s).`,
   );
 
   console.log('\n=== Leave policy year backfill ===');

@@ -1,5 +1,9 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
 import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob, recoverPendingSubmitNotifications } from '../services/leaveService.js';
+import {
+  recoverPendingCompOffSubmitNotifications,
+  runCompOffSweep,
+} from '../services/compOffService.js';
 import { cleanupStalePendingAttachments } from '../services/helpAttachmentService.js';
 import { User } from '../models/User.js';
 import { getISTYear } from '../utils/istDate.js';
@@ -33,6 +37,10 @@ export { applyYearEndCarryForward as runYearEndCarryForwardJob } from '../servic
  * Sweeps leave decisions whose undo window has elapsed and sends the deferred
  * email/SMS to the applicant. Decisions that are undone before the window
  * expires never reach this stage, so no mail/SMS is sent for them.
+ *
+ * Universal sweep: also finalizes comp-off staged actions, dispatches due
+ * comp-off submit notifications, and lapses stale comp-off requests (same
+ * JobLock, per-item isolation conventions).
  */
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const lock = await acquireJobLock('leave-decision-notify', { ttlMs: 120_000 });
@@ -40,7 +48,9 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
     return { skipped: true, reason: lock.reason };
   }
   try {
-    return await leaveServiceRunLeaveDecisionNotifyJob(now);
+    const leaveResult = await leaveServiceRunLeaveDecisionNotifyJob(now);
+    const compOffResult = await runCompOffSweep(now);
+    return { ...leaveResult, compOff: compOffResult };
   } finally {
     await releaseJobLock('leave-decision-notify', lock.lockId);
   }
@@ -59,11 +69,17 @@ export async function runHelpAttachmentCleanupJob() {
 
 /**
  * Recover stale pending submit notifications (Lambda cold-start safe).
- * Idempotent — safe to call multiple times.
+ * Idempotent — safe to call multiple times. Covers leave AND comp-off.
  */
 export async function recoverPendingSubmitNotificationsSafe() {
   try {
-    return await recoverPendingSubmitNotifications();
+    const leaveRecovered = await recoverPendingSubmitNotifications();
+    const compOffRecovered = await recoverPendingCompOffSubmitNotifications();
+    return {
+      recovered: leaveRecovered.recovered + compOffRecovered.recovered,
+      leave: leaveRecovered.recovered,
+      compOff: compOffRecovered.recovered,
+    };
   } catch (err) {
     logError('leave_submit_notification_recovery_failed', { error: err?.message });
     return { recovered: 0 };
@@ -82,6 +98,9 @@ export function startLeaveDecisionNotifyScheduler(intervalMs = 5 * 1000) {
 
   recoverPendingSubmitNotifications().catch((err) => {
     logError('leave_submit_notification_recovery_failed', { error: err?.message });
+  });
+  recoverPendingCompOffSubmitNotifications().catch((err) => {
+    logError('comp_off_submit_notification_recovery_failed', { error: err?.message });
   });
 
   const run = () => {

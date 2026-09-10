@@ -35,6 +35,11 @@ const PAGE_META = [
     title: 'Pending Requests',
     subtitle: 'Review and action team leave requests awaiting approval.',
   },
+  {
+    match: '/admin/leave/comp-off',
+    title: 'Comp off requests',
+    subtitle: 'Approve, reject, and assess comp off work requests.',
+  },
   { match: '/admin/leave/team-calendar', title: 'Calendar management', subtitle: '' },
   { match: '/admin/leave/streaks', title: 'Late Warning', subtitle: 'Quarterly warning usage per employee.' },
   {
@@ -57,6 +62,16 @@ const PAGE_META = [
   { match: '/employee/history', title: 'Attendance history', subtitle: '' },
   { match: '/employee/leave/balances', title: 'Leave balances', subtitle: '' },
   { match: '/employee/leave/apply', title: 'Apply leave', subtitle: 'Submit a new leave request.' },
+  {
+    match: '/employee/leave/apply-wfh',
+    title: 'Apply WFH',
+    subtitle: 'Submit a work-from-home request.',
+  },
+  {
+    match: '/employee/leave/comp-off',
+    title: 'Request comp off',
+    subtitle: 'Request approval to work on a weekend or holiday.',
+  },
   { match: '/employee/leave/requests', title: 'My requests', subtitle: '' },
   { match: '/employee/pay-estimate', title: 'My pay estimate', subtitle: '' },
   { match: '/employee/faq-demo', title: 'FAQ & Demo', subtitle: 'Guides and demo videos for your role' },

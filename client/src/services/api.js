@@ -350,6 +350,31 @@ export const leaveApi = {
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
 };
 
+export const compOffApi = {
+  eligibleDays: (params = {}) =>
+    api.get('/leave/comp-off/eligible-days', { params }).then((r) => r.data),
+  list: (params = {}) => api.get('/leave/comp-off', { params }).then((r) => r.data),
+  get: (id) => api.get(`/leave/comp-off/${id}`).then((r) => r.data),
+  create: (payload, { idempotencyKey } = {}) =>
+    api
+      .post('/leave/comp-off', payload, {
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      })
+      .then((r) => r.data),
+  withdraw: (id) => api.post(`/leave/comp-off/${id}/withdraw`).then((r) => r.data),
+  undoWithdraw: (id) => api.post(`/leave/comp-off/${id}/undo-withdraw`).then((r) => r.data),
+  approve: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/approve`, payload).then((r) => r.data),
+  reject: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/reject`, payload).then((r) => r.data),
+  undo: (id) => api.post(`/leave/comp-off/${id}/undo`).then((r) => r.data),
+  assess: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/assess`, payload).then((r) => r.data),
+  undoAssess: (id) => api.post(`/leave/comp-off/${id}/undo-assess`).then((r) => r.data),
+  approvalsCount: (params = {}) =>
+    api.get('/leave/comp-off/approvals/count', { params }).then((r) => r.data),
+};
+
 export const preferencesApi = {
   getTablePreference: (tableKey) =>
     api.get(`/preferences/tables/${tableKey}`).then((r) => r.data),

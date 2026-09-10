@@ -314,7 +314,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function decisionLinkHtml(success, message, portalUrl) {
+export function decisionLinkHtml(success, message, portalUrl) {
   const color = success ? '#16a34a' : '#dc2626';
   const title = success ? 'Action complete' : 'Unable to process';
   const safeMessage = escapeHtml(message);

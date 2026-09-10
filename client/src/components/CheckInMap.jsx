@@ -30,6 +30,14 @@ export default function CheckInMap({
     const map = L.map(containerRef.current, {
       zoomControl: true,
       attributionControl: true,
+      // Animations schedule setTimeout/requestAnimationFrame work that can
+      // fire after React StrictMode unmounts/remounts this component (or
+      // after map.remove()), crashing inside Leaflet with
+      // "Cannot read properties of undefined (reading '_leaflet_pos')".
+      // This is a live-updating dashboard map — instant view changes only.
+      zoomAnimation: false,
+      fadeAnimation: false,
+      markerZoomAnimation: false,
     });
 
     // CARTO raster basemaps require an API key (?key=) or tiles render with an

@@ -57,7 +57,12 @@ export function csrfProtection(req, res, next) {
 
   // Email one-click leave approve/reject: the single-use token in the link is the
   // authorization (and the CSRF defense), so no session CSRF token is expected.
-  if (path === '/leave/decision-link' || path === '/leave/decision-login') {
+  // The comp-off auto-login link works identically (GET only, same guarantees).
+  if (
+    path === '/leave/decision-link' ||
+    path === '/leave/decision-login' ||
+    path === '/leave/comp-off/decision-login'
+  ) {
     return next();
   }
 

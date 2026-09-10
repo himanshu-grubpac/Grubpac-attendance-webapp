@@ -24,6 +24,7 @@ import {
   endOfDayIST,
   formatISTDateTime,
   getISTDateInputValue,
+  getISTYear,
   isWeekendIST,
   listWorkingDaysIST,
   parseDateInputAsISTDay,
@@ -37,6 +38,8 @@ import {
   findWfhRequestForIstDate,
 } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
+import { CompOffRequest } from '../models/CompOffRequest.js';
+import { createNotification } from './notificationService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -517,6 +520,108 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   };
 }
 
+/** Comp-off request covering the IST day for the given status(es). */
+async function findCompOffForIstDate(userId, dateInput, status, session = null) {
+  const istDay = typeof dateInput === 'string'
+    ? parseDateInputAsISTDay(dateInput)
+    : parseDateInputAsISTDay(getISTDateInputValue(dateInput));
+  if (!istDay) return null;
+  const statusFilter = Array.isArray(status) ? { $in: status } : status;
+  const query = CompOffRequest.findOne({
+    userId,
+    status: statusFilter,
+    startDate: { $lte: endOfDayIST(istDay) },
+    endDate: { $gte: startOfDayIST(istDay) },
+  }).select('_id status startDate endDate');
+  if (session) query.session(session);
+  return query.sort({ createdAt: -1 });
+}
+
+/**
+ * Comp-off check-in gate. On weekends (office `weekendDays`) and active
+ * holidays an employee may check in ONLY when an approved (or worked) comp-off
+ * request covers the day — in office AND WFH modes alike.
+ * Returns an error message, or null when check-in is allowed.
+ */
+async function compOffCheckInGateError(userId, office, istToday, session = null) {
+  // Derive every clock from the IST day under check-in: mixing wall-clock
+  // `now` with the IST day key breaks at the IST-midnight / New-Year boundary
+  // (wrong-year holiday map, off-by-one weekend).
+  const ref = parseDateInputAsISTDay(istToday) ?? new Date();
+  if (!isWeekendIST(ref, office.weekendDays)) {
+    const holidayMap = await getHolidayMapForYear(getISTYear(ref));
+    if (!holidayMap.has(istToday)) return null;
+  }
+  // Prefer an actionable (approved/worked) request over a pending one: if both
+  // somehow cover the day, the valid approval wins instead of the pending message.
+  const request = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session)
+    ?? await findCompOffForIstDate(userId, istToday, 'pending', session);
+  if (!request) {
+    return 'Comp off approval is required to mark attendance on weekends/holidays.';
+  }
+  if (request.status === 'pending') {
+    return 'Your comp off request for this day is pending approval.';
+  }
+  return null;
+}
+
+/**
+ * Checkout hook: a successful check-out on an approved comp-off day flips the
+ * request to `worked` and notifies the manager IN-APP ONLY (no email — see
+ * comp-off notification matrix). Runs post-commit (record already persisted).
+ * The 5-minute attendance undo does NOT revert `worked`: assessment requires a
+ * completed checkout record; if attendance is deleted by an undo the manager
+ * can still assess from the record history (kept simple by design).
+ */
+async function handleCompOffCheckout(userId, checkoutRecord) {
+  const istToday = getISTDateInputValue(checkoutRecord.timestamp ?? new Date());
+  const request = await findCompOffForIstDate(userId, istToday, ['approved', 'worked']);
+  if (!request || request.status === 'worked') return;
+  if (!checkoutRecord?._id) return;
+
+  const claimed = await CompOffRequest.findOneAndUpdate(
+    { _id: request._id, status: 'approved' },
+    { $set: { status: 'worked', checkoutRecordId: checkoutRecord._id } },
+  );
+  if (!claimed) return;
+
+  auditLog('comp_off_worked', {
+    userId: userId.toString(),
+    requestId: request._id.toString(),
+    attendanceRecordId: checkoutRecord._id.toString(),
+  });
+
+  try {
+    const requester = await User.findById(userId).select('name reportingManagerId delegateApproverId')
+      .populate('reportingManagerId', 'name delegateApproverId');
+    const managerIds = [];
+    const rm = requester?.reportingManagerId;
+    if (rm) {
+      managerIds.push(String(rm._id ?? rm));
+      if (rm.delegateApproverId) managerIds.push(String(rm.delegateApproverId._id ?? rm.delegateApproverId));
+    }
+    if (requester?.delegateApproverId) managerIds.push(String(requester.delegateApproverId._id ?? requester.delegateApproverId));
+    const uniqueIds = [...new Set(managerIds)].filter(Boolean);
+    if (uniqueIds.length === 0) return;
+    const managers = await User.find({ _id: { $in: uniqueIds }, isActive: true }).select('_id name');
+    const dateText = `${getISTDateInputValue(request.startDate)}${getISTDateInputValue(request.endDate) !== getISTDateInputValue(request.startDate) ? ` to ${getISTDateInputValue(request.endDate)}` : ''}`;
+    await Promise.allSettled(
+      managers.map((manager) =>
+        createNotification({
+          userId: manager._id,
+          type: 'comp_off_assess',
+          title: 'Comp off work ready to assess',
+          body: `${requester?.name ?? 'An employee'} checked out on approved comp off (${dateText}). Assess the work to grant the CO credit.`,
+          link: '/admin/leave/comp-off?queue=assessment',
+          metadata: { requestId: request._id.toString() },
+        }),
+      ),
+    );
+  } catch (err) {
+    console.error('[attendance] comp off checkout notify failed', request._id?.toString(), err?.message);
+  }
+}
+
 export async function markAttendance(userId, type, payload, auditContext = {}) {
   const session = await mongoose.startSession();
 
@@ -590,6 +695,11 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           businessReasons.push('You have already checked in today.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
+        } else {
+          // Comp-off gate: weekends/holidays require an approved comp-off
+          // request covering today (office AND WFH modes — no mode exemption).
+          const compOffGateError = await compOffCheckInGateError(userId, office, istToday, session);
+          if (compOffGateError) businessReasons.push(compOffGateError);
         }
       }
       if (type === 'check_out' && !today.canCheckOut) {
@@ -711,6 +821,11 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         used: row.used,
         remaining: row.remaining,
       };
+    }
+
+    if (type === 'check_out' && result?.status === 'allowed' && result?.record?._id) {
+      // Comp-off checkout hook (post-commit, in-app manager notice only).
+      await handleCompOffCheckout(userId, result.record);
     }
 
     result.pendingLeaveToday = await loadPendingLeaveForToday(userId);

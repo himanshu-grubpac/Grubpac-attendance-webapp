@@ -123,3 +123,30 @@ test('getPaidLeaveQuota ignores used and pending', () => {
     0,
   );
 });
+
+test('getAvailableBalance includes compOffEarned and tolerates legacy docs', () => {
+  assert.equal(
+    getAvailableBalance({ entitled: 0, carried: 0, compOffEarned: 2, used: 0, pending: 0, encashed: 0 }),
+    2,
+  );
+  assert.equal(
+    getAvailableBalance({ entitled: 5, carried: 1, compOffEarned: 1.5, used: 2, pending: 1, encashed: 0 }),
+    4.5,
+  );
+  // Pre-migration documents without the field behave exactly as before.
+  assert.equal(
+    getAvailableBalance({ entitled: 5, carried: 1, used: 2, pending: 1, encashed: 0 }),
+    3,
+  );
+});
+
+test('getPaidLeaveQuota includes compOffEarned', () => {
+  assert.equal(
+    getPaidLeaveQuota({ entitled: 0, carried: 0, compOffEarned: 2, used: 0, pending: 0, encashed: 0 }),
+    2,
+  );
+  assert.equal(
+    getPaidLeaveQuota({ entitled: 0, carried: 0, compOffEarned: 0, used: 0, pending: 0, encashed: 0 }),
+    0,
+  );
+});

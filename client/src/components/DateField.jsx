@@ -103,6 +103,12 @@ export default function DateField({
   id: idProp,
   min,
   max,
+  /**
+   * Optional per-date gate (YYYY-MM-DD key → allowed). Absent = all in-range
+   * dates allowed (current behavior). When provided it is ANDed with the
+   * min/max range check on day buttons, the Today shortcut, and commit.
+   */
+  isDateAllowed,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
   className = '',
@@ -217,8 +223,14 @@ export default function DateField({
     return false;
   }
 
+  function isDateDisallowed(dateValue) {
+    if (isOutOfRange(dateValue)) return true;
+    if (isDateAllowed && !isDateAllowed(dateValue)) return true;
+    return false;
+  }
+
   function commitDate(dateValue) {
-    if (disabled || isOutOfRange(dateValue)) return;
+    if (disabled || isDateDisallowed(dateValue)) return;
 
     // Prevent the synthetic click from hitting the trigger after the panel unmounts.
     ignoreTriggerClickRef.current = true;
@@ -379,7 +391,7 @@ export default function DateField({
                       ]
                         .filter(Boolean)
                         .join(' ')}
-                      disabled={isOutOfRange(cell.value)}
+                      disabled={isDateDisallowed(cell.value)}
                       aria-label={cell.value}
                       aria-pressed={cell.value === value}
                       onMouseDown={(event) => event.preventDefault()}
@@ -395,7 +407,7 @@ export default function DateField({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  disabled={isOutOfRange(todayValue)}
+                  disabled={isDateDisallowed(todayValue)}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => commitDate(todayValue)}
                 >

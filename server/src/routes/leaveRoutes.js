@@ -49,6 +49,8 @@ import {
   updateLeaveType,
 } from '../controllers/leaveController.js';
 import leaveCarryBulkRoutes from './leaveCarryBulkRoutes.js';
+import compOffRoutes from './compOffRoutes.js';
+import { compOffDecisionLoginHandler } from '../controllers/compOffController.js';
 import {
   batchAdjustLeaveCarriedHandler,
   getLeaveAdjustmentGridHandler,
@@ -63,6 +65,8 @@ router.get('/decision-link', leaveDecisionLimiter, asyncHandler(leaveDecisionLin
 router.post('/decision-link', leaveDecisionLimiter, urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
 // Auto-login: consumes the token, issues a JWT session, redirects to admin portal.
 router.get('/decision-login', leaveDecisionLimiter, asyncHandler(leaveDecisionLoginHandler));
+// Comp-off take-action auto-login: same mechanics, lands on Comp off requests.
+router.get('/comp-off/decision-login', leaveDecisionLimiter, asyncHandler(compOffDecisionLoginHandler));
 
 router.use(authenticate);
 
@@ -253,5 +257,6 @@ router.post(
 );
 
 router.use(leaveCarryBulkRoutes);
+router.use(compOffRoutes);
 
 export default router;

@@ -304,8 +304,6 @@ export default function AdminLeaveApprovals() {
     allColumns: LEAVE_COLUMNS,
     defaultVisible: LEAVE_DEFAULT_COLUMNS,
   });
-  const deepLinkRef = useRef(null);
-
   const employeeFilterRef = useRef(employeeFilter);
   const yearFilterRef = useRef(yearFilter);
   const monthPartFilterRef = useRef(monthPartFilter);
@@ -423,31 +421,31 @@ export default function AdminLeaveApprovals() {
     const decision = searchParams.get('decision');
     const requestId = searchParams.get('requestId');
     if (decision !== 'request' || !requestId) {
-      deepLinkRef.current = null;
       return undefined;
     }
 
-    const deepLinkKey = `${decision}:${requestId}`;
-    if (deepLinkRef.current === deepLinkKey) return undefined;
-    deepLinkRef.current = deepLinkKey;
-
-    let cancelled = false;
+    // NOTE: no "handled" ref guard here on purpose. React StrictMode (dev)
+    // mounts, unmounts and remounts, so a ref marked "handled" before the
+    // fetch would cancel the only fetch on remount and the modal would never
+    // open. Supersession is tracked per effect run instead: only the latest
+    // run may open the modal or consume the query params.
+    let superseded = false;
     async function openDeepLinkedRequest() {
+      // Prefer the already-loaded queue row so no fetch is needed.
       let target = requests.find((item) => item.id === requestId);
       if (!target) {
         try {
           const data = await leaveApi.getRequest(requestId);
           target = data.request ?? data;
         } catch (err) {
-          if (!cancelled) {
-            showError(getErrorMessage(err));
-            setSearchParams({}, { replace: true });
-          }
+          if (superseded) return;
+          showError(getErrorMessage(err));
+          setSearchParams({}, { replace: true });
           return;
         }
       }
 
-      if (cancelled) return;
+      if (superseded) return;
       if (target?.status === 'pending') {
         setDecisionModal({ open: true, item: target, comment: '' });
         setExpandedIds((prev) => ({ ...prev, [requestId]: true }));
@@ -459,7 +457,7 @@ export default function AdminLeaveApprovals() {
 
     openDeepLinkedRequest();
     return () => {
-      cancelled = true;
+      superseded = true;
     };
   }, [searchParams, requests, setSearchParams, showError]);
 
