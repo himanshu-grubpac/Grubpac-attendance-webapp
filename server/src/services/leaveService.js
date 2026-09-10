@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import {
   getISTDateInputValue,
   getISTYear,
+  getISTMonth,
   computeLeaveDaysIST,
   parseDateInputAsISTDay,
   endOfDayIST,
@@ -586,6 +587,30 @@ export function canApproveLeave(actor, requester, permissions) {
     managerDoc?.delegateApproverId?.toString?.() ??
     null;
   return delegateId === actor._id.toString();
+}
+
+const LEAVE_EXCEPTION_ROLE_SLUGS = new Set([
+  SYSTEM_ROLE_SLUGS.ADMIN,
+  SYSTEM_ROLE_SLUGS.HR,
+]);
+
+function resolveActorRoleSlug(actor) {
+  const roleId = actor?.roleId;
+  if (roleId && typeof roleId === 'object') {
+    return roleId.slug ?? null;
+  }
+  return null;
+}
+
+/**
+ * Whether the actor may set/grant the leave `adminException` flag.
+ *
+ * Deliberately role-slug based, NOT legacy `user.role`: the legacy field is
+ * coarse ('admin' covers reporting managers) and would admit exactly the
+ * callers this gate must block. Missing/unpopulated role fails closed.
+ */
+export function canGrantLeaveException(actor) {
+  return LEAVE_EXCEPTION_ROLE_SLUGS.has(resolveActorRoleSlug(actor));
 }
 
 export async function validateLeaveRequestInput({
@@ -1968,6 +1993,22 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
     throwError('You are not authorized to approve this leave request.', 403);
   }
 
+  if (payload.adminException) {
+    // B-011: stamping the exception flag is an HR/admin power, even for an
+    // otherwise authorized approver (direct manager / delegate).
+    if (!canGrantLeaveException(actor)) {
+      auditLog('leave_admin_exception_denied', {
+        actorId: actor._id.toString(),
+        requestId: request._id.toString(),
+      });
+      throwError('Only HR or admin can grant an admin exception.', 403);
+    }
+    auditLog('leave_admin_exception_granted', {
+      actorId: actor._id.toString(),
+      requestId: request._id.toString(),
+    });
+  }
+
   return processLeaveDecision(request, actor, decision, comment, {
     adminException: !!payload.adminException,
   });
@@ -2311,6 +2352,31 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   if (query.userId) {
+    const targetId = query.userId.toString();
+    if (targetId !== actor._id.toString()) {
+      // The scope filter above never authorizes cross-user reads on its own:
+      // require READ_ALL, team scope, or approval-queue membership for the
+      // target, otherwise any employee could enumerate anyone's requests.
+      const [inTeamScope, approvalIds] = await Promise.all([
+        isUserInTeamScope(
+          actor,
+          permissions,
+          PERMISSIONS.LEAVE_READ_ALL,
+          PERMISSIONS.LEAVE_READ_TEAM,
+        ),
+        resolveLeaveApprovalUserIds(actor),
+      ]);
+      const inApprovalScope = (approvalIds ?? []).some(
+        (id) => id.toString() === targetId,
+      );
+      if (
+        !hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL) &&
+        !inTeamScope &&
+        !inApprovalScope
+      ) {
+        throwError('You do not have permission to view this user\u2019s leave requests.', 403);
+      }
+    }
     filter.userId = query.userId;
   }
 
@@ -2372,7 +2438,9 @@ export async function getTeamCalendar(actor, permissions, query) {
     throwError('You do not have permission to view team calendar.', 403);
   }
 
-  const month = query.month ?? `${getISTYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  // IST month (not UTC): near IST midnight on the 1st, UTC getMonth() still
+  // points at the previous month.
+  const month = query.month ?? `${getISTYear()}-${String(getISTMonth()).padStart(2, '0')}`;
   const [yearStr, monthStr] = month.split('-');
   const year = Number(yearStr);
   const monthNum = Number(monthStr);

@@ -340,51 +340,60 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
   });
   await comment.populate(HELP_COMMENT_POPULATE);
 
+  // Thread stakeholder matrix (mirrors ticket creation): the ticket creator,
+  // the creator's reporting manager, and every HELP_MANAGE holder each get
+  // one bell notification per comment — except the commenting actor, who is
+  // never self-notified. A Set dedupes overlaps (e.g. manager who also holds
+  // HELP_MANAGE) so nobody gets double-pinged.
   const creatorId = getCreatorId(ticket);
   const actorId = actor._id.toString();
-  const linkForCreator = `/employee/help/${ticket._id.toString()}`;
+  const notifiedIds = new Set([actorId]);
+  const commentMetadata = { ticketId: ticket._id.toString(), commentId: comment._id.toString() };
 
-  if (creatorId && creatorId !== actorId) {
+  if (creatorId && !notifiedIds.has(creatorId)) {
     await createNotification({
       userId: creatorId,
       type: 'help.comment',
       title: 'New reply on your ticket',
       body: `${actor.name} commented on "${ticket.title}".`,
-      link: linkForCreator,
-      metadata: { ticketId: ticket._id.toString(), commentId: comment._id.toString() },
+      link: `/employee/help/${ticket._id.toString()}`,
+      metadata: commentMetadata,
     });
-  } else if (creatorId === actorId) {
-    const creatorDoc = await loadCreator(creatorId);
-    const managerId = getManagerId(creatorDoc);
-    const staffLink = `/admin/help/tickets/${ticket._id.toString()}`;
+    notifiedIds.add(creatorId);
+  }
 
-    if (managerId) {
+  if (creatorId) {
+    const managerId = getManagerId(await loadCreator(creatorId));
+    if (managerId && !notifiedIds.has(managerId)) {
       await createNotification({
         userId: managerId,
         type: 'help.comment',
-        title: 'Employee replied on help ticket',
+        title:
+          creatorId === actorId ? 'Employee replied on help ticket' : 'New reply on help ticket',
         body: `${actor.name} added a comment on "${ticket.title}".`,
         link: `/admin/help/team/${ticket._id.toString()}`,
-        metadata: { ticketId: ticket._id.toString(), commentId: comment._id.toString() },
+        metadata: commentMetadata,
       });
+      notifiedIds.add(managerId);
     }
-
-    const managers = await findUsersWithPermission(PERMISSIONS.HELP_MANAGE);
-    await Promise.all(
-      managers
-        .filter((user) => user._id.toString() !== managerId && user._id.toString() !== actorId)
-        .map((user) =>
-          createNotification({
-            userId: user._id,
-            type: 'help.comment',
-            title: 'New comment on help ticket',
-            body: `${actor.name} commented on "${ticket.title}".`,
-            link: staffLink,
-            metadata: { ticketId: ticket._id.toString(), commentId: comment._id.toString() },
-          }),
-        ),
-    );
   }
+
+  const managers = await findUsersWithPermission(PERMISSIONS.HELP_MANAGE);
+  await Promise.all(
+    managers
+      .filter((user) => !notifiedIds.has(user._id.toString()))
+      .map((user) => {
+        notifiedIds.add(user._id.toString());
+        return createNotification({
+          userId: user._id,
+          type: 'help.comment',
+          title: 'New comment on help ticket',
+          body: `${actor.name} commented on "${ticket.title}".`,
+          link: `/admin/help/tickets/${ticket._id.toString()}`,
+          metadata: commentMetadata,
+        });
+      }),
+  );
 
   auditLog('help_ticket_comment_added', {
     userId: actor._id.toString(),
@@ -397,7 +406,13 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
 
 export async function deleteHelpTicket(ticketId, actor, permissions) {
   const ticket = await loadTicket(ticketId);
-  if (!canManageTicket(actor, ticket, permissions)) {
+  // Managers/admins via canManageTicket; plus the creator may roll back
+  // their own still-open ticket (e.g. EmployeeHelp deletes the ticket when
+  // every attachment upload fails). Non-open tickets are staff-owned work
+  // in progress and stay protected from creator delete.
+  const isCreatorRollback =
+    getCreatorId(ticket) === actor._id.toString() && ticket.status === 'open';
+  if (!isCreatorRollback && !canManageTicket(actor, ticket, permissions)) {
     throwError('You are not authorized to delete this ticket.', 403);
   }
 

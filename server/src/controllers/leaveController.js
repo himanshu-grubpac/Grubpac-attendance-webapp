@@ -52,6 +52,7 @@ import {
 import {
   cancelLeaveRequest,
   cancelApprovedLeaveByApprover,
+  canGrantLeaveException,
   createLeaveRequest,
   decideLeaveRequest,
   decideLeaveRequestByToken,
@@ -197,6 +198,19 @@ export async function adjustLeaveBalances(req, res) {
 
 export async function createLeaveRequestHandler(req, res) {
   const parsed = createLeaveRequestSchema.parse(req.body);
+  if (parsed.adminException) {
+    // B-011: the exception flag skips apply-deadline and lead/deputy checks.
+    // Only HR/admin may set it; everyone else fails closed with an audit trail.
+    if (!canGrantLeaveException(req.user)) {
+      auditLog('leave_admin_exception_denied', {
+        applicantId: req.user._id.toString(),
+      });
+      throwError('Only HR or admin can request an admin exception.', 403);
+    }
+    auditLog('leave_admin_exception_granted', {
+      applicantId: req.user._id.toString(),
+    });
+  }
   const request = await createLeaveRequest(req.user._id, parsed);
   res.status(201).json({ request });
 }
