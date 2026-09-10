@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { SYSTEM_ROLE_SLUGS, PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { SYSTEM_ROLE_SLUGS, PERMISSIONS, canViewSalaryFields, hasPermission } from '../../../shared/permissions.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
@@ -208,9 +208,10 @@ export async function listEmployees(req, res) {
     User.countDocuments(query),
   ]);
 
+  const canViewSalary = canViewSalaryFields(req.userPermissions);
   res.json({
     employees: employees.map((employee) => ({
-      ...employee.toSafeJSON(),
+      ...employee.toSafeJSON({ canViewSalary }),
       lastLoginAt: employee.lastLoginAt ?? null,
     })),
 pagination: {
@@ -284,7 +285,7 @@ export async function getEmployee(req, res) {
 
   res.json({
     employee: {
-      ...employee.toSafeJSON(),
+      ...employee.toSafeJSON({ canViewSalary: canViewSalaryFields(req.userPermissions) }),
       lastLoginAt: employee.lastLoginAt ?? null,
     },
   });
@@ -518,7 +519,9 @@ export async function updateEmployee(req, res) {
     },
   });
 
-  res.json({ employee: employee.toSafeJSON() });
+  res.json({
+    employee: employee.toSafeJSON({ canViewSalary: canViewSalaryFields(req.userPermissions) }),
+  });
 }
 
 export async function updateEmployeeStatus(req, res) {

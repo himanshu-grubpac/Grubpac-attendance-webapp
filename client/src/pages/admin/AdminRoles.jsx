@@ -241,11 +241,17 @@ export default function AdminRoles() {
       return;
     }
 
-    const validation = validateForm(updateRoleSchema, {
-      name: form.name,
-      description: form.description,
-      permissions: form.permissions,
-    });
+    const isSystemRole = Boolean(modal.role?.isSystem);
+    const validation = validateForm(
+      updateRoleSchema,
+      isSystemRole
+        ? { name: form.name, description: form.description }
+        : {
+            name: form.name,
+            description: form.description,
+            permissions: form.permissions,
+          },
+    );
 
     if (!validation.data) {
       setFieldErrors(validation.errors);
@@ -326,6 +332,7 @@ export default function AdminRoles() {
   const modalTitleId =
     modal?.mode === 'create' ? createModalTitleId : modal?.mode === 'view' ? viewModalTitleId : editModalTitleId;
   const slugLocked = modal?.mode === 'edit' && modal.role?.isSystem;
+  const isSystemEdit = modal?.mode === 'edit' && Boolean(modal.role?.isSystem);
   const isViewMode = modal?.mode === 'view';
   const viewPermissions = modal?.role?.permissions ?? [];
 
@@ -437,7 +444,7 @@ export default function AdminRoles() {
                   : isViewMode
                     ? 'Read-only view of the permissions granted to this role.'
                     : slugLocked
-                      ? 'Slug cannot be changed for this role. Permissions and display name can be updated.'
+                      ? 'Slug and permissions cannot be changed for this system role. Display name and description can be updated.'
                       : 'Update the role details and permission set assigned to users.'}
               </p>
             </header>
@@ -524,6 +531,9 @@ export default function AdminRoles() {
 
                 <div className="modal__field roles-modal__permissions-field">
                   <span className="label">Permissions</span>
+                  {isSystemEdit ? (
+                    <p className="muted">System role permissions are fixed and cannot be modified.</p>
+                  ) : null}
                   {permissionGroups.length === 0 ? (
                     <p className="muted">Loading permission groups…</p>
                   ) : (
@@ -531,6 +541,8 @@ export default function AdminRoles() {
                       groups={permissionGroups}
                       selected={form.permissions}
                       onChange={(permissions) => setForm({ ...form, permissions })}
+                      disabled={isSystemEdit}
+                      hideActions={isSystemEdit}
                     />
                   )}
                   <FieldError message={fieldErrors.permissions} />

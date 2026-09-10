@@ -22,6 +22,8 @@ const helpAttachmentSchema = new mongoose.Schema(
 
 helpAttachmentSchema.index({ ticketId: 1, createdAt: 1 });
 helpAttachmentSchema.index({ commentId: 1, createdAt: 1 });
+// Cleanup sweep: equality on status + range on createdAt (ESR order).
+helpAttachmentSchema.index({ status: 1, createdAt: 1 });
 
 helpAttachmentSchema.methods.toSafeJSON = function toSafeJSON() {
   const uploaderDoc =

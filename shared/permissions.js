@@ -312,6 +312,15 @@ export function hasAdminPortalAccess(userPermissions) {
   return hasAnyPermission(userPermissions, ADMIN_PORTAL_PERMISSIONS);
 }
 
+/**
+ * Whether the caller may view employee compensation fields (monthlySalary,
+ * salaryEffectiveFrom). Mirrors the `salary` entry in COLUMN_PERMISSIONS
+ * (tablePreferenceService): salary.read OR salary.read_team.
+ */
+export function canViewSalaryFields(userPermissions) {
+  return hasAnyPermission(userPermissions, [PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM]);
+}
+
 export function legacyRoleFromSlug(slug) {
   if (
     slug === SYSTEM_ROLE_SLUGS.ADMIN ||

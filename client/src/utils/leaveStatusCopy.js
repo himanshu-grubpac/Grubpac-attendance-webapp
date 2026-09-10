@@ -1,7 +1,9 @@
+import { getISTYear } from './datetime.js';
+
 /** Employee-facing copy for pending / apply leave status (all leave types). */
 
 /** Prefer the policy row for the requested year (avoids stale rows without year). */
-export function selectLeavePolicyForType(policies, leaveTypeId, year = new Date().getFullYear()) {
+export function selectLeavePolicyForType(policies, leaveTypeId, year = getISTYear()) {
   if (!leaveTypeId || !Array.isArray(policies)) return null;
 
   const matches = policies.filter(
