@@ -19,7 +19,7 @@ import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
 import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
 import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
-import { startLeaveDecisionNotifyScheduler } from './jobs/leaveJobs.js';
+import { startLeaveDecisionNotifyScheduler, startMonthEndSettlementScheduler } from './jobs/leaveJobs.js';
 import { cleanupStalePendingAttachments } from './services/helpAttachmentService.js';
 
 export const app = express();
@@ -114,6 +114,7 @@ export async function startServer() {
       console.log(`Server listening on http://localhost:${env.port}`);
       startAutoCheckoutScheduler();
       startLeaveDecisionNotifyScheduler();
+      startMonthEndSettlementScheduler();
       resolve(server);
     });
   });

@@ -3,14 +3,18 @@ import { PERMISSIONS } from '../../../shared/permissions.js';
 import { authenticate, requireAllPermissions, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
+  exportSalaryAuditHandler,
   exportSalaryHandler,
   generateSalaryTransfersHandler,
+  getSalaryAuditHandler,
+  getSalaryHistoryHandler,
   getSalarySettingsHandler,
   getSalarySummaryHandler,
   getUserSalaryHandler,
   listSalaryStructureHandler,
   listSalarySummariesHandler,
   listSalaryTransfersHandler,
+  settleMonthHandler,
   updateSalarySettingsHandler,
   updateSalaryTransferHandler,
   updateUserSalaryHandler,
@@ -87,10 +91,37 @@ router.post(
   asyncHandler(generateSalaryTransfersHandler),
 );
 
+router.post(
+  '/settle',
+  requireAllPermissions(PERMISSIONS.SALARY_WRITE, PERMISSIONS.USERS_READ),
+  asyncHandler(settleMonthHandler),
+);
+
 router.patch(
   '/transfers/:id',
   requirePermission(PERMISSIONS.SALARY_WRITE),
   asyncHandler(updateSalaryTransferHandler),
+);
+
+// Employee salary history — scoped by RBAC (RM sees team, Admin sees all)
+router.get(
+  '/history/:userId',
+  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  asyncHandler(getSalaryHistoryHandler),
+);
+
+// Monthly salary audit for RM/Admin — scoped by RBAC
+router.get(
+  '/audit',
+  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  asyncHandler(getSalaryAuditHandler),
+);
+
+// Audit export — same permissions as audit
+router.get(
+  '/audit/export',
+  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  asyncHandler(exportSalaryAuditHandler),
 );
 
 export default router;
