@@ -22,8 +22,25 @@ function delay(ms) {
   });
 }
 
-export async function waitForServerReady(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
-  if (!import.meta.env.DEV) return true;
+/** CSRF cookie is issued with the httpOnly auth cookie on login. */
+export function hasSessionCookieHint() {
+  if (typeof document === 'undefined') return false;
+  return /(?:^|;\s*)attendance_csrf=([^;]+)/.test(document.cookie);
+}
+
+/**
+ * Best-effort ping to /api/health — warms Lambda on cold start and waits for
+ * the local dev API to accept connections. Does not touch authenticated routes.
+ */
+export async function coldStartPing(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+  if (!import.meta.env.DEV) {
+    try {
+      await api.get('/health', { timeout: 5000 });
+    } catch {
+      // Best-effort warm-up; subsequent API calls handle their own errors.
+    }
+    return;
+  }
 
   const deadline = Date.now() + maxWaitMs;
   let backoff = INITIAL_DELAY_MS;
@@ -31,20 +48,27 @@ export async function waitForServerReady(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
   while (Date.now() < deadline) {
     try {
       await api.get('/health', { timeout: 2000 });
-      return true;
+      return;
     } catch (error) {
-      if (!isTransientNetworkError(error)) return false;
+      if (!isTransientNetworkError(error)) return;
       await delay(backoff);
       backoff = Math.min(Math.round(backoff * 1.4), MAX_DELAY_MS);
     }
   }
-
-  return false;
 }
 
+/**
+ * Restore the current session when auth cookies may exist. Skips /auth/me when
+ * no session cookies are present (e.g. login page before sign-in).
+ */
 export async function fetchSessionWithRetry(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+  if (!hasSessionCookieHint()) {
+    await coldStartPing(maxWaitMs);
+    return { user: null };
+  }
+
   if (import.meta.env.DEV) {
-    await waitForServerReady(maxWaitMs);
+    await coldStartPing(maxWaitMs);
   }
 
   const deadline = Date.now() + maxWaitMs;

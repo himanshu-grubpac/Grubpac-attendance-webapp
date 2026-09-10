@@ -18,6 +18,8 @@ coverage/
 .aws-sam/
 lambda-package/
 samconfig.staging.toml
+samconfig.production.toml
+server/.env.production
 # Logs & OS
 *.log
 npm-debug.log*

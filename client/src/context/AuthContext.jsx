@@ -13,7 +13,7 @@ import {
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
 import { authApi } from '../services/api.js';
-import { fetchSessionWithRetry } from '../utils/serverReady.js';
+import { fetchSessionWithRetry } from '../utils/coldStartPing.js';
 import { resolveLoginPortal } from '../config/nav.js';
 
 const AuthContext = createContext(null);
