@@ -33,7 +33,7 @@ function roundMoney(value) {
   return Math.round(value * 100) / 100;
 }
 
-function salaryAppliesForMonth(user, monthEnd) {
+export function salaryAppliesForMonth(user, monthEnd) {
   if (user.monthlySalary == null || user.monthlySalary <= 0) {
     return false;
   }

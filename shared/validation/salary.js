@@ -83,3 +83,19 @@ export const updateSalaryTransferStatusSchema = z
       });
     }
   });
+
+export const salaryHistoryParamsSchema = z.object({
+  userId: objectIdSchema,
+});
+
+export const salaryHistoryQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
+export const salaryAuditQuerySchema = z.object({
+  periodKey: monthInputSchema,
+});
+
+export const salaryAuditExportQuerySchema = z.object({
+  periodKey: monthInputSchema,
+});
