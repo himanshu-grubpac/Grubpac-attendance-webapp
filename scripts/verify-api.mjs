@@ -1343,6 +1343,35 @@ async function main() {
   });
   assert(empPriorityUpdate.response.status === 403, 'Employee cannot set ticket priority');
 
+  const empBell = await request('/notifications?page=1&limit=50', { method: 'GET' });
+  assert(empBell.response.ok, 'Employee can list notifications');
+  assert(
+    empBell.data.notifications?.some(
+      (item) => item.type === 'help.comment' && item.metadata?.ticketId === helpTicketId,
+    ),
+    'Employee bell rings on manager comment',
+  );
+
+  cookieHeader = '';
+  await request('/auth/admin/login', {
+    method: 'POST',
+    body: { identifier: managerEmail, password: employeePassword },
+  });
+  const mgrBell = await request('/notifications?page=1&limit=50', { method: 'GET' });
+  assert(mgrBell.response.ok, 'Manager can list notifications');
+  assert(
+    mgrBell.data.notifications?.some(
+      (item) => item.type === 'help.comment' && item.metadata?.ticketId === helpTicketId,
+    ),
+    'Manager bell rings on employee comment',
+  );
+
+  cookieHeader = '';
+  await request('/auth/user/login', {
+    method: 'POST',
+    body: { identifier: employeeEmail, password: changedPassword },
+  });
+
   const detailWithComments = await request(`/help/tickets/${helpTicketId}`, { method: 'GET' });
   assert(
     detailWithComments.data.comments?.length >= 2,

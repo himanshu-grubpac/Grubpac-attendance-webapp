@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createLeaveRequestSchema } from '@shared/validation/leave.js';
-import { getISTDateInputValue } from '../../utils/datetime.js';
+import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
@@ -57,7 +57,7 @@ export default function EmployeeApplyLeave() {
   const [loadingRequest, setLoadingRequest] = useState(isEditing);
 
   useEffect(() => {
-    const year = new Date().getFullYear();
+    const year = getISTYear();
     leaveApi
       .listTypes()
       .then((data) => {
@@ -202,7 +202,7 @@ export default function EmployeeApplyLeave() {
       } else {
         showSuccess('Leave request submitted.');
       }
-      const year = new Date().getFullYear();
+      const year = getISTYear();
       leaveApi
         .getMyBalances({ year })
         .then((data) => setBalances(data.balances ?? []))
@@ -238,7 +238,7 @@ export default function EmployeeApplyLeave() {
   }
 
   const selectedType = types.find((item) => item.id === form.leaveTypeId);
-  const policyYear = new Date().getFullYear();
+  const policyYear = getISTYear();
   const selectedPolicy = selectLeavePolicyForType(policies, form.leaveTypeId, policyYear);
   const applyNotice = selectedType
     ? buildApplyLeaveNotice({

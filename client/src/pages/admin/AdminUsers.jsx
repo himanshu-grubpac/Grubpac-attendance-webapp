@@ -7,6 +7,7 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { IST_TIMEZONE } from '../../utils/datetime.js';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
+import { filterAllowedColumns } from '../../utils/columns.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -194,6 +195,12 @@ export default function AdminUsers() {
   const [roleFilter, setRoleFilter] = useState('');
   const [newThisMonthFilter, setNewThisMonthFilter] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+  // RBAC-filtered column keys for the editor inventory (null = not loaded yet).
+  const [allowedColumnKeys, setAllowedColumnKeys] = useState(null);
+  const editorColumns = useMemo(
+    () => filterAllowedColumns(ALL_COLUMNS, allowedColumnKeys),
+    [allowedColumnKeys],
+  );
   const [columnsLoading, setColumnsLoading] = useState(true);
   const [columnsError, setColumnsError] = useState('');
   const [showColumnEditor, setShowColumnEditor] = useState(false);
@@ -247,6 +254,13 @@ export default function AdminUsers() {
     setColumnsLoading(true);
     setColumnsError('');
     try {
+      // RBAC-filtered toggle inventory (e.g. hides Salary without salary.read).
+      // Fail-open: on error the full list stays visible and the server
+      // still enforces per-column permission on save (403 + rollback).
+      const allowed = await preferencesApi
+        .getAvailableColumns(EMPLOYEE_TABLE_KEY)
+        .catch(() => null);
+      setAllowedColumnKeys(Array.isArray(allowed) ? allowed : null);
       const response = await preferencesApi.getTablePreference(EMPLOYEE_TABLE_KEY);
       // First visit (no saved preference) shows the compact UI default, not the
       // full server column registry.
@@ -984,7 +998,7 @@ export default function AdminUsers() {
                 </p>
               ) : (
                 <ul className="column-editor-list">
-                  {ALL_COLUMNS.map((col) => (
+                  {editorColumns.map((col) => (
                     <li key={col.key} className="column-editor-list__item">
                       <label
                         className={`column-editor-list__label${col.always ? ' column-editor-list__label--locked' : ''}`}

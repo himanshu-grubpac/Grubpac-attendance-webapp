@@ -4,6 +4,7 @@ import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { validateForm } from '../../utils/validation.js';
+import { broadcastOfficePolicyUpdated } from '../../utils/officePolicySync.js';
 import FieldError from '../../components/FieldError.jsx';
 import TimeField, { formatTimeDisplay } from '../../components/TimeField.jsx';
 import AutoCheckoutModal from '../../components/AutoCheckoutModal.jsx';
@@ -150,14 +151,7 @@ export default function AdminOfficeSettings() {
         halfDayThresholdTime: updatedSettings.halfDayThresholdTime,
         autoCheckout: validation.data.autoCheckout ?? updatedSettings.autoCheckout ?? current.autoCheckout,
       }));
-      window.dispatchEvent(
-        new CustomEvent('attendance:office-policy-updated', { detail: updatedSettings }),
-      );
-      try {
-        localStorage.setItem('attendance.office-policy-updated', JSON.stringify(updatedSettings));
-      } catch {
-        // Storage can be unavailable in restricted browser contexts.
-      }
+      broadcastOfficePolicyUpdated(updatedSettings);
       showSuccess('Office settings saved.');
     } catch (err) {
       setError(getErrorMessage(err));
@@ -170,6 +164,11 @@ export default function AdminOfficeSettings() {
     const result = await adminApi.updateOfficeSettings({ autoCheckout: data });
     const saved = result.settings?.autoCheckout ?? data;
     setForm((prev) => ({ ...prev, autoCheckout: saved }));
+    // Mirror the main form save: notify same-tab and cross-tab listeners so
+    // AdminAttendance picks up the change without a reload (B-006).
+    // result.settings is the full merged doc; the partial fallback keeps
+    // listeners (which read with ?? defaults) safe if the shape ever changes.
+    broadcastOfficePolicyUpdated(result.settings ?? { autoCheckout: saved });
     showSuccess('Auto-checkout timings saved.');
     setAutoOpen(false);
   }

@@ -50,6 +50,10 @@ export async function updateRole(req, res) {
     return res.status(404).json({ message: 'Role not found.' });
   }
 
+  if (role.isSystem && parsed.permissions !== undefined) {
+    return res.status(403).json({ message: 'System role permissions cannot be modified.' });
+  }
+
   const previous = {
     name: role.name,
     permissions: [...(role.permissions ?? [])],

@@ -355,6 +355,10 @@ export const preferencesApi = {
     api.get(`/preferences/tables/${tableKey}`).then((r) => r.data),
   updateTablePreference: (tableKey, payload) =>
     api.put(`/preferences/tables/${tableKey}`, payload).then((r) => r.data),
+  // Column keys the caller is permitted to see/toggle for a table
+  // (RBAC-filtered by COLUMN_PERMISSIONS on the server).
+  getAvailableColumns: (tableKey) =>
+    api.get(`/preferences/tables/${tableKey}/columns`).then((r) => r.data?.data?.columns ?? []),
 };
 
 export const helpApi = {

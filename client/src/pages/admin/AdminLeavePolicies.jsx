@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { getISTYear } from '../../utils/datetime.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -16,7 +17,7 @@ import StatusBadge from '../../components/StatusBadge.jsx';
 import LeaveCarryBulkModal from './LeaveCarryBulkModal.jsx';
 import EmployeeLeaveAdjustment from './EmployeeLeaveAdjustment.jsx';
 
-const currentCalendarYear = new Date().getFullYear();
+const currentCalendarYear = getISTYear();
 
 const emptyTypeForm = {
   code: '',

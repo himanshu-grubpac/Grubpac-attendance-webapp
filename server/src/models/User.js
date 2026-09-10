@@ -81,7 +81,14 @@ userSchema.pre('validate', function deriveDisplayName() {
   }
 });
 
-userSchema.methods.toSafeJSON = function toSafeJSON() {
+/**
+ * Serialize a user for API responses.
+ * Salary fields are stripped unless the CALLER is permitted to view them —
+ * pass `{ canViewSalary: true }` only on endpoints already gated by
+ * salary.read / salary.read_team (or equivalent). Secure by default so new
+ * endpoints cannot leak compensation data.
+ */
+userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = {}) {
   const roleDoc = this.roleId && typeof this.roleId === 'object' ? this.roleId : null;
   const departmentDoc =
     this.departmentId && typeof this.departmentId === 'object' ? this.departmentId : null;
@@ -125,9 +132,13 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     delegateApproverId:
       delegateDoc?._id?.toString() ?? this.delegateApproverId?.toString?.() ?? null,
     delegateApproverName: delegateDoc?.name ?? null,
-    monthlySalary: this.monthlySalary ?? null,
-    salaryEffectiveFrom: this.salaryEffectiveFrom ?? null,
-    salaryCurrency: 'INR',
+    ...(canViewSalary
+      ? {
+        monthlySalary: this.monthlySalary ?? null,
+        salaryEffectiveFrom: this.salaryEffectiveFrom ?? null,
+        salaryCurrency: 'INR',
+      }
+      : {}),
     hasPassword: Boolean(this.passwordHash),
     hasPin: Boolean(this.pin4Hash),
     isActive: this.isActive,

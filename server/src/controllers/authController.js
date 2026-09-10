@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import {
   PERMISSIONS,
+  canViewSalaryFields,
   hasAdminPortalAccess,
   hasPermission,
 } from '../../../shared/permissions.js';
@@ -166,7 +167,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     token: signToken(user),
     csrfToken,
     user: {
-      ...user.toSafeJSON(),
+      ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
       loginPortal: portal,
     },
   };
@@ -184,7 +185,7 @@ export async function getCurrentUser(userId) {
     error.statusCode = 404;
     throw error;
   }
-  return user.toSafeJSON();
+  return user.toSafeJSON({ canViewSalary: canViewSalaryFields(resolveUserPermissions(user)) });
 }
 
 export async function updateProfile(userId, body) {
@@ -235,7 +236,7 @@ export async function updateProfile(userId, body) {
     },
   });
 
-  return refreshed.toSafeJSON();
+  return refreshed.toSafeJSON({ canViewSalary: canViewSalaryFields(resolveUserPermissions(refreshed)) });
 }
 
 export async function changePassword(userId, body) {

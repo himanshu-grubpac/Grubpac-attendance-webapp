@@ -45,6 +45,10 @@ export function getISTDateInputValue(date = new Date()) {
   }).format(date);
 }
 
+export function getISTYear(date = new Date()) {
+  return Number(getISTDateInputValue(date).slice(0, 4));
+}
+
 export function getCurrentISTClock() {
   return formatISTDateTime(new Date());
 }
