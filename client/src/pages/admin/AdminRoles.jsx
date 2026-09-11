@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoleSchema, updateRoleSchema } from '@shared/validation/roles.js';
+import { SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -241,10 +242,12 @@ export default function AdminRoles() {
       return;
     }
 
-    const isSystemRole = Boolean(modal.role?.isSystem);
+    // Permissions are fully dynamic for every role except Admin (superadmin
+    // lockout protection — the server 403s Admin permission changes too).
+    const isAdminRole = modal.role?.slug === SYSTEM_ROLE_SLUGS.ADMIN;
     const validation = validateForm(
       updateRoleSchema,
-      isSystemRole
+      isAdminRole
         ? { name: form.name, description: form.description }
         : {
             name: form.name,
@@ -333,6 +336,8 @@ export default function AdminRoles() {
     modal?.mode === 'create' ? createModalTitleId : modal?.mode === 'view' ? viewModalTitleId : editModalTitleId;
   const slugLocked = modal?.mode === 'edit' && modal.role?.isSystem;
   const isSystemEdit = modal?.mode === 'edit' && Boolean(modal.role?.isSystem);
+  const isPermissionsLocked =
+    modal?.mode === 'edit' && modal.role?.slug === SYSTEM_ROLE_SLUGS.ADMIN;
   const isViewMode = modal?.mode === 'view';
   const viewPermissions = modal?.role?.permissions ?? [];
 
@@ -444,7 +449,7 @@ export default function AdminRoles() {
                   : isViewMode
                     ? 'Read-only view of the permissions granted to this role.'
                     : slugLocked
-                      ? 'Slug and permissions cannot be changed for this system role. Display name and description can be updated.'
+                      ? 'Slug cannot be changed for this system role. Display name, description and permissions can be updated — permission changes apply immediately.'
                       : 'Update the role details and permission set assigned to users.'}
               </p>
             </header>
@@ -531,8 +536,10 @@ export default function AdminRoles() {
 
                 <div className="modal__field roles-modal__permissions-field">
                   <span className="label">Permissions</span>
-                  {isSystemEdit ? (
-                    <p className="muted">System role permissions are fixed and cannot be modified.</p>
+                  {isPermissionsLocked ? (
+                    <p className="muted">Admin role permissions are fixed and cannot be modified.</p>
+                  ) : isSystemEdit ? (
+                    <p className="muted">Changes apply to this role immediately on save.</p>
                   ) : null}
                   {permissionGroups.length === 0 ? (
                     <p className="muted">Loading permission groups…</p>
@@ -541,8 +548,8 @@ export default function AdminRoles() {
                       groups={permissionGroups}
                       selected={form.permissions}
                       onChange={(permissions) => setForm({ ...form, permissions })}
-                      disabled={isSystemEdit}
-                      hideActions={isSystemEdit}
+                      disabled={isPermissionsLocked}
+                      hideActions={isPermissionsLocked}
                     />
                   )}
                   <FieldError message={fieldErrors.permissions} />

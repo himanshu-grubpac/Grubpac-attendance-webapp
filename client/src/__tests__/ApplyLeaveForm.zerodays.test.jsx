@@ -17,6 +17,7 @@ vi.mock('../services/api.js', () => ({
     listTypes: vi.fn(() => Promise.resolve({ types: mockedTypes })),
     listPolicies: vi.fn(() => Promise.resolve({ policies: [] })),
     getMyBalances: vi.fn(() => Promise.resolve({ balances: [] })),
+    listHolidays: vi.fn(() => Promise.resolve({ holidays: [] })),
     previewDays: vi.fn(() => Promise.resolve(previewResult)),
     createRequest: vi.fn(() => Promise.resolve({ request: {} })),
     updateRequest: vi.fn(() => Promise.resolve({ request: {} })),

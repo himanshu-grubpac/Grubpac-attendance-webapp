@@ -200,11 +200,15 @@ export default function LeaveAdjustmentBulkUploadModal({
         setUploading(true);
         setError('');
         setResult(null);
+        // Close the modal automatically only when every row applied cleanly.
+        // Rows needing review (errors/duplicates) keep it open with results.
+        let autoClose = false;
         try {
           const data = await leaveApi.uploadCarryBulk(file);
           setResult(data);
           clearFileSelection();
-          const applied = data?.summary?.success ?? 0;
+          const summary = data?.summary ?? {};
+          const applied = summary.success ?? 0;
           if (applied > 0) {
             showSuccess(`Applied ${applied} carried leave entr${applied === 1 ? 'y' : 'ies'}.`);
             try {
@@ -213,10 +217,21 @@ export default function LeaveAdjustmentBulkUploadModal({
               // Grid refresh failure must not hide successful import results.
             }
           }
+          const needsReview =
+            (summary.validation_error ?? 0) +
+            (summary.error ?? 0) +
+            (summary.duplicate ?? 0);
+          autoClose = applied > 0 && needsReview === 0;
         } catch (err) {
           setError(getErrorMessage(err));
         } finally {
           setUploading(false);
+        }
+        if (autoClose) {
+          // Bypass closeModal's busy guard via internals: uploading has
+          // settled, but `busy` is still true in this closure until re-render.
+          resetTransientState();
+          onClose();
         }
       },
     });

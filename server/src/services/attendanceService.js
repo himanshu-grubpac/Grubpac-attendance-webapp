@@ -432,10 +432,12 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     wfhApprovedMap.set(w.userId, w.wfhApproved);
   }
 
+  // Alphabetical by name so team tables render A–Z (UI shows no manual sort).
   const users = await User.find({ _id: { $in: userIds }, isActive: true })
     .select('firstName lastName name email employeeCode departmentId roleId')
     .populate('departmentId', 'name code')
     .populate('roleId', 'name slug')
+    .sort({ name: 1, _id: 1 })
     .lean();
 
   const teamStatus = users.map((user) => {

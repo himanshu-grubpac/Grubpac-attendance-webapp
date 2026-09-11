@@ -16,6 +16,7 @@ vi.mock('../services/api.js', () => ({
     ),
     listPolicies: vi.fn(() => Promise.resolve({ policies: [] })),
     getMyBalances: vi.fn(() => Promise.resolve({ balances: [] })),
+    listHolidays: vi.fn(() => Promise.resolve({ holidays: [] })),
     // Zero working days whatever the range (e.g. a Saturday-only range).
     previewDays: vi.fn(() => Promise.resolve({ days: 0, workingDays: [], sandwichApplied: false })),
     createRequest: vi.fn(),
