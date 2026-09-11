@@ -4891,6 +4891,16 @@ body::-webkit-scrollbar-thumb {
   cursor: not-allowed;
 }
 
+.date-field__day--weekend:not(:disabled) {
+  color: var(--muted);
+}
+
+.date-field__day--holiday:not(.date-field__day--selected) {
+  color: var(--warning);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
 .date-field__footer {
   display: flex;
   justify-content: flex-end;
