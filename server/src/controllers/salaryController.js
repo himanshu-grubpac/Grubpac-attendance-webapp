@@ -21,6 +21,7 @@ import {
   generatePendingSalaryTransfers,
   getSalarySettingsPayload,
   getSalarySummaryForUser,
+  listRecentSettlements,
   listSalaryStructure,
   listSalarySummariesForMonth,
   listSalaryTransfers,
@@ -193,6 +194,11 @@ export async function settleMonthHandler(req, res) {
   res.json(result);
 }
 
+export async function listSettlementsHandler(req, res) {
+  const settlements = await listRecentSettlements(6);
+  res.json({ settlements });
+}
+
 export async function getSalaryHistoryHandler(req, res) {
   const { userId } = salaryHistoryParamsSchema.parse(req.params);
   const { year } = salaryHistoryQuerySchema.parse(req.query);
@@ -208,24 +214,26 @@ export async function getSalaryHistoryHandler(req, res) {
 }
 
 export async function getSalaryAuditHandler(req, res) {
-  const { periodKey } = salaryAuditQuerySchema.parse(req.query);
+  const { periodKey, departmentId } = salaryAuditQuerySchema.parse(req.query);
 
   const result = await getMonthlySalaryAudit(
     req.user,
     req.userPermissions,
     periodKey,
+    { departmentId },
   );
 
   res.json(result);
 }
 
 export async function exportSalaryAuditHandler(req, res) {
-  const { periodKey } = salaryAuditExportQuerySchema.parse(req.query);
+  const { periodKey, departmentId } = salaryAuditExportQuerySchema.parse(req.query);
 
   const { buffer, filename } = await exportMonthlySalaryAudit(
     req.user,
     req.userPermissions,
     periodKey,
+    { departmentId },
   );
 
   auditLog('salary_audit_exported', {

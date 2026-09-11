@@ -583,7 +583,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
  * @param {string} periodKey - "YYYY-MM"
  * @returns {object} { periodKey, employees[], totals{} }
  */
-export async function getMonthlySalaryAudit(actor, permissions, periodKey) {
+export async function getMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   validatePeriodKey(periodKey);
 
   const scopedIds = await getAuditScope(actor, permissions);
@@ -592,6 +592,9 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey) {
   const employeeQuery = { isActive: true };
   if (scopedIds !== null) {
     employeeQuery._id = { $in: scopedIds };
+  }
+  if (options.departmentId) {
+    employeeQuery.departmentId = options.departmentId;
   }
 
   const employees = await User.find(employeeQuery)
@@ -656,8 +659,8 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey) {
  * @param {string} periodKey - "YYYY-MM"
  * @returns {{ buffer: Buffer, filename: string }}
  */
-export async function exportMonthlySalaryAudit(actor, permissions, periodKey) {
-  const audit = await getMonthlySalaryAudit(actor, permissions, periodKey);
+export async function exportMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
+  const audit = await getMonthlySalaryAudit(actor, permissions, periodKey, options);
 
   const rows = audit.employees.map((row) => ({
     'Employee Code': row.employeeCode ?? '',

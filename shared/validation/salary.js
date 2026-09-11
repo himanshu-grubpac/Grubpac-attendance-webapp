@@ -94,8 +94,10 @@ export const salaryHistoryQuerySchema = z.object({
 
 export const salaryAuditQuerySchema = z.object({
   periodKey: monthInputSchema,
+  departmentId: objectIdSchema.optional(),
 });
 
 export const salaryAuditExportQuerySchema = z.object({
   periodKey: monthInputSchema,
+  departmentId: objectIdSchema.optional(),
 });

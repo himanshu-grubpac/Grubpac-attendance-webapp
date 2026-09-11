@@ -36,14 +36,19 @@ export function formatLeaveTypeLabel({ leaveTypeCode, leaveTypeName } = {}) {
 }
 
 /**
- * Mohit-style warning when apply would overdraw remaining balance.
- * Does not block submit — caller shows banner and continues.
+ * Warning when apply would overdraw remaining balance: balance goes minus
+ * and the uncovered dates become LOP on salary. Does not block submit —
+ * caller shows banner and continues.
+ *
+ * `workingDays` (optional date list from the day preview) names exactly which
+ * dates go minus: the first `remaining` working days stay paid, the rest LOP.
  */
 export function buildNegativeBalanceWarning({
   leaveTypeCode,
   leaveTypeName,
   available,
   requestedDays,
+  workingDays = [],
 } = {}) {
   const code = String(leaveTypeCode ?? '').trim() || String(leaveTypeName ?? '').trim() || 'leave';
   const remaining = Number(available);
@@ -52,12 +57,17 @@ export function buildNegativeBalanceWarning({
   if (!Number.isFinite(remaining)) return null;
   if (remaining >= days) return null;
 
+  const dates = Array.isArray(workingDays) ? workingDays.filter(Boolean) : [];
+  const paidCount = Math.max(0, Math.min(remaining, dates.length));
+  const lopDates = dates.slice(paidCount);
+  const datePart = lopDates.length > 0 ? ` (${lopDates.join(', ')})` : '';
+
   if (remaining <= 0) {
-    return `You don't have ${code} now. If you take it, it will be unpaid and will go in minus.`;
+    return `You don't have ${code} now. If you take it, the balance will go in minus and ${days} day(s)${datePart} will be LOP (loss of pay) on your salary for those dates.`;
   }
 
   const overdrawn = Math.round((days - remaining) * 100) / 100;
-  return `You have only ${remaining} day(s) of ${code} left. If you apply for ${days} day(s), ${overdrawn} day(s) will be unpaid and will go in minus.`;
+  return `You have only ${remaining} day(s) of ${code} left. If you apply for ${days} day(s), the balance will go in minus and ${overdrawn} day(s)${datePart} will be LOP (loss of pay) on your salary for those dates.`;
 }
 
 /** Info notice on Apply leave — all types; paid line when policy.paid is true. */

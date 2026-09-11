@@ -306,6 +306,23 @@ export async function recordLopForMonth(userId, periodKey, lopCauses, year, perD
  * @param {ObjectId|null} actorId - User who triggered settlement (null for scheduler)
  * @returns {object} settlement result
  */
+/**
+ * Recent month settlements, newest first — powers the admin settlement
+ * status card (last run month + time). Read-only.
+ */
+export async function listRecentSettlements(limit = 6) {
+  const docs = await MonthSettlement.find({})
+    .sort({ periodKey: -1 })
+    .limit(Math.min(Math.max(limit, 1), 24))
+    .lean();
+  return docs.map((doc) => ({
+    periodKey: doc.periodKey,
+    settledAt: doc.settledAt,
+    settledBy: doc.settledBy?.toString?.() ?? null,
+    employeesProcessed: doc.employeesProcessed ?? 0,
+  }));
+}
+
 export async function settleMonthPayroll(periodKey, actorId) {
   const range = parseMonthInputAsISTRange(periodKey);
   if (!range) {

@@ -265,6 +265,16 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     paidLeaveByDay,
   );
   const lopDays = Math.max(0, workingDaysInMonth - payableDays);
+  // Working dates that are (partly) unpaid — shown in salary views so
+  // employees/RMs can see exactly which days became LOP and for how much.
+  const lopDates = workingDayList
+    .map((day) => {
+      const unpaid = roundMoney(
+        1 - (attendanceCreditByDay.get(day) ?? 0) - (paidLeaveByDay.get(day) ?? 0),
+      );
+      return unpaid > 0.001 ? { date: day, unpaidDays: unpaid } : null;
+    })
+    .filter(Boolean);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
@@ -291,6 +301,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     paidLeaveDays,
     payableDays,
     lopDays,
+    lopDates,
     lopDeduction,
     perDaySalary,
     payableEstimate,
@@ -733,4 +744,4 @@ export async function updateUserSalary(userId, payload, actorId) {
   return user;
 }
 
-export { settleMonthPayroll } from './lopSettlementService.js';
+export { settleMonthPayroll, listRecentSettlements } from './lopSettlementService.js';

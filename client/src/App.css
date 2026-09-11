@@ -13659,6 +13659,47 @@ body::-webkit-scrollbar-thumb {
   margin: 0;
 }
 
+.salary-detail-modal {
+  width: min(100%, 44rem);
+}
+
+.salary-detail-modal__header {
+  position: relative;
+  padding-right: 2.5rem;
+}
+
+.salary-detail-modal .modal__close {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.9rem;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.salary-detail-modal .modal__close:hover {
+  background: var(--surface-2);
+  color: var(--text-h);
+}
+
+.salary-detail-modal__body {
+  max-height: none;
+}
+
+.salary-detail__lop-dates {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 @media (max-width: 720px) {
   .salary-toolbar {
     align-items: stretch;

@@ -54,6 +54,11 @@ const PAGE_META = [
     title: 'Salary Management',
     subtitle: 'Monthly pay estimates, salary structure, and payroll schedule.',
   },
+  {
+    match: '/admin/salary/team',
+    title: 'Team Salary Audit',
+    subtitle: 'Monthly audit and salary history for your team.',
+  },
   { match: '/admin/help/team', title: 'Team issues', subtitle: '' },
   { match: '/admin/help/tickets', title: 'Help tickets', subtitle: '' },
   { match: '/admin/profile', title: 'Account settings', subtitle: 'Your account details.' },

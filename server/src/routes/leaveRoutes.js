@@ -103,7 +103,12 @@ router.get('/balances/me', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandl
 router.post('/balances/init', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(initUserBalancesHandler));
 router.get(
   '/balances',
-  requirePermission(PERMISSIONS.LEAVE_READ_ALL, PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(
+    PERMISSIONS.LEAVE_READ_ALL,
+    PERMISSIONS.LEAVE_ADJUST_BALANCES,
+    PERMISSIONS.LEAVE_READ_TEAM,
+    PERMISSIONS.LEAVE_APPROVE,
+  ),
   asyncHandler(getLeaveBalances),
 );
 router.patch(

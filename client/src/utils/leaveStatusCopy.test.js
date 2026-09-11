@@ -109,7 +109,19 @@ test('buildNegativeBalanceWarning when no balance left', () => {
       available: 0,
       requestedDays: 1,
     }),
-    "You don't have CL now. If you take it, it will be unpaid and will go in minus.",
+    "You don't have CL now. If you take it, the balance will go in minus and 1 day(s) will be LOP (loss of pay) on your salary for those dates.",
+  );
+});
+
+test('buildNegativeBalanceWarning names the LOP dates', () => {
+  assert.equal(
+    buildNegativeBalanceWarning({
+      leaveTypeCode: 'SL',
+      available: 0,
+      requestedDays: 2,
+      workingDays: ['2026-09-10', '2026-09-11'],
+    }),
+    "You don't have SL now. If you take it, the balance will go in minus and 2 day(s) (2026-09-10, 2026-09-11) will be LOP (loss of pay) on your salary for those dates.",
   );
 });
 
@@ -120,7 +132,19 @@ test('buildNegativeBalanceWarning when partially covered', () => {
       available: 1,
       requestedDays: 3,
     }),
-    'You have only 1 day(s) of CL left. If you apply for 3 day(s), 2 day(s) will be unpaid and will go in minus.',
+    'You have only 1 day(s) of CL left. If you apply for 3 day(s), the balance will go in minus and 2 day(s) will be LOP (loss of pay) on your salary for those dates.',
+  );
+});
+
+test('buildNegativeBalanceWarning LOPs only the dates beyond balance', () => {
+  assert.equal(
+    buildNegativeBalanceWarning({
+      leaveTypeCode: 'CL',
+      available: 1,
+      requestedDays: 3,
+      workingDays: ['2026-09-10', '2026-09-11', '2026-09-12'],
+    }),
+    'You have only 1 day(s) of CL left. If you apply for 3 day(s), the balance will go in minus and 2 day(s) (2026-09-11, 2026-09-12) will be LOP (loss of pay) on your salary for those dates.',
   );
 });
 

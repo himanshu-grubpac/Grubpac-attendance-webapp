@@ -431,6 +431,19 @@ export const salaryApi = {
     api.post('/salary/transfers/generate', payload).then((r) => r.data),
   updateTransfer: (id, payload) =>
     api.patch(`/salary/transfers/${id}`, payload).then((r) => r.data),
+  settleMonth: (month) =>
+    api.post('/salary/settle', { month }).then((r) => r.data),
+  listSettlements: () => api.get('/salary/settlements').then((r) => r.data),
+  getHistory: (userId, params = {}) =>
+    api.get(`/salary/history/${userId}`, { params }).then((r) => r.data),
+  getAudit: (params = {}) => api.get('/salary/audit', { params }).then((r) => r.data),
+  downloadAudit: (periodKey, { departmentId } = {}) => {
+    const search = new URLSearchParams({ periodKey });
+    if (departmentId) search.set('departmentId', departmentId);
+    return downloadExcelBlob(`/api/salary/audit/export?${search.toString()}`, {
+      errorMessage: 'Failed to download salary audit report.',
+    });
+  },
 };
 
 export const demoFaqApi = {

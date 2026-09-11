@@ -14,6 +14,7 @@ import {
   listSalaryStructureHandler,
   listSalarySummariesHandler,
   listSalaryTransfersHandler,
+  listSettlementsHandler,
   settleMonthHandler,
   updateSalarySettingsHandler,
   updateSalaryTransferHandler,
@@ -95,6 +96,13 @@ router.post(
   '/settle',
   requireAllPermissions(PERMISSIONS.SALARY_WRITE, PERMISSIONS.USERS_READ),
   asyncHandler(settleMonthHandler),
+);
+
+// Recent month settlements (last run month + time) — same admin bar as summaries.
+router.get(
+  '/settlements',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(listSettlementsHandler),
 );
 
 router.patch(

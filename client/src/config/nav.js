@@ -81,6 +81,14 @@ export const NAV_ITEMS = [
     allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
   },
   {
+    to: '/admin/salary/team',
+    label: 'Team Salary Audit',
+    icon: '₹',
+    section: 'Employees',
+    portal: 'admin',
+    permission: PERMISSIONS.SALARY_READ_TEAM,
+  },
+  {
     to: '/admin/attendance',
     label: 'Attendance history',
     icon: '◷',

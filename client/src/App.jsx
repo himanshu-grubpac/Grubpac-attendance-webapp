@@ -39,6 +39,7 @@ import EmployeeHistory from './pages/employee/EmployeeHistory.jsx';
 import AdminHelpTeam from './pages/admin/AdminHelpTeam.jsx';
 import AdminHelpTickets from './pages/admin/AdminHelpTickets.jsx';
 import AdminSalarySummary from './pages/admin/AdminSalarySummary.jsx';
+import TeamSalaryAudit from './pages/admin/TeamSalaryAudit.jsx';
 import HelpTicketDetail from './pages/help/HelpTicketDetail.jsx';
 import './App.css';
 
@@ -234,6 +235,14 @@ export default function App() {
                     allPermissions={[PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ]}
                   >
                     <AdminSalarySummary />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/salary/team"
+                element={
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.SALARY_READ_TEAM}>
+                    <TeamSalaryAudit />
                   </ProtectedRoute>
                 }
               />
