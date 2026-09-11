@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createLeaveRequestSchema } from '@shared/validation/leave.js';
 import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
-import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import { showFormError, buildDocCertificateError } from '../../utils/formErrors.js';
 import {
   buildApplyLeaveNotice,
   buildNegativeBalanceWarning,
@@ -49,6 +50,11 @@ export default function EmployeeApplyLeave() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous in-flight guard: React state updates don't block a second
+  // click in the same tick, which would otherwise fire a duplicate POST with
+  // a fresh idempotency key and surface a confusing overlap 400.
+  const submittingRef = useRef(false);
+  const alertRef = useRef(null);
   const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -107,6 +113,7 @@ export default function EmployeeApplyLeave() {
       return;
     }
 
+    const rangeKey = `${form.startDate}|${form.endDate}|${form.halfDay || ''}`;
     const timer = setTimeout(() => {
       leaveApi
         .previewDays({
@@ -114,7 +121,10 @@ export default function EmployeeApplyLeave() {
           endDate: form.endDate,
           ...(form.halfDay ? { halfDay: form.halfDay } : {}),
         })
-        .then(setPreview)
+        // Tag which range this preview belongs to: while debouncing or in
+        // flight, `preview` may still describe the previous range, so callers
+        // must check currency via previewIsCurrent below before acting on it.
+        .then((data) => setPreview({ ...data, _rangeKey: rangeKey }))
         .catch(() => setPreview(null));
     }, 300);
 
@@ -149,8 +159,11 @@ export default function EmployeeApplyLeave() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError('');
+    setFieldErrors({});
 
     const payload = {
       ...form,
@@ -161,11 +174,79 @@ export default function EmployeeApplyLeave() {
     const validation = validateForm(createLeaveRequestSchema, payload);
     if (!validation.data) {
       setFieldErrors(validation.errors);
+      submittingRef.current = false;
       setSubmitting(false);
       return;
     }
 
     setFieldErrors({});
+    const selectedCode = types.find((item) => item.id === form.leaveTypeId)?.code ?? '';
+    const isNonWfhSubmit = String(selectedCode).toUpperCase() !== 'WFH';
+
+    // The debounced preview may be stale or missing at submit time (fast
+    // date-pick → submit, or a failed preview fetch) — and both guards below
+    // require current day-count data. Refresh synchronously so a Saturday-only
+    // range can never slip through to a dead server round trip. If the refresh
+    // itself fails, fall through: the server remains the source of truth and
+    // its message surfaces via showFormError below.
+    let checkPreview = preview;
+    let checkCurrent = previewIsCurrent;
+    if (
+      isNonWfhSubmit &&
+      !previewIsCurrent &&
+      form.startDate &&
+      form.endDate &&
+      form.endDate >= form.startDate
+    ) {
+      try {
+        const fresh = await leaveApi.previewDays({
+          startDate: form.startDate,
+          endDate: form.endDate,
+          ...(form.halfDay ? { halfDay: form.halfDay } : {}),
+        });
+        checkPreview = {
+          ...fresh,
+          _rangeKey: `${form.startDate}|${form.endDate}|${form.halfDay || ''}`,
+        };
+        setPreview(checkPreview);
+        checkCurrent = true;
+      } catch {
+        // Preview unavailable — proceed to server validation.
+      }
+    }
+    const checkDays = Number(checkPreview?.days ?? 0);
+
+    // Defense in depth behind the disabled submit button: never send a range
+    // with zero working days. WFH requests follow their own flow and are exempt.
+    if (isNonWfhSubmit && checkCurrent && checkDays === 0) {
+      showFormError({
+        setError,
+        alertRef,
+        message:
+          'The selected dates contain no working days. Leave can only be applied on working days (Mon–Fri, excluding holidays).',
+      });
+      submittingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    // Client mirror of the server's medical-certificate rule: long sick leave
+    // without a certificate URL is always rejected. Block early with the
+    // requirement inline instead of a dead submit round trip.
+    const docBlockMessage = buildDocCertificateError({
+      leaveTypeCode: selectedCode,
+      threshold: selectedPolicy?.requireDocAfterConsecutiveDays ?? null,
+      requestedDays: checkDays,
+      previewIsCurrent: checkCurrent,
+      halfDay: form.halfDay,
+      hasDocument: Boolean(form.documentUrl?.trim()),
+    });
+    if (docBlockMessage) {
+      showFormError({ setError, alertRef, message: docBlockMessage });
+      submittingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
     // Fresh idempotency key per logical submit: transport retries replay the
     // stored response instead of creating duplicate requests.
     const idempotencyKey =
@@ -208,8 +289,17 @@ export default function EmployeeApplyLeave() {
         .then((data) => setBalances(data.balances ?? []))
         .catch(() => {});
     } catch (err) {
-      setError(getErrorMessage(err));
+      // Server field errors (e.g. Zod shape) map onto fields; the top alert
+      // is scrolled into view so the failure is never silently below the fold.
+      showFormError({
+        setError,
+        setFieldErrors,
+        alertRef,
+        message: getErrorMessage(err),
+        fieldErrors: getFieldErrors(err),
+      });
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -253,6 +343,24 @@ export default function EmployeeApplyLeave() {
 
   const selectedBalance = balances.find((item) => item.leaveTypeId === form.leaveTypeId);
   const requestedDays = Number(preview?.days ?? 0);
+  // True only when the resolved preview belongs to the currently selected
+  // range: a stale (previous-range) preview must never warn or block.
+  const rangeKey = `${form.startDate ?? ''}|${form.endDate ?? ''}|${form.halfDay ?? ''}`;
+  const previewIsCurrent = Boolean(
+    preview &&
+      preview._rangeKey === rangeKey &&
+      form.startDate &&
+      form.endDate &&
+      form.endDate >= form.startDate,
+  );
+  // Weekend/holiday-only ranges (e.g. CO on a Saturday) carry zero working
+  // days and are always rejected server-side — surface it inline instead.
+  // WFH requests follow their own flow and are exempt.
+  const zeroWorkingDays =
+    String(selectedType?.code ?? '').toUpperCase() !== 'WFH' &&
+    previewIsCurrent &&
+    Number(preview.days ?? 0) === 0;
+  const isCoType = String(selectedType?.code ?? '').toUpperCase() === 'CO';
   const negativeBalanceWarning =
     selectedType && preview && requestedDays > 0
       ? buildNegativeBalanceWarning({
@@ -273,7 +381,7 @@ export default function EmployeeApplyLeave() {
   return (
     <div className="page page--form">
       {error ? (
-        <div className="page-alerts">
+        <div className="page-alerts" ref={alertRef} tabIndex={-1}>
           <div className="alert alert--error">{error}</div>
         </div>
       ) : null}
@@ -412,6 +520,15 @@ export default function EmployeeApplyLeave() {
           </div>
         )}
 
+        {zeroWorkingDays ? (
+          <div className="alert alert--warning alert--block form-grid__full" role="alert">
+            No working days in the selected dates — leave can only be applied on
+            working days (Mon–Fri, excluding holidays). Please pick a range that
+            includes at least one working day.
+            {isCoType ? ' Comp-off credit can only be availed on working days.' : null}
+          </div>
+        ) : null}
+
         {selectedType?.code === 'SL' && (
           <label className="form-grid__full">
             <span className="label">Medical certificate URL (required if &gt;2 consecutive days)</span>
@@ -426,7 +543,7 @@ export default function EmployeeApplyLeave() {
         )}
 
         <div className="form-actions form-actions--sticky">
-          <button type="submit" className="btn btn-primary" disabled={submitting || loadingRequest || Boolean(applyDeadlineError)}>
+          <button type="submit" className="btn btn-primary" disabled={submitting || loadingRequest || Boolean(applyDeadlineError) || zeroWorkingDays}>
             {submitting ? 'Saving…' : isEditing ? 'Save changes' : 'Submit request'}
           </button>
         </div>

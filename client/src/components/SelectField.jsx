@@ -66,10 +66,17 @@ export default function SelectField({
       }
     }
 
+    // Clamp horizontally so the panel never bleeds past the viewport edge
+    // (mirrors DateField's clamp; triggers near the right edge otherwise
+    // overflow on narrow screens).
+    const panelWidth = Math.min(rect.width, window.innerWidth - VIEWPORT_PADDING * 2);
+    const maxLeft = window.innerWidth - VIEWPORT_PADDING - panelWidth;
+    const left = Math.max(VIEWPORT_PADDING, Math.min(rect.left, maxLeft));
+
     setPosition({
       top,
-      left: rect.left,
-      width: rect.width,
+      left,
+      width: panelWidth,
       maxHeight,
     });
   }, [open, enabledOptions.length, options.length]);

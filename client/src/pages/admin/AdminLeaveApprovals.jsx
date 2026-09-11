@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
-import { adminApi, leaveApi, getErrorMessage } from '../../services/api.js';
+import { leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
@@ -254,19 +254,6 @@ function QueueSkeleton() {
   );
 }
 
-async function fetchActiveEmployees() {
-  const employees = [];
-  let page = 1;
-  let totalPages = 1;
-  do {
-    const data = await adminApi.listEmployees({ page, limit: 100, isActive: 'true' });
-    employees.push(...(data.employees ?? []));
-    totalPages = data.pagination?.totalPages ?? 1;
-    page += 1;
-  } while (page <= totalPages);
-  return employees;
-}
-
 export default function AdminLeaveApprovals() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
@@ -275,7 +262,6 @@ export default function AdminLeaveApprovals() {
 
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
-  const [employees, setEmployees] = useState([]);
   const [page, setPage] = useState(1);
   const [employeeFilter, setEmployeeFilter] = useState('');
   const [yearFilter, setYearFilter] = useState(() =>
@@ -283,7 +269,6 @@ export default function AdminLeaveApprovals() {
   );
   const [monthPartFilter, setMonthPartFilter] = useState('');
   const [loading, setLoading] = useState(true);
-  const [employeesLoading, setEmployeesLoading] = useState(true);
   const [error, setError] = useState('');
   const [comments, setComments] = useState({});
   const [actingId, setActingId] = useState(null);
@@ -322,16 +307,24 @@ export default function AdminLeaveApprovals() {
 
   const yearOptions = useMemo(() => buildYearOptions(), []);
 
-  const employeeOptions = useMemo(
-    () => [
+  // Employee filter options derive from the loaded (already scope-filtered)
+  // queue rows — never from the directory. A reporting manager therefore only
+  // ever sees employees under them here; out-of-scope ids are additionally
+  // rejected server-side with a 403.
+  const employeeOptions = useMemo(() => {
+    const seen = new Map();
+    for (const item of requests) {
+      const id = item.userId ? String(item.userId) : '';
+      if (!id || seen.has(id)) continue;
+      seen.set(id, item.userName || 'Employee');
+    }
+    return [
       { value: '', label: 'All employees' },
-      ...employees.map((employee) => ({
-        value: employee.id,
-        label: employee.name || employee.email || 'Employee',
-      })),
-    ],
-    [employees],
-  );
+      ...[...seen.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
+  }, [requests]);
 
   const hasActiveFilters = Boolean(employeeFilter) || !isDefaultMonthFilter(monthFilter);
 
@@ -409,15 +402,7 @@ export default function AdminLeaveApprovals() {
     loadRequests({ nextPage: 1, nextQueueStatus: value });
   }
 
-  useEffect(() => {
-    setEmployeesLoading(true);
-    fetchActiveEmployees()
-      .then((items) => setEmployees(items))
-      .catch(() => {
-        // Employee filter remains optional if directory fails to load.
-      })
-      .finally(() => setEmployeesLoading(false));
-  }, []);
+
 
   useEffect(() => {
     const decision = searchParams.get('decision');
@@ -694,7 +679,7 @@ export default function AdminLeaveApprovals() {
                 onChange={handleEmployeeChange}
                 options={employeeOptions}
                 aria-label="Employee filter"
-                disabled={employeesLoading}
+                disabled={loading}
               />
             </label>
 

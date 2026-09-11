@@ -200,6 +200,25 @@
   border-radius: var(--radius);
   font-size: 0.875rem;
   border: 1px solid transparent;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.field-error,
+.modal__alert {
+  overflow-wrap: anywhere;
+}
+
+/* 44px minimum tap targets on touch-sized viewports. Desktop keeps its
+   current compact sizing. */
+@media (max-width: 640px) {
+  .btn {
+    min-height: 2.75rem;
+  }
+  .password-input__toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
 }
 
 .alert--error {
@@ -743,7 +762,7 @@ textarea:disabled {
 }
 
 .form-grid--dates {
-  grid-template-columns: repeat(2, minmax(0, var(--field-sm-max-width)));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--field-sm-max-width)), 1fr));
 }
 
 .form-grid>label.form-field--sm,
@@ -2288,8 +2307,8 @@ textarea:disabled {
   --login-surface-border: color-mix(in srgb, var(--login-accent-blue) 28%, var(--border));
   --login-glow: color-mix(in srgb, var(--login-accent-blue) 12%, transparent);
 
-  min-height: 100dvh;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -2462,6 +2481,20 @@ textarea:disabled {
 .login-card__forgot:focus-visible {
   color: var(--primary-dark, var(--primary));
   opacity: 0.85;
+}
+
+/* 16px stops iOS Safari auto-zooming on focus inside the reset modal. */
+.modal.forgot-password-modal .modal__body input.input,
+.forgot-password-modal.modal .modal__body input:not([type='checkbox']):not([type='radio']) {
+  font-size: 1rem;
+}
+
+/* Comfortable tap target for the text-link button without moving layout. */
+.login-card__forgot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin: -0.65rem 0;
 }
 
 .login-card__forgot:disabled {
@@ -4691,8 +4724,9 @@ body::-webkit-scrollbar-thumb {
 
 .date-field__panel {
   position: fixed;
-  /* Above modal backdrop (75) and confirm dialog (80); below sign-out (90) and toasts (100). */
-  z-index: 85;
+  /* Above modals (120/130) and confirm dialogs (140) so pickers work inside
+     them; below action popups (200). Matches SelectField's layer. */
+  z-index: 150;
   box-sizing: border-box;
   width: 228px;
   max-width: 228px;
@@ -7373,6 +7407,8 @@ body::-webkit-scrollbar-thumb {
 
 .confirm-dialog {
   width: min(100%, 26rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem));
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -7439,11 +7475,19 @@ body::-webkit-scrollbar-thumb {
   z-index: 120;
   display: grid;
   place-items: center;
-  padding: 1.25rem;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom));
   background: rgba(15, 23, 42, 0.45);
   transform: translateZ(0);
   will-change: transform;
   animation: fade-in 0.18s ease;
+}
+
+@media (max-width: 480px) {
+  .modal__backdrop,
+  .confirm-dialog-backdrop {
+    padding: 0.75rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
 }
 
 .modal__backdrop--elevated {
@@ -7456,7 +7500,7 @@ body::-webkit-scrollbar-thumb {
 
 .modal {
   width: min(100%, 26rem);
-  max-height: min(calc(100vh - 2.5rem), 32rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 32rem);
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -7473,7 +7517,7 @@ body::-webkit-scrollbar-thumb {
 
 .modal--wide {
   width: min(100%, 48rem);
-  max-height: min(calc(100vh - 2.5rem), 42rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 42rem);
   border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
   box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
 }
@@ -7577,7 +7621,7 @@ body::-webkit-scrollbar-thumb {
   z-index: 100;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 0.5rem;
   max-width: none;
   pointer-events: none;
@@ -7587,8 +7631,9 @@ body::-webkit-scrollbar-thumb {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
-  width: 100%;
+  width: min(26rem, 100%);
   padding: 0.85rem 1rem;
   border-radius: 10px;
   border: none;
@@ -7621,8 +7666,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .toast > span {
-  flex: 1 1 auto;
+  flex: 1 1 8rem;
   min-width: 0;
+  overflow-wrap: anywhere;
   text-align: left;
 }
 
@@ -9862,7 +9908,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .attendance-footer {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
     align-items: stretch;
@@ -10386,7 +10432,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .page--employees .employees-stats__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -13324,7 +13370,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .page--salary .salary-stats__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -13674,7 +13720,9 @@ body::-webkit-scrollbar-thumb {
   z-index: 200;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
+  pointer-events: none;
 }
 .action-popup {
   background: #1f2937;
@@ -13682,16 +13730,22 @@ body::-webkit-scrollbar-thumb {
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   overflow: hidden;
+  width: min(26rem, 100%);
+  pointer-events: auto;
 }
 .action-popup__body {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 0.75rem;
   padding: 0.85rem 1rem;
 }
 .action-popup__message {
   margin: 0;
-  flex: 1;
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.92rem;
   line-height: 1.4;
 }
@@ -13704,6 +13758,7 @@ body::-webkit-scrollbar-thumb {
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .action-popup__undo:hover { background: #fbbf24; }
 .action-popup__close {
@@ -13713,6 +13768,7 @@ body::-webkit-scrollbar-thumb {
   font-size: 1.25rem;
   cursor: pointer;
   line-height: 1;
+  flex-shrink: 0;
 }
 .action-popup__progress {
   height: 4px;
@@ -13727,23 +13783,23 @@ body::-webkit-scrollbar-thumb {
 
 .leave-type-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   align-items: start;
 }
 .leave-type-row__type {
-  flex: 0 1 48%;
+  flex: 1 1 min(100%, 14rem);
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
 }
 .leave-type-row__balance {
-  flex: 0 1 48%;
+  flex: 1 1 min(100%, 14rem);
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  margin-left: 30px;
 }
 .leave-balance-summary {
   display: flex;
@@ -13793,6 +13849,36 @@ body::-webkit-scrollbar-thumb {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .today-present-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .today-present-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .today-present-summary__value {
+    font-size: 1.25rem;
+  }
+}
+
+/* Team panel header: title + action button share the row and wrap on narrow
+   screens instead of stacking full-width. */
+.dash-calendar-team__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.dash-calendar-team__title {
+  margin: 0;
+  min-width: 0;
 }
 
 .today-present-summary__card {
@@ -13933,4 +14019,637 @@ body::-webkit-scrollbar-thumb {
 
 .leave-carry-bulk-modal__body > section + section {
   margin-top: 1rem;
+}
+
+/* ΓöÇΓöÇ Fluid mobile responsiveness overhaul (no device-specific hacks) ΓöÇΓöÇ
+   Primitives only: minmax/min/clamp/flex-wrap/auto-fit. Breakpoint
+   re-flow reuses the existing shell system (960/640/480). */
+
+.page-center {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-layout {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-sidebar--desktop {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.notification-bell__panel {
+  max-height: min(28rem, calc(100vh - var(--header-height) - 1.5rem), calc(100dvh - var(--header-height) - 1.5rem));
+}
+
+.more-drawer {
+  max-height: min(78vh, 78dvh, 640px);
+}
+
+.slide-panel {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* W1 ΓÇö Toast + action-popup: top-center, contained, tappable */
+.toast-stack,
+.action-popup-stack {
+  left: var(--sidebar-width);
+  right: 0.5rem;
+  padding-inline: 0.25rem;
+  max-width: none;
+  pointer-events: none;
+}
+
+.toast,
+.action-popup {
+  width: min(26rem, 100%);
+  max-width: min(26rem, calc(100vw - 1.5rem));
+  margin-inline: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-stack {
+  top: max(0.75rem, env(safe-area-inset-top));
+}
+
+.action-popup-stack {
+  top: max(0.75rem, env(safe-area-inset-top));
+  pointer-events: none;
+}
+
+.action-popup__body {
+  min-width: 0;
+}
+
+.action-popup__message {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.action-popup__undo,
+.toast__action {
+  flex-shrink: 0;
+  min-height: 2.75rem;
+  align-self: center;
+}
+
+.action-popup__close,
+.toast__close {
+  flex-shrink: 0;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  display: grid;
+  place-items: center;
+  padding: 0.5rem;
+  margin: -0.5rem -0.5rem -0.5rem 0;
+}
+
+.modal__alert,
+.alert,
+.field-error {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.modal__footer .btn,
+.confirm-dialog__actions .btn {
+  min-height: 2.75rem;
+}
+
+/* W2 ΓÇö Tables: contained scroll by default, card-stack where responsive */
+.table-wrap {
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+
+.table-wrap--fit {
+  overflow-x: auto;
+}
+
+.table-wrap--fit .table,
+.table-wrap--fit .data-table {
+  table-layout: auto;
+  min-width: min(100%, 34rem);
+}
+
+.attendance-grid-scroll,
+.attendance-history-scroll {
+  max-width: 100%;
+}
+
+.attendance-grid-scroll.table-wrap {
+  overflow-x: auto;
+}
+
+.approval-row__detail,
+.approval-row__meta,
+.bulk-upload__diff,
+.salary-detail__grid,
+.leave-submit-summary {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.approval-row__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.table-wrap--kv .kv-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.table-wrap--kv .kv-table th,
+.table-wrap--kv .kv-table td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.audit-logs-table-wrap .table,
+.audit-logs-table-wrap .data-table {
+  min-width: 44rem;
+}
+
+/* Today-present toolbar: search + action wrap, never nested */
+.today-present-toolbar {
+  gap: 0.75rem;
+}
+
+.today-present-toolbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.today-present-toolbar__search {
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+  max-width: min(100%, 20rem);
+}
+
+/* W3 ΓÇö Forms, toolbars, pickers */
+.card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.filter-bar__field {
+  flex: 1 1 min(100%, 11rem);
+  min-width: 0;
+}
+
+.filter-bar__field .input,
+.filter-bar__field select,
+.filter-bar__field input,
+.filter-bar__field .select-field,
+.filter-bar__field .date-field {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.filter-bar__search {
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__filters,
+.salary-toolbar__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  min-width: 0;
+}
+
+.approvals-toolbar__field,
+.salary-toolbar__field {
+  flex: 1 1 min(100%, 10rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__field .select-field,
+.salary-toolbar__period .select-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.approvals-toolbar__period,
+.salary-toolbar__period {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__period .select-field,
+.salary-toolbar__period .select-field {
+  flex: 1 1 min(100%, 8rem);
+  min-width: 0;
+}
+
+.salary-toolbar__search {
+  flex: 1 1 min(100%, 14rem);
+  min-width: 0;
+}
+
+.salary-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.salary-toolbar__actions .btn {
+  flex: 1 1 min(100%, 12rem);
+  min-width: 0;
+}
+
+.form-grid--dates {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+}
+
+.help-ticket-form__meta-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+
+.help-ticket-form__meta-row > label {
+  min-width: 0;
+}
+
+.roles-modal__fields-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+
+.roles-modal .permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.office-weekend-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.auto-checkout-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.auto-checkout-summary span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.time-field {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.time-field__period {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.select-field__panel,
+.date-field__panel {
+  max-width: calc(100vw - 1rem);
+  min-width: 0;
+}
+
+.date-field__panel {
+  z-index: 150;
+}
+
+.cell-actions__group {
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+
+.approval-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.approval-row__actions .btn {
+  flex: 1 1 min(100%, 10rem);
+  min-width: 0;
+}
+
+.assessment-options--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.assessment-option--chip {
+  flex: 1 1 min(100%, 8.5rem);
+  min-width: 0;
+}
+
+/* W4 ΓÇö Dashboard, header, misc grids */
+.employee-home__desktop-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dash-hero__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  min-width: 0;
+}
+
+.dash-hero__times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.6rem 1rem;
+  min-width: 0;
+}
+
+.dash-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.dash-hero__actions .btn {
+  flex: 1 1 min(100%, 12rem);
+  min-width: 0;
+}
+
+.dash-shortcuts__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.check-in-map,
+.check-in-map__canvas {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.check-in-map__canvas {
+  min-height: 16rem;
+}
+
+.month-calendar__grid {
+  width: 100%;
+  min-width: 0;
+}
+
+.month-calendar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.dash-calendar-team__scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.today-present-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.admin-home__grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.salary-stats__grid,
+.salary-detail__grid,
+.attendance-summary__grid,
+.attendance-legend__grid,
+.employees-stats__grid,
+.bulk-upload__steps {
+  min-width: 0;
+}
+
+.bulk-upload__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+}
+
+.bulk-upload__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.bulk-upload__footer form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.app-header__title-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-header__actions {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.detail-list--grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.help-ticket-hero__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.slide-panel {
+  width: min(20rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+}
+
+/* Password visibility toggle: keep text clear of the icon at any width */
+.password-input__control {
+  padding-right: 3.75rem;
+  text-overflow: ellipsis;
+}
+
+.password-input__toggle.btn,
+button.password-input__toggle {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* W5 ΓÇö Auth + forgot password */
+.modal.forgot-password-modal .modal__body input.input,
+.forgot-password-modal.modal .modal__body input:not([type='checkbox']):not([type='radio']) {
+  font-size: 1rem;
+}
+
+.forgot-password-modal .modal__footer .btn {
+  min-height: 2.75rem;
+}
+
+.login-card__forgot {
+  min-height: 2.75rem;
+}
+
+.page-toolbar__actions {
+  min-width: 0;
+}
+
+.page-toolbar__actions .btn {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Global small-screen fluid guards: no device-specific values */
+@media (max-width: 960px) {
+  .toast-stack,
+  .action-popup-stack {
+    left: 0.5rem;
+    right: 0.5rem;
+    padding-inline: 0.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .btn {
+    min-height: 2.75rem;
+    max-width: 100%;
+  }
+
+  .page-toolbar__actions {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .page-toolbar__actions .btn {
+    flex: 1 1 min(100%, 10rem);
+    white-space: normal;
+    text-wrap: balance;
+  }
+
+  input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']),
+  select,
+  textarea,
+  .select-field,
+  .date-field,
+  .time-field__input {
+    font-size: 1rem;
+  }
+
+  .btn-sm {
+    min-height: 2.75rem;
+  }
+
+  .action-menu__trigger {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .back-link {
+    min-height: 2.75rem;
+    padding-block: 0.5rem;
+  }
+
+  .back-link__label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .date-field__day {
+    min-width: 2rem;
+    min-height: 2.75rem;
+  }
+
+  .card__toolbar {
+    flex-wrap: wrap;
+  }
+
+  .filter-checkbox {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .table .cell-ellipsis,
+  .data-table .cell-ellipsis {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .modal--wide {
+    width: min(100%, 48rem);
+  }
+
+  .leave-submit-summary > div {
+    grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr);
+  }
+
+  .preview-box,
+  .leave-submit-summary {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-center {
+    padding: 1rem 0.75rem;
+  }
+
+  .card {
+    padding: var(--space-3);
+  }
+
+  .page-toolbar__actions .btn {
+    flex: 1 1 100%;
+  }
 }

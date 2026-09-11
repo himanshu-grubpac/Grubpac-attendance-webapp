@@ -1,12 +1,11 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { UndoAction } from '../models/UndoAction.js';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
 import { LeaveRequest, LEAVE_REQUEST_POPULATE } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
-import { Role } from '../models/Role.js';
 import { evaluateGeoAttendance, getOfficeSettings } from './geoService.js';
 import {
   evaluateCheckInPolicy,
@@ -266,6 +265,35 @@ export async function getTodayStatus(userId) {
   return status;
 }
 
+/**
+ * Transitive report subtree (active users only) under the given roots.
+ * Breadth-first with a shared visited set, so reporting-line cycles in bad
+ * data terminate instead of looping forever. Returns ObjectIds, roots
+ * excluded unless reachable again through another path (callers filter).
+ */
+export async function collectReportSubtreeIds(roots, seen = new Set()) {
+  const collected = [];
+  let frontier = (roots ?? []).map((id) => id.toString()).filter((id) => !seen.has(id));
+  for (const id of frontier) seen.add(id);
+  while (frontier.length > 0) {
+    const batch = await User.find({
+      reportingManagerId: { $in: frontier.map((id) => new mongoose.Types.ObjectId(id)) },
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    frontier = [];
+    for (const user of batch) {
+      const idStr = user._id.toString();
+      if (seen.has(idStr)) continue;
+      seen.add(idStr);
+      collected.push(user._id);
+      frontier.push(idStr);
+    }
+  }
+  return collected;
+}
+
 export async function getTeamTodayStatusService(actor, permissions, options = {}) {
   const paginate = options.paginate === true;
   const page = Number.isInteger(options.page) && options.page > 0 ? options.page : 1;
@@ -288,34 +316,25 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     const employees = await User.find({ isActive: true }).select('_id').lean();
     userIds = employees.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      actor,
-      permissions,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
-    let baseIds;
-    if (scopedIds === null) {
-      baseIds = (await User.find({ isActive: true }).select('_id').lean()).map((e) => e._id);
-    } else {
-      baseIds = scopedIds;
+    // Team strip scope: the actor's full report subtree (transitive) plus,
+    // when the actor reports to a superior, that superior and the superior's
+    // whole subtree (siblings at any depth). Other branches of the company —
+    // including unrelated reporting managers — are never included.
+    const actorIdStr = actor._id.toString();
+    const seen = new Set();
+    const downIds = await collectReportSubtreeIds([actor._id], seen);
+    let upIds = [];
+    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
+    const bossId = actorDoc?.reportingManagerId ?? null;
+    if (bossId) {
+      // NOTE: do not pre-add bossId to `seen` — collectReportSubtreeIds
+      // filters roots against it, which would prune the entire traversal.
+      upIds = [bossId, ...(await collectReportSubtreeIds([bossId], seen))];
     }
-    // Reporting managers also see the status of every reporting manager in the company
-    // (their own team is already covered above; this adds the other teams' managers only).
-    const managerIds = [];
-    const rmRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER })
-      .select('_id')
-      .lean();
-    if (rmRole) {
-      const rmUsers = await User.find({ isActive: true, roleId: rmRole._id })
-        .select('_id')
-        .lean();
-      managerIds.push(...rmUsers.map((u) => u._id));
-    }
-    const combined = new Set([
-      ...baseIds.map((id) => id.toString()),
-      ...managerIds.map((id) => id.toString()),
-    ]);
+    // Dedupe (cycle-safe) and exclude the actor: the strip shows the team,
+    // and the actor's own status already lives in the dashboard hero.
+    const combined = new Set([...downIds, ...upIds].map((id) => id.toString()));
+    combined.delete(actorIdStr);
     userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id));
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
