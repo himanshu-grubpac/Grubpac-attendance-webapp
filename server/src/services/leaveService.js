@@ -38,9 +38,8 @@ import {
 import { auditLog } from '../utils/auditLog.js';
 import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
-  isUserInTeamScope,
   resolveLeaveApprovalUserIds,
-  resolveTeamScopedUserIds,
+  resolveLeaveTeamUserIds,
 } from './teamScopeService.js';
 import { validateLeaveApplyDeadline } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
@@ -2062,12 +2061,8 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
       // unscoped
     } else {
-      const reportIds = await resolveTeamScopedUserIds(
-        actor,
-        permissions,
-        PERMISSIONS.LEAVE_READ_ALL,
-        PERMISSIONS.LEAVE_READ_TEAM,
-      );
+      // Direct reports (+ delegate chain) only — never managed departments.
+      const reportIds = await resolveLeaveTeamUserIds(actor);
       filter.userId = { $in: reportIds ?? [] };
     }
   } else if (scope === 'all') {
@@ -2077,29 +2072,19 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   if (query.userId) {
-    const targetId = query.userId.toString();
-    if (targetId !== actor._id.toString()) {
-      // The scope filter above never authorizes cross-user reads on its own:
-      // require READ_ALL, team scope, or approval-queue membership for the
-      // target, otherwise any employee could enumerate anyone's requests.
-      const [inTeamScope, approvalIds] = await Promise.all([
-        isUserInTeamScope(
-          actor,
-          permissions,
-          PERMISSIONS.LEAVE_READ_ALL,
-          PERMISSIONS.LEAVE_READ_TEAM,
-        ),
-        resolveLeaveApprovalUserIds(actor),
-      ]);
-      const inApprovalScope = (approvalIds ?? []).some(
-        (id) => id.toString() === targetId,
-      );
-      if (
-        !hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL) &&
-        !inTeamScope &&
-        !inApprovalScope
-      ) {
-        throwError('You do not have permission to view this user\u2019s leave requests.', 403);
+    // An explicit userId filter must never widen the caller's scope: without
+    // LEAVE_READ_ALL it is confined to self ('mine') or the actor's reports
+    // ('team' / 'approvals'). Without this, any LEAVE_READ holder could read
+    // anyone's requests via ?userId=.
+    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+      const allowedIds =
+        scope === 'approvals'
+          ? await resolveLeaveApprovalUserIds(actor)
+          : scope === 'team'
+            ? await resolveLeaveTeamUserIds(actor)
+            : [actor._id];
+      if (!allowedIds.map(String).includes(String(query.userId))) {
+        throwError("You are not authorized to view this user's leave requests.", 403);
       }
     }
     filter.userId = query.userId;
@@ -2175,17 +2160,15 @@ export async function getTeamCalendar(actor, permissions, query) {
   const calendarStart = startOfDayIST(start);
   const calendarEnd = endOfDayIST(end);
 
+  // Team scope is always enforced for non-read-all callers; an explicit
+  // departmentId only narrows within the actor's reports, never widens.
   const userFilter = { isActive: true };
+  if (!canViewAllLeave) {
+    const scopedIds = await resolveLeaveTeamUserIds(actor);
+    userFilter._id = { $in: scopedIds ?? [] };
+  }
   if (query.departmentId) {
     userFilter.departmentId = query.departmentId;
-  } else if (!canViewAllLeave) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      actor,
-      permissions,
-      PERMISSIONS.LEAVE_READ_ALL,
-      PERMISSIONS.LEAVE_READ_TEAM,
-    );
-    userFilter._id = { $in: scopedIds ?? [] };
   }
 
   const users = await User.find(userFilter).select('name email departmentId');

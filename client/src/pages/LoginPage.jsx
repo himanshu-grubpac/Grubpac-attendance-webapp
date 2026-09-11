@@ -155,17 +155,17 @@ export default function LoginPage() {
                 placeholder="Enter your password or PIN"
                 maxLength={128}
               />
-              <p className="field-hint">
-                <button
-                  type="button"
-                  className="login-card__forgot"
-                  onClick={() => setForgotOpen(true)}
-                >
-                  Forgot password?
-                </button>
-              </p>
               <FieldError message={fieldErrors.password} />
             </label>
+            <p className="field-hint">
+              <button
+                type="button"
+                className="login-card__forgot"
+                onClick={() => setForgotOpen(true)}
+              >
+                Forgot password?
+              </button>
+            </p>
             <p className="field-hint">
               Employees can also sign in with their 4-digit PIN instead of a password.
             </p>

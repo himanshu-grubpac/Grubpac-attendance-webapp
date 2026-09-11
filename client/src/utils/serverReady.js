@@ -42,7 +42,26 @@ export async function waitForServerReady(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
   return false;
 }
 
-export async function fetchSessionWithRetry(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+/**
+ * Deliberate Lambda cold-start warmer for public page loads.
+ * Fire-and-forget: hits the cheap, auth-free /health check (no DB touch)
+ * so a container is warm by the time the user submits. Errors are swallowed
+ * silently — a down server must never break the login form, and the login
+ * POST itself surfaces the real error. Idempotent (StrictMode double-mount
+ * safe).
+ */
+export function coldStartPing() {
+  api.get('/health', { timeout: 3000 }).catch(() => {
+    // Warmer only — ignore failures.
+  });
+}
+
+/**
+ * Restores the signed-in session on app boot (previously named
+ * fetchSessionWithRetry — renamed to state what it does; the retry loop only
+ * covers local dev-server startup races).
+ */
+export async function restoreSession(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
   if (import.meta.env.DEV) {
     await waitForServerReady(maxWaitMs);
   }

@@ -165,6 +165,9 @@ Manual equivalent:
 ```powershell
 npm run build --prefix client
 aws s3 sync client/dist s3://grubpac-attendance-web-staging-662252246711 --delete
+# index.html must never be edge-cached: it pins the JS bundle hash, and a
+# stale copy serves the previous release's UI after every deploy.
+aws s3 cp client/dist/index.html s3://grubpac-attendance-web-staging-662252246711/index.html --metadata-directive REPLACE --cache-control "no-cache" --content-type "text/html"
 aws cloudfront create-invalidation --distribution-id E2RJX8BNEIE0D --paths "/*"
 ```
 
@@ -174,6 +177,9 @@ aws cloudfront create-invalidation --distribution-id E2RJX8BNEIE0D --paths "/*"
 cd client
 npm run build
 aws s3 sync dist s3://grubpac-attendance-web-662252246711 --delete
+# index.html must never be edge-cached: it pins the JS bundle hash, and a
+# stale copy serves the previous release's UI after every deploy.
+aws s3 cp dist/index.html s3://grubpac-attendance-web-662252246711/index.html --metadata-directive REPLACE --cache-control "no-cache" --content-type "text/html"
 aws cloudfront create-invalidation --distribution-id E2RTSX0V53UZVH --paths "/*"
 ```
 

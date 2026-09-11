@@ -13,7 +13,7 @@ import {
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
 import { authApi } from '../services/api.js';
-import { fetchSessionWithRetry } from '../utils/serverReady.js';
+import { coldStartPing, restoreSession } from '../utils/serverReady.js';
 import { resolveLoginPortal } from '../config/nav.js';
 
 const AuthContext = createContext(null);
@@ -54,6 +54,22 @@ function deepLinkPortal() {
   if (pathname.startsWith('/admin/')) return 'admin';
   if (pathname.startsWith('/employee/')) return 'employee';
   return null;
+}
+
+/**
+ * Public routes never need a session restore — unless this browser has a
+ * stored login portal (i.e. someone signed in here before), in which case a
+ * session cookie may still be alive and must be validated so LoginPage can
+ * bounce already-authenticated users to their dashboard. Skipping the
+ * speculative /auth/me call avoids pointless 401s (and their console noise)
+ * on every login-page reload.
+ */
+function canSkipSessionRestore() {
+  if (typeof window === 'undefined') return false;
+  const { pathname } = window.location;
+  const isPublic =
+    pathname === '/' || pathname === '/login' || pathname.startsWith('/reset-password');
+  return isPublic && !readStoredLoginPortal();
 }
 
 export function AuthProvider({ children }) {
@@ -110,7 +126,17 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false;
 
-    fetchSessionWithRetry()
+    if (canSkipSessionRestore()) {
+      // No session to restore — warm the server for the coming login instead
+      // of probing /auth/me into a 401.
+      coldStartPing();
+      setUser(null);
+      setLoginPortal(null);
+      setLoading(false);
+      return undefined;
+    }
+
+    restoreSession()
       .then(({ user: currentUser }) => {
         if (cancelled) return;
         setUser(currentUser);
