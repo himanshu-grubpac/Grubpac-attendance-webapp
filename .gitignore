@@ -6,7 +6,9 @@ node_modules/
 .env.*
 !.env.example
 !.env.staging.example
+!.env.preprod.example
 server/.env
+server/.env.preprod
 client/.env
 client/.env.*
 !client/.env.example
@@ -19,6 +21,7 @@ coverage/
 lambda-package/
 samconfig.staging.toml
 samconfig.production.toml
+samconfig.preprod.toml
 server/.env.production
 # Logs & OS
 *.log
