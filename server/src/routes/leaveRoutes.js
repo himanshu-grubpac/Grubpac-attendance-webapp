@@ -24,6 +24,7 @@ import {
   deleteHolidayCategory,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
+  getApprovalsPendingCountsHandler,
   getLeaveBalances,
   getLeaveRequestHandler,
   getMyLeaveBalances,
@@ -152,6 +153,11 @@ router.post(
   requirePermission(PERMISSIONS.LEAVE_APPLY),
   idempotencyMiddleware,
   asyncHandler(createLeaveRequestHandler),
+);
+router.get(
+  '/requests/pending-counts',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(getApprovalsPendingCountsHandler),
 );
 router.get(
   '/requests/:id',

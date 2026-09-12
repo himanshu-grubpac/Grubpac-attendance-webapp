@@ -27,11 +27,17 @@ describe('leave module navigation', () => {
     expect(items.some((item) => item.label === 'Apply leave / WFH')).toBe(false);
   });
 
-  it('shows Comp off requests to approvers under admin Leaves', () => {
+  it('unifies approver queues under a single Pending Requests entry', () => {
     const items = getVisibleNavItems(MANAGER, 'admin').filter((item) => item.section === 'Leaves');
-    const compOff = items.find((item) => item.to === '/admin/leave/comp-off');
-    expect(compOff).toBeDefined();
-    expect(compOff.label).toBe('Comp off requests');
-    expect(compOff.permission).toBe(PERMISSIONS.LEAVE_APPROVE);
+    // No standalone comp-off entry — the three queues share one tab bar.
+    expect(items.some((item) => item.to === '/admin/leave/comp-off')).toBe(false);
+    const requests = items.find((item) => item.to === '/admin/leave/approvals');
+    expect(requests).toBeDefined();
+    expect(requests.label).toBe('Pending Requests');
+    expect(requests.permission).toBe(PERMISSIONS.LEAVE_APPROVE);
+    expect(requests.badge).toBe('approvals');
+    expect(requests.matchPrefixes).toEqual(
+      expect.arrayContaining(['/admin/leave/approvals', '/admin/leave/comp-off']),
+    );
   });
 });

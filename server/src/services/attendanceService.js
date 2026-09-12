@@ -39,6 +39,7 @@ import {
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { createNotification } from './notificationService.js';
+import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -183,6 +184,21 @@ export function isLeaveDecisionAwaitingFinalization(decisionUndoExpiresAt, now =
   return Number.isFinite(expiresAt) && Number.isFinite(nowMs) && expiresAt > nowMs;
 }
 
+/**
+ * Whether the user holds an approved comp-off request covering the IST day.
+ * Only meaningful on weekends/holidays (the comp-off gate's domain) — on
+ * working days an approved comp-off never changes check-in behavior.
+ */
+async function hasApprovedCompOffForToday(userId, office, istToday, session = null) {
+  const ref = parseDateInputAsISTDay(istToday) ?? new Date();
+  const nonWorkingDay =
+    isWeekendIST(ref, office.weekendDays) ||
+    (await getHolidayMapForYear(getISTYear(ref))).has(istToday);
+  if (!nonWorkingDay) return false;
+  const compOff = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session);
+  return Boolean(compOff);
+}
+
 function buildTodayStatus(
   records,
   office,
@@ -191,6 +207,7 @@ function buildTodayStatus(
   approvedLeaveToday = null,
   wfhPendingToday = false,
   wfhApprovalPendingToday = false,
+  compOffApprovedToday = false,
 ) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
@@ -205,6 +222,7 @@ function buildTodayStatus(
     wfhApprovedToday,
     wfhPendingToday,
     wfhApprovalPendingToday,
+    compOffApprovedToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
     office: {
@@ -255,6 +273,7 @@ export async function getTodayStatus(userId) {
   const wfhPendingToday = wfhRequestToday?.status === 'pending';
   const wfhApprovalPendingToday =
     wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
+  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday);
   const status = buildTodayStatus(
     records,
     office,
@@ -263,6 +282,7 @@ export async function getTodayStatus(userId) {
     approvedLeaveToday,
     wfhPendingToday,
     wfhApprovalPendingToday,
+    compOffApprovedToday,
   );
   status.undo = await getUndoAvailability(userId);
   return status;
@@ -647,6 +667,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       let wfhApprovalPendingToday = false;
       let wfhRequestToday = null;
       let approvedLeaveToday = null;
+      let compOffApprovedToday = false;
       if (type === 'check_in') {
         [wfhRequestToday, approvedLeaveToday] = await Promise.all([
           findWfhRequestForIstDate(userId, istToday),
@@ -656,6 +677,13 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         wfhPendingToday = wfhRequestToday?.status === 'pending';
         wfhApprovalPendingToday =
           wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
+        // Approved comp-off days (weekends/holidays) behave like pending WFH
+        // for mode selection: the employee is sanctioned to work, so location
+        // decides OFC vs WFH instead of the office geofence blocking remote
+        // check-ins outright. Weekdays are untouched (office default stands).
+        if (!wfhApprovedToday && !wfhPendingToday) {
+          compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday, session);
+        }
       }
       const today = buildTodayStatus(
         records,
@@ -665,6 +693,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         approvedLeaveToday,
         wfhPendingToday,
         wfhApprovalPendingToday,
+        compOffApprovedToday,
       );
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
       let attendanceMode;
@@ -677,6 +706,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         } else if (wfhPendingToday) {
           // Pending WFH → location decides the mode: inside the office radius is
           // OFC* (marked red until approved), anywhere else is WFH*.
+          const geoPreview = evaluateGeoAttendance({
+            ...payload,
+            office,
+            enforceOfficeRadius: false,
+          });
+          const insideOffice =
+            Number.isFinite(geoPreview.distanceMeters) &&
+            geoPreview.distanceMeters <= office.radiusMeters;
+          attendanceMode = payload.attendanceMode ?? (insideOffice ? 'office' : 'wfh');
+        } else if (compOffApprovedToday) {
+          // Approved comp-off day → same location-decides rule: inside the
+          // radius checks in as office, anywhere else as WFH (geofence no
+          // longer blocks remote weekend/holiday work outright).
           const geoPreview = evaluateGeoAttendance({
             ...payload,
             office,
@@ -1359,8 +1401,13 @@ function serializeAdminAttendanceListRecord(record) {
   };
 }
 
-/** Synthetic geo fields for admin-created attendance (no live device location). */
-export { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
+/**
+ * Synthetic geo fields for admin-created attendance (no live device
+ * location). Re-exported for tests; imported (not `export ... from`) so the
+ * binding is usable inside this module — a bare re-export leaves the local
+ * name unbound and every admin upsert call throws ReferenceError (500).
+ */
+export { buildAdminSyntheticGeoFields };
 
 /**
  * Returns a block reason when admins must not create attendance for dayKey, else null.

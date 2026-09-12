@@ -18,6 +18,13 @@ export const createCompOffRequestSchema = z
     path: ['endDate'],
   });
 
+// Backdate policy (enforced server-side in compOffService.createCompOffRequest):
+// startDate must fall within the current IST calendar month or later — past
+// dates within this month are allowed for already-worked weekends/holidays,
+// previous-month dates are rejected. No schema-level date-floor here so the
+// rule stays single-sourced in the service (IST-aware); the client picker
+// mirrors it with a current-month-start min.
+
 /**
  * Approve/assess remarks are optional; reject REQUIRES a non-empty remark
  * (enforced in the service, matching the leave decision flow).

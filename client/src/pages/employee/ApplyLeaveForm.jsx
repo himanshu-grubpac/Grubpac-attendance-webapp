@@ -3,9 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createLeaveRequestSchema } from '@shared/validation/leave.js';
 import { WFH_LEAVE_TYPE_CODE } from '@shared/utils/wfhPolicy.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
-import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import { showFormError, buildDocCertificateError } from '../../utils/formErrors.js';
 import {
   buildApplyLeaveNotice,
   buildNegativeBalanceWarning,
@@ -57,8 +58,8 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
   // Admin-declared holidays (YYYY-MM-DD → name) for greying out non-working
-  // days in the pickers (leave mode only — WFH follows its own flow).
-  // Fail-open: an empty set simply disables nothing.
+  // days in the pickers. Both modes: the server rejects zero-working-day
+  // ranges for WFH exactly like leave. Fail-open: an empty set disables nothing.
   const [holidayDates, setHolidayDates] = useState([]);
   const [holidayNames, setHolidayNames] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -66,6 +67,7 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
   // click in the same tick, which would otherwise fire a duplicate POST with
   // a fresh idempotency key and surface a confusing overlap 400.
   const submittingRef = useRef(false);
+  const alertRef = useRef(null);
   const [wfhDisabled, setWfhDisabled] = useState(false);
   const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
@@ -110,8 +112,8 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       .then((data) => setBalances(data.balances ?? []))
       .catch(() => setBalances([]));
 
-    if (isWfhMode) return;
-    // Leave ranges may span the year boundary, so cover this year and next.
+    // Ranges may span the year boundary, so cover this year and next — in
+    // both modes (WFH weekends/holidays are rejected server-side too).
     Promise.all([
       leaveApi.listHolidays({ year }).catch(() => ({ holidays: [] })),
       leaveApi.listHolidays({ year: year + 1 }).catch(() => ({ holidays: [] })),
@@ -172,6 +174,7 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       return;
     }
 
+    const rangeKey = `${form.startDate}|${form.endDate}|${form.halfDay || ''}`;
     const timer = setTimeout(() => {
       leaveApi
         .previewDays({
@@ -179,7 +182,10 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
           endDate: form.endDate,
           ...(form.halfDay ? { halfDay: form.halfDay } : {}),
         })
-        .then(setPreview)
+        // Tag which range this preview belongs to: while debouncing or in
+        // flight, `preview` may still describe the previous range, so callers
+        // must check currency via previewIsCurrent below before acting on it.
+        .then((data) => setPreview({ ...data, _rangeKey: rangeKey }))
         .catch(() => setPreview(null));
     }, 300);
 
@@ -224,12 +230,18 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
     // the admin/exception API flow; the UI enforces the split client-side).
     const selectedCode = types.find((item) => item.id === form.leaveTypeId)?.code ?? '';
     if (!isWfhMode && String(selectedCode).toUpperCase() === WFH_LEAVE_TYPE_CODE) {
-      setError('Work From Home requests must be submitted from Apply WFH.');
+      showFormError({
+        setError,
+        alertRef,
+        message: 'Work From Home requests must be submitted from Apply WFH.',
+      });
+      submittingRef.current = false;
       setSubmitting(false);
       return;
     }
     if (isWfhMode && !form.leaveTypeId) {
       setFieldErrors({ leaveTypeId: 'Select a type to continue.' });
+      submittingRef.current = false;
       setSubmitting(false);
       return;
     }
@@ -243,6 +255,63 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
     const validation = validateForm(createLeaveRequestSchema, payload);
     if (!validation.data) {
       setFieldErrors(validation.errors);
+      submittingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    // The debounced preview may be stale or missing at submit time (fast
+    // date-pick → submit, or a failed preview fetch). Refresh synchronously
+    // so a weekend-only range can never slip through to a dead server round
+    // trip. On refresh failure fall through: the server remains the source of
+    // truth and its message surfaces via showFormError below. Applies to both
+    // modes — the server rejects zero-working-day WFH ranges identically.
+    let checkPreview = preview;
+    let checkCurrent = previewIsCurrent;
+    if (form.startDate && form.endDate && form.endDate >= form.startDate) {
+      try {
+        const fresh = await leaveApi.previewDays({
+          startDate: form.startDate,
+          endDate: form.endDate,
+          ...(form.halfDay ? { halfDay: form.halfDay } : {}),
+        });
+        checkPreview = {
+          ...fresh,
+          _rangeKey: `${form.startDate}|${form.endDate}|${form.halfDay || ''}`,
+        };
+        setPreview(checkPreview);
+        checkCurrent = true;
+      } catch {
+        // Preview unavailable — proceed to server validation.
+      }
+    }
+    if (checkCurrent && Number(checkPreview?.days ?? 0) === 0) {
+      showFormError({
+        setError,
+        alertRef,
+        message:
+          'The selected dates contain no working days. Leave can only be applied on working days (Mon–Fri, excluding holidays).',
+      });
+      submittingRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+
+    // Client mirror of the server's medical-certificate rule: long sick leave
+    // without a certificate URL is always rejected. Block early with the
+    // requirement inline instead of a dead submit round trip.
+    const docBlockMessage = buildDocCertificateError({
+      isWfhMode,
+      leaveTypeCode: selectedCode,
+      threshold: selectedPolicy?.requireDocAfterConsecutiveDays ?? null,
+      requestedDays: Number(checkPreview?.days ?? 0),
+      previewIsCurrent: checkCurrent,
+      halfDay: form.halfDay,
+      hasDocument: Boolean(form.documentUrl?.trim()),
+    });
+    if (docBlockMessage) {
+      showFormError({ setError, alertRef, message: docBlockMessage });
+      submittingRef.current = false;
       setSubmitting(false);
       return;
     }
@@ -289,7 +358,15 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
         .then((data) => setBalances(data.balances ?? []))
         .catch(() => {});
     } catch (err) {
-      setError(getErrorMessage(err));
+      // Server field errors (e.g. Zod shape) map onto fields; the top alert
+      // is scrolled into view so the failure is never silently below the fold.
+      showFormError({
+        setError,
+        setFieldErrors,
+        alertRef,
+        message: getErrorMessage(err),
+        fieldErrors: getFieldErrors(err),
+      });
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -335,6 +412,16 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
 
   const selectedBalance = balances.find((item) => item.leaveTypeId === form.leaveTypeId);
   const requestedDays = Number(preview?.days ?? 0);
+  // True only when the resolved preview belongs to the currently selected
+  // range: a stale (previous-range) preview must never warn or block.
+  const rangeKey = `${form.startDate ?? ''}|${form.endDate ?? ''}|${form.halfDay ?? ''}`;
+  const previewIsCurrent = Boolean(
+    preview &&
+      preview._rangeKey === rangeKey &&
+      form.startDate &&
+      form.endDate &&
+      form.endDate >= form.startDate,
+  );
   const negativeBalanceWarning =
     selectedType && preview && requestedDays > 0
       ? buildNegativeBalanceWarning({
@@ -367,7 +454,7 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
   return (
     <div className="page page--form">
       {error ? (
-        <div className="page-alerts">
+        <div className="page-alerts" ref={alertRef} tabIndex={-1}>
           <div className="alert alert--error">{error}</div>
         </div>
       ) : null}
@@ -411,6 +498,12 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
           )}
         </div>
 
+        {selectedType?.description ? (
+          <p className="form-grid__full muted small" role="note" aria-label={`${selectedType.code} policy description`}>
+            {selectedType.description}
+          </p>
+        ) : null}
+
         <div className="form-grid__full form-grid form-grid--dates">
         <label className="form-field--sm">
           <span className="label">Start date (IST)</span>
@@ -425,9 +518,9 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
               }))
             }
             aria-label="Start date"
-            disableWeekends={!isWfhMode}
-            disabledDates={!isWfhMode ? holidayDates : []}
-            disabledDateTitles={!isWfhMode ? holidayNames : {}}
+            disableWeekends
+            disabledDates={holidayDates}
+            disabledDateTitles={holidayNames}
           />
           <FieldError message={fieldErrors.startDate} />
         </label>
@@ -440,13 +533,16 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
             min={form.startDate || undefined}
             disabled={Boolean(form.halfDay)}
             aria-label="End date"
-            disableWeekends={!isWfhMode}
-            disabledDates={!isWfhMode ? holidayDates : []}
-            disabledDateTitles={!isWfhMode ? holidayNames : {}}
+            disableWeekends
+            disabledDates={holidayDates}
+            disabledDateTitles={holidayNames}
           />
           <FieldError message={fieldErrors.endDate} />
         </label>
         </div>
+        <p className="muted small form-grid__full" role="note">
+          Weekends and company holidays are disabled — requests can only start or end on a working day.
+        </p>
 
         <label className="form-grid__full">
           <span className="label">Duration</span>

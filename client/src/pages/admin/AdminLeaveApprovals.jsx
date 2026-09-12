@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
@@ -13,6 +13,13 @@ import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
+import RequestsTabs from '../../components/RequestsTabs.jsx';
+
+const REQUEST_TABS = ['leave', 'wfh', 'compoff'];
+
+function tabFromParam(value) {
+  return REQUEST_TABS.includes(value) ? value : 'leave';
+}
 
 const APPROVALS_PAGE_SIZE = 20;
 
@@ -256,6 +263,7 @@ function QueueSkeleton() {
 
 export default function AdminLeaveApprovals() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess, showError } = useToast();
   const { showActionPopup } = useActionPopup();
@@ -274,6 +282,7 @@ export default function AdminLeaveApprovals() {
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
   const [queueStatus, setQueueStatus] = useState('pending');
+  const [requestTab, setRequestTab] = useState(() => tabFromParam(searchParams.get('tab')));
 
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
   const [cancelModal, setCancelModal] = useState({ open: false, item: null, comment: '' });
@@ -293,10 +302,12 @@ export default function AdminLeaveApprovals() {
   const yearFilterRef = useRef(yearFilter);
   const monthPartFilterRef = useRef(monthPartFilter);
   const queueStatusRef = useRef(queueStatus);
+  const requestTabRef = useRef(requestTab);
   employeeFilterRef.current = employeeFilter;
   yearFilterRef.current = yearFilter;
   monthPartFilterRef.current = monthPartFilter;
   queueStatusRef.current = queueStatus;
+  requestTabRef.current = requestTab;
 
   const monthFilter = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
@@ -337,9 +348,8 @@ export default function AdminLeaveApprovals() {
     nextYear = yearFilterRef.current,
     nextMonthPart = monthPartFilterRef.current,
     nextQueueStatus = queueStatusRef.current,
+    nextTab = requestTabRef.current,
     quiet = false,
-
-
   } = {}) => {
     const nextMonth = toMonthFilterValue(nextYear, nextMonthPart);
     if (!quiet) {
@@ -357,6 +367,9 @@ export default function AdminLeaveApprovals() {
       if (nextEmployee) params.userId = nextEmployee;
       if (nextYear) params.year = nextYear;
       if (nextMonthPart) params.month = `${nextYear}-${nextMonthPart}`;
+      // Leave/WFH tabs split the queue server-side so pagination stays exact.
+      if (nextTab === 'wfh') params.leaveTypeCode = 'WFH';
+      if (nextTab === 'leave') params.excludeLeaveTypeCode = 'WFH';
       const data = await leaveApi.listRequests(params);
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);
@@ -393,12 +406,40 @@ export default function AdminLeaveApprovals() {
 
   useEffect(() => {
     setExpandedIds({});
-  }, [page, employeeFilter, monthFilter, queueStatus]);
+  }, [page, employeeFilter, monthFilter, queueStatus, requestTab]);
 
   function handleQueueStatusChange(value) {
     setQueueStatus(value);
     loadRequests({ nextPage: 1, nextQueueStatus: value });
   }
+
+  function handleRequestTabChange(tab) {
+    if (tab === 'compoff') {
+      navigate('/admin/leave/comp-off');
+      return;
+    }
+    setRequestTab(tab);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'leave') {
+        next.delete('tab');
+      } else {
+        next.set('tab', tab);
+      }
+      return next;
+    }, { replace: true });
+    loadRequests({ nextPage: 1, nextTab: tab });
+  }
+
+  // Keep the tab in sync when arriving via a ?tab= deep link.
+  useEffect(() => {
+    const tab = tabFromParam(searchParams.get('tab'));
+    if (tab !== 'compoff' && tab !== requestTabRef.current) {
+      setRequestTab(tab);
+      loadRequests({ nextPage: 1, nextTab: tab });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
 
 
@@ -630,6 +671,7 @@ export default function AdminLeaveApprovals() {
 
   return (
     <div className="page page--approvals">
+      <RequestsTabs active={requestTab} onSelect={handleRequestTabChange} />
       <section className="approvals-stats" aria-label="Approval queue summary">
         <div className="approvals-stats__grid">
           {loading && !pagination
@@ -852,7 +894,7 @@ export default function AdminLeaveApprovals() {
                                   mobileAction === 'take-action' ? (
                                     <button
                                       type="button"
-                                      className="btn btn-primary btn-sm approval-card__action"
+                                      className="btn btn-primary btn-sm btn--compact approval-card__action"
                                       disabled={busy || Boolean(item.pendingDecision)}
                                       onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
                                     >
@@ -861,7 +903,7 @@ export default function AdminLeaveApprovals() {
                                   ) : (
                                     <button
                                       type="button"
-                                      className="btn btn-danger btn-sm approval-card__action"
+                                      className="btn btn-danger btn-sm btn--compact approval-card__action"
                                       disabled={busy || Boolean(item.pendingDecision)}
                                       onClick={() => setCancelModal({ open: true, item, comment: '' })}
                                     >

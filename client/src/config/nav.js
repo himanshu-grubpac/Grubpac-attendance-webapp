@@ -135,14 +135,8 @@ export const NAV_ITEMS = [
     section: 'Leaves',
     portal: 'admin',
     permission: PERMISSIONS.LEAVE_APPROVE,
-  },
-  {
-    to: '/admin/leave/comp-off',
-    label: 'Comp off requests',
-    icon: '◈',
-    section: 'Leaves',
-    portal: 'admin',
-    permission: PERMISSIONS.LEAVE_APPROVE,
+    matchPrefixes: ['/admin/leave/approvals', '/admin/leave/comp-off'],
+    badge: 'approvals',
   },
   {
     to: '/admin/leave/streaks',
@@ -290,6 +284,13 @@ export function resolveNavItemActive(to, { isActive, location }) {
     return childSegment !== 'register' && childSegment !== 'bulk-upload';
   }
 
+  // Unified Requests area: the comp-off queue lives under the Pending
+  // Requests entry, so it stays highlighted there too.
+  if (to === '/admin/leave/approvals') {
+    const { pathname } = location;
+    if (pathname === to || pathname.startsWith('/admin/leave/comp-off')) return true;
+  }
+
   return isActive;
 }
 
@@ -370,8 +371,9 @@ const ADMIN_BOTTOM_NAV = [
     label: 'Pending Requests',
     shortLabel: 'Pending',
     icon: '✓',
-    matchPrefixes: ['/admin/leave/approvals'],
+    matchPrefixes: ['/admin/leave/approvals', '/admin/leave/comp-off'],
     permission: PERMISSIONS.LEAVE_APPROVE,
+    badge: 'approvals',
   },
   {
     key: 'attendance',

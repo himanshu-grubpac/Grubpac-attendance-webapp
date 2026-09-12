@@ -403,8 +403,13 @@ export async function createCompOffRequest(userId, payload) {
   }
 
   const todayKey = getISTDateInputValue();
-  if (payload.startDate < todayKey) {
-    throwError('Comp off cannot be requested for past dates.');
+  // Same-calendar-month backdate rule (IST): already-worked weekends/holidays
+  // earlier this month are requestable; previous-month dates are rejected.
+  // Future dates stay allowed (pre-approval for planned work). The fully-
+  // eligible-range check below still enforces weekend/holiday-only ranges.
+  const firstOfMonthKey = `${todayKey.slice(0, 7)}-01`;
+  if (payload.startDate < firstOfMonthKey) {
+    throwError('Comp off can only be requested for dates within the current calendar month or future dates.');
   }
 
   const days = await assertRangeEligible(startDate, endDate);
@@ -1610,4 +1615,20 @@ export async function getCompOffApprovalsCount(actor, permissions) {
     limit: 1,
   });
   return { count: result.pagination.total };
+}
+
+/**
+ * Pending comp-off counts for badges/KPIs: `pending` (awaiting approve/reject)
+ * and `assessment` (worked, awaiting assessment). Scoped like the list;
+ * non-approvers get zeros.
+ */
+export async function getCompOffPendingCounts(actor, permissions) {
+  if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
+    return { pending: 0, assessment: 0 };
+  }
+  const [pendingResult, workedResult] = await Promise.all([
+    listCompOffRequests(actor, permissions, { scope: 'approvals', status: 'pending', page: 1, limit: 1 }),
+    listCompOffRequests(actor, permissions, { scope: 'approvals', status: 'worked', page: 1, limit: 1 }),
+  ]);
+  return { pending: pendingResult.pagination.total, assessment: workedResult.pagination.total };
 }

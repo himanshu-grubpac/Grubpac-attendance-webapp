@@ -235,10 +235,12 @@ export default function EmployeeDashboard() {
       const todayCheckInMode = today?.checkIn?.attendanceMode ?? 'office';
       // With a pending WFH request the employee may check in from anywhere; the
       // mode is decided by location (inside office → office, elsewhere → wfh).
+      // An approved comp-off day behaves the same: sanctioned weekend/holiday
+      // work checks in as office inside the radius, WFH outside it.
       const hasPendingWfh = Boolean(today?.wfhPendingToday);
       const requiresOfficeGeo =
         type === 'check_in'
-          ? !today?.wfhApprovedToday && !hasPendingWfh
+          ? !today?.wfhApprovedToday && !hasPendingWfh && !today?.compOffApprovedToday
           : todayCheckInMode !== 'wfh';
 
       if (requiresOfficeGeo && office) {
@@ -485,6 +487,12 @@ export default function EmployeeDashboard() {
             <div className="dash-shortcuts__list">
               <Link to="/employee/leave/apply" className="dash-shortcuts__item">
                 Apply leave
+              </Link>
+              <Link to="/employee/leave/apply-wfh" className="dash-shortcuts__item">
+                Apply WFH
+              </Link>
+              <Link to="/employee/leave/comp-off" className="dash-shortcuts__item">
+                Request comp off
               </Link>
               <Link to="/employee/history" className="dash-shortcuts__item">
                 Attendance history

@@ -991,6 +991,17 @@ textarea:disabled {
   font-size: 0.8rem;
 }
 
+/* Compact row/card action size — matches the attendance history Edit/Confirm
+   buttons. Auto width, tight padding, small bold label; min-height still comes
+   from .btn-sm so touch targets stay intact. */
+.btn--compact {
+  flex-shrink: 0;
+  padding-inline: 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .btn-lg {
   padding: 0.72rem 1.25rem;
   font-size: 0.95rem;
@@ -5281,6 +5292,92 @@ body::-webkit-scrollbar-thumb {
   font-size: 1.05rem;
   line-height: 1;
   transition: transform var(--transition);
+  position: relative;
+}
+
+.nav-link__badge,
+.bottom-nav__badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-link__badge {
+  margin-left: auto;
+}
+
+/* Unified Requests tabs (Approvals + Comp Off share one tab bar). */
+.requests-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  margin-bottom: var(--space-3);
+  /* Shrink-wrap to the tabs even inside stretch layouts (page grid/flex). */
+  align-self: start;
+  justify-self: start;
+  max-width: 100%;
+}
+
+.requests-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.9rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 2.75rem;
+}
+
+.requests-tabs__tab:hover {
+  color: var(--text-h);
+}
+
+.requests-tabs__tab--active {
+  background: var(--primary);
+  color: var(--primary-text);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.requests-tabs__badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.requests-tabs__tab--active .requests-tabs__badge {
+  background: color-mix(in srgb, #000 22%, transparent);
+  color: #fff;
+}
+
+.bottom-nav__badge {
+  position: absolute;
+  top: -0.3rem;
+  right: calc(50% - 1.4rem);
 }
 
 .bottom-nav__item.active .bottom-nav__icon {
@@ -7184,6 +7281,16 @@ body::-webkit-scrollbar-thumb {
     transform: none;
     max-width: none;
   }
+
+  /* Laptop: toast cards span the full content width (side menu → right
+     scrollbar) as a banner. Mobile/tablet keep the centered compact card.
+     max-width must be lifted too: the global .toast rule caps it at 26rem,
+     which would otherwise strangle width: 100%. */
+  .toast-stack .toast {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+  }
 }
 
 /* Mobile shell: ≤640px */
@@ -7581,6 +7688,19 @@ body::-webkit-scrollbar-thumb {
   .table-wrap--responsive .table tbody td[data-label='Actions']::before,
   .table-wrap--responsive .data-table tbody td[data-label='Actions']::before {
     content: none;
+  }
+
+  /* Uniform compact row actions in mobile cards — same size as the
+     attendance history Edit/Confirm buttons. */
+  .table-wrap--responsive .table tbody td[data-label='Action'] .btn,
+  .table-wrap--responsive .data-table tbody td[data-label='Action'] .btn,
+  .table-wrap--responsive .table tbody td[data-label='Actions'] .btn,
+  .table-wrap--responsive .data-table tbody td[data-label='Actions'] .btn {
+    flex-shrink: 0;
+    padding-inline: 0.45rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    white-space: nowrap;
   }
 }
 
@@ -8555,18 +8675,27 @@ body::-webkit-scrollbar-thumb {
     word-break: break-word;
   }
 
+  /* Pill and action sit adjacent and centered as a pair: their distance
+     mirrors the distance between two cards (0.65rem). */
   .approval-card__footer {
     grid-area: footer;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
+    justify-content: center;
+    gap: 0.65rem;
     min-width: 0;
   }
 
+  /* Card action matches the status pill size: compact pill button. */
   .approval-card__footer .approval-card__action {
     flex: 0 0 auto;
-    min-height: 2.5rem;
+    min-height: 0;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
   }
 
   .approval-row__detail {
@@ -12686,7 +12815,11 @@ body::-webkit-scrollbar-thumb {
 .table-wrap.audit-logs-table-wrap,
 .table-wrap.departments-table-wrap,
 .table-wrap.roles-table-wrap,
-.table-wrap.leave-policies-table-wrap {
+.table-wrap.leave-policies-table-wrap,
+.table-wrap.approvals-table-wrap,
+.table-wrap.salary-table-wrap,
+.table-wrap.help-tickets-table-wrap,
+.table-wrap.today-present-table-wrap {
   scrollbar-gutter: auto;
 }
 
@@ -14001,6 +14134,18 @@ body::-webkit-scrollbar-thumb {
   overflow: hidden;
 }
 
+/* Bare section titles sit directly in the zero-padding panel: inset them
+   like the table content below so they never touch the card edge. */
+.salary-panel > .card__section-title {
+  padding: var(--space-4) var(--space-4) 0;
+  margin-bottom: var(--space-2);
+}
+
+.salary-panel > p.muted {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
 .salary-panel.card--table > .card__toolbar {
   margin: 0;
   padding: var(--space-3) var(--space-4);
@@ -14015,6 +14160,13 @@ body::-webkit-scrollbar-thumb {
   gap: var(--space-3);
 }
 
+/* Breathing room before whatever follows (pills, tables, lists) so the
+   toolbar never touches the next block. Specificity (0,3,0) beats the
+   .card--table > .card__toolbar margin-bottom: 0 rule (0,2,0). */
+.card--table > .card__toolbar.salary-toolbar {
+  margin-bottom: var(--space-3);
+}
+
 .salary-toolbar__filters {
   flex: 1 1 auto;
   min-width: min(100%, 16rem);
@@ -14023,30 +14175,27 @@ body::-webkit-scrollbar-thumb {
   border-bottom: none;
 }
 
+/* Label sits above the year+month pair (matches the Audit Logs filter
+   pattern); the pair wraps and each select shrinks instead of colliding
+   with neighbouring fields at narrow widths. */
 .salary-toolbar__field--period {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+  align-content: start;
   min-width: 0;
-}
-
-.salary-toolbar__field--period .label {
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 .salary-toolbar__period {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
 
 .salary-toolbar__period .select-field {
-  flex: 0 0 9rem;
-  min-width: 9rem;
+  flex: 1 1 8rem;
+  min-width: min(100%, 8rem);
 }
 
 .salary-toolbar__search {
@@ -14854,6 +15003,22 @@ body::-webkit-scrollbar-thumb {
   .audit-logs-table-wrap.table-wrap--responsive .data-table {
     min-width: 0;
   }
+
+  /* Fixed table layout + <colgroup> widths make Chrome shrink-wrap the
+     anonymous row boxes, so flex card rows collapse to content width.
+     Auto layout without column constraints stretches rows full-width,
+     exactly like the other card tables (e.g. leave policies). */
+  .audit-logs-table-wrap.table-wrap--responsive .audit-logs-table {
+    table-layout: auto;
+  }
+
+  .audit-logs-table-wrap.table-wrap--responsive .audit-logs-table > colgroup {
+    display: none;
+  }
+
+  .audit-logs-table-wrap.table-wrap--responsive .audit-logs-table tbody tr {
+    width: 100%;
+  }
 }
 
 /* Today-present toolbar: search + action wrap, never nested */
@@ -14930,11 +15095,19 @@ body::-webkit-scrollbar-thumb {
   min-width: 0;
 }
 
-.approvals-toolbar__period .select-field,
-.salary-toolbar__period .select-field {
-  flex: 0 0 9rem;
-  min-width: 9rem;
-}
+  .approvals-toolbar__period .select-field,
+  .salary-toolbar__period .select-field {
+    flex: 1 1 8rem;
+    min-width: min(100%, 8rem);
+  }
+
+  /* Salary filters stack full-width on mobile (Audit Logs pattern):
+     label above controls, no side-by-side collisions at any width.
+     Specificity (0,4,0) beats the generic 50% card-toolbar rule (0,3,0). */
+  .card--table > .card__toolbar .salary-toolbar__filters .filter-bar__field {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
 .salary-toolbar__search {
   flex: 1 1 min(100%, 14rem);
   min-width: 0;

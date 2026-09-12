@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createCompOffRequestSchema } from '@shared/validation/compOff.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
-import { compOffApi, leaveApi, getErrorMessage } from '../../services/api.js';
+import { compOffApi, leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import { showFormError } from '../../utils/formErrors.js';
 import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
@@ -56,6 +57,7 @@ export default function EmployeeCompOff() {
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
+  const alertRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
   const [requests, setRequests] = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -161,6 +163,9 @@ export default function EmployeeCompOff() {
   const selectedYearSets = [startYear, endYear]
     .filter((year, index, all) => year && all.indexOf(year) === index)
     .map((year) => eligibleByYear[year]);
+  // Same-calendar-month backdate rule (mirrors the server): the picker floor
+  // is the first of the current IST month, not today.
+  const compOffMinDate = useMemo(() => `${getISTDateInputValue().slice(0, 7)}-01`, []);
   const emptyEligible =
     selectedYearSets.length > 0 &&
     selectedYearSets.every((set) => set !== undefined && set.size === 0) &&
@@ -209,7 +214,13 @@ export default function EmployeeCompOff() {
       }
       loadRequests(page);
     } catch (err) {
-      setError(getErrorMessage(err));
+      showFormError({
+        setError,
+        setFieldErrors,
+        alertRef,
+        message: getErrorMessage(err),
+        fieldErrors: getFieldErrors(err),
+      });
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -270,7 +281,7 @@ export default function EmployeeCompOff() {
       }
       loadRequests(page);
     } catch (err) {
-      setError(getErrorMessage(err));
+      showFormError({ setError, alertRef, message: getErrorMessage(err) });
       loadRequests(page);
     }
   }
@@ -297,7 +308,7 @@ export default function EmployeeCompOff() {
   return (
     <div className="page page--form">
       {error ? (
-        <div className="page-alerts">
+        <div className="page-alerts" ref={alertRef} tabIndex={-1}>
           <div className="alert alert--error">{error}</div>
         </div>
       ) : null}
@@ -328,7 +339,7 @@ export default function EmployeeCompOff() {
               <span className="label">Start date (IST)</span>
               <DateField
                 value={form.startDate}
-                min={getISTDateInputValue()}
+                min={compOffMinDate}
                 isDateAllowed={isDateAllowed}
                 onChange={(value) =>
                   setForm((current) => ({
@@ -368,7 +379,8 @@ export default function EmployeeCompOff() {
 
           <p className="form-grid__full muted small">
             Only Saturdays, Sundays, and active holidays can be selected. The full
-            date range must be eligible — weekend/holiday only.
+            date range must be eligible — weekend/holiday only. Past dates within
+            this month are allowed for already-worked weekends/holidays.
           </p>
 
           <div className="form-actions form-actions--sticky">

@@ -10,6 +10,7 @@ const {
   endOfDayIST,
   formatISTDateTime,
   getISTDateInputValue,
+  getISTWeekday,
   startOfDayIST,
 } = await import('../server/src/utils/istDate.js');
 const { startServer } = await import('../server/src/index.js');
@@ -143,6 +144,11 @@ async function main() {
       longitude: OFFICE_LNG,
       radiusMeters: 100,
       maxAccuracyMeters: 50,
+      // The "today" check-in flow below must never hit the comp-off weekend
+      // gate: declare only TOMORROW a weekend so today is always a working
+      // day, whatever weekday the suite runs on. Restored to Sat/Sun before
+      // the sandwich assertions, which need real weekends.
+      weekendDays: [(getISTWeekday() + 1) % 7],
     },
   });
   assert(officeUpdate.response.ok, 'Office settings update works');
@@ -947,6 +953,16 @@ async function main() {
   assert(holidaysList.response.ok, 'Holidays list works');
   assert(Array.isArray(holidaysList.data.holidays), 'Holiday seed/list returns array (empty until Jan publish)');
 
+  // Keys the cancel-date picker must avoid: the create-leave zero-working-
+  // days guard uses real Sat/Sun weekends, so tests that need a working day
+  // must skip weekends AND seeded holidays, whatever day the suite runs on.
+  const holidaysNextYear = await request(`/leave/holidays?year=${policyYear + 1}`, { method: 'GET' });
+  const seededHolidayKeys = new Set(
+    [...(holidaysList.data.holidays ?? []), ...(holidaysNextYear.data.holidays ?? [])].map((h) =>
+      String(h.dateInput ?? h.date ?? '').slice(0, 10),
+    ),
+  );
+
   const managerEmail = `mgr.verify.${Date.now()}@grubpac.test`;
   const managerMobile = `7${String(Date.now()).slice(-9)}`;
   const managerId = await registerTestUser({
@@ -1060,8 +1076,17 @@ async function main() {
   const clBalanceAfter = balancesAfterApprove.data.balances?.find((b) => b.leaveTypeCode === 'CL');
   assert(clBalanceAfter?.used === 2, 'Approved leave increments used balance');
 
-  // Cancellation is blocked once leave dates pass, so use future dates.
-  const pendingCancelStart = getISTDateInputValue(new Date(Date.now() + 35 * 86400000));
+  // Cancellation is blocked once leave dates pass, so use future dates. The
+  // single-day range must contain a working day (real Sat/Sun weekends +
+  // seeded holidays): push forward from +35d until one qualifies.
+  let pendingCancelDate = new Date(Date.now() + 35 * 86400000);
+  for (let i = 0; i < 14; i += 1) {
+    const key = getISTDateInputValue(pendingCancelDate);
+    const weekday = getISTWeekday(pendingCancelDate);
+    if (weekday !== 0 && weekday !== 6 && !seededHolidayKeys.has(key)) break;
+    pendingCancelDate = new Date(pendingCancelDate.getTime() + 86400000);
+  }
+  const pendingCancelStart = getISTDateInputValue(pendingCancelDate);
   const pendingCancelEnd = pendingCancelStart;
   const pendingLeave = await request('/leave/requests', {
     method: 'POST',
@@ -1445,6 +1470,30 @@ async function main() {
   const salaryMonth = getISTDateInputValue().slice(0, 7);
   const salaryEffective = `${new Date().getFullYear()}-01-01`;
 
+  // presentDays only credits WORKING days (real Sat/Sun weekends), so a
+  // same-day check-in cannot satisfy the assert on weekends: seed one
+  // allowed Present record on the most recent IST weekday instead.
+  const weekdaySeed = await request('/admin/attendance/records', {
+    method: 'POST',
+    body: (() => {
+      const day = new Date();
+      for (let i = 0; i < 10; i += 1) {
+        const weekday = getISTWeekday(day);
+        if (weekday !== 0 && weekday !== 6) break;
+        day.setTime(day.getTime() - 86400000);
+      }
+      return {
+        userId: employeeId,
+        dayKey: getISTDateInputValue(day),
+        checkInTime: '09:30',
+        checkOutTime: '18:00',
+        statusCode: 'P',
+        attendanceMode: 'office',
+      };
+    })(),
+  });
+  assert(weekdaySeed.response.ok, 'Admin can seed a weekday Present record for salary assert');
+
   const setSalary = await request(`/salary/users/${employeeId}`, {
     method: 'PATCH',
     body: { monthlySalary: 50000, salaryEffectiveFrom: salaryEffective },
@@ -1581,6 +1630,9 @@ async function main() {
       longitude: OFFICE_LNG,
       radiusMeters: 100,
       maxAccuracyMeters: 50,
+      // Restore real weekends: the Fri–Mon sandwich assertions below need
+      // Sat/Sun as weekend days.
+      weekendDays: [0, 6],
       sandwichLeaveEnabled: true,
     },
   });

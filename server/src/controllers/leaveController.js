@@ -68,10 +68,12 @@ import {
   autoLoginByDecisionToken,
   formatLeaveDateText,
   getTeamCalendar,
+  getLeavePendingCounts,
   listLeaveRequests,
   loadLeaveRequest,
   previewLeaveDays,
 } from '../services/leaveService.js';
+import { getCompOffPendingCounts } from '../services/compOffService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -108,6 +110,7 @@ export async function updateLeaveType(req, res) {
   }
 
   if (parsed.name !== undefined) leaveType.name = parsed.name;
+  if (parsed.description !== undefined) leaveType.description = parsed.description;
   if (parsed.isActive !== undefined) leaveType.isActive = parsed.isActive;
   await leaveType.save();
 
@@ -240,6 +243,27 @@ export async function listLeaveRequestsHandler(req, res) {
   const parsed = leaveRequestQuerySchema.parse(req.query);
   const result = await listLeaveRequests(req.user, req.userPermissions, parsed);
   res.json(result);
+}
+
+/**
+ * Pending approval-queue counts split by type for nav badges and dashboard
+ * KPIs: non-WFH leave, WFH-only leave, comp-off awaiting decision, comp-off
+ * worked awaiting assessment. Scoped to the caller's approval queue.
+ */
+export async function getApprovalsPendingCountsHandler(req, res) {
+  const [leaveCounts, compOffCounts] = await Promise.all([
+    getLeavePendingCounts(req.user, req.userPermissions),
+    getCompOffPendingCounts(req.user, req.userPermissions),
+  ]);
+  res.json({
+    counts: {
+      leave: leaveCounts.leave,
+      wfh: leaveCounts.wfh,
+      compOff: compOffCounts.pending,
+      compOffAssessment: compOffCounts.assessment,
+      total: leaveCounts.leave + leaveCounts.wfh + compOffCounts.pending + compOffCounts.assessment,
+    },
+  });
 }
 
 export async function getLeaveRequestHandler(req, res) {

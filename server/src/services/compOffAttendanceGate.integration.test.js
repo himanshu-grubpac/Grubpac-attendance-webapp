@@ -18,7 +18,7 @@ import { OfficeSettings } from '../models/OfficeSettings.js';
 import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
 import { User } from '../models/User.js';
-import { markAttendance } from './attendanceService.js';
+import { getTodayStatus, markAttendance } from './attendanceService.js';
 import { assessCompOffWork, decideCompOffRequest, createCompOffRequest, runCompOffSweep } from './compOffService.js';
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
 import { clearTestSmsOutbox, testSmsOutbox } from './smsService.js';
@@ -320,4 +320,64 @@ test('comp-off gate helpers tolerate year/month boundaries (sanity)', () => {
   assert.equal(typeof getISTMonth(new Date()), 'number');
   const dayStart = endOfDayIST(new Date());
   assert.ok(dayStart instanceof Date);
+});
+
+const FAR_AWAY = { latitude: OFFICE.latitude + 0.11, longitude: OFFICE.longitude + 0.11 };
+
+test('approved comp-off day + outside radius checks in as WFH (no geofence block)', async () => {
+  await makeTodayAWeekend();
+  const manager = await createUser('Manager');
+  const employee = await createUser('Remote Worker', { reportingManagerId: manager._id });
+  await createApprovedCompOffToday(employee, manager);
+
+  const result = await markAttendance(
+    employee._id,
+    'check_in',
+    geoPayload({ ...FAR_AWAY, accuracyMeters: 10 }),
+    {},
+  );
+  assert.equal(result.status, 'allowed', result.rejectionReasons?.join(' | '));
+  assert.equal(result.record.attendanceMode, 'wfh');
+});
+
+test('approved comp-off day + inside radius checks in as office', async () => {
+  await makeTodayAWeekend();
+  const manager = await createUser('Manager');
+  const employee = await createUser('Office Worker', { reportingManagerId: manager._id });
+  await createApprovedCompOffToday(employee, manager);
+
+  const result = await markAttendance(employee._id, 'check_in', geoPayload({ accuracyMeters: 10 }), {});
+  assert.equal(result.status, 'allowed', result.rejectionReasons?.join(' | '));
+  assert.equal(result.record.attendanceMode, 'office');
+});
+
+test('today status exposes compOffApprovedToday for the client geo pre-check', async () => {
+  await makeTodayAWeekend();
+  const manager = await createUser('Manager');
+  const employee = await createUser('Status Worker', { reportingManagerId: manager._id });
+  const before = await getTodayStatus(employee._id);
+  assert.equal(before.compOffApprovedToday, false);
+  await createApprovedCompOffToday(employee, manager);
+  const after = await getTodayStatus(employee._id);
+  assert.equal(after.compOffApprovedToday, true);
+});
+
+test('outside radius without any approval is still rejected', async () => {
+  // No comp-off, no WFH: whatever today is, a remote check-in must fail —
+  // via the comp-off gate on weekends/holidays, via the office geofence on
+  // working days. The key invariant: no silent WFH fallback appears.
+  const employee = await createUser('Weekday Worker');
+  const result = await markAttendance(
+    employee._id,
+    'check_in',
+    geoPayload({ ...FAR_AWAY, accuracyMeters: 10 }),
+    {},
+  );
+  assert.equal(result.status, 'rejected');
+  assert.ok(
+    result.rejectionReasons.some((reason) =>
+      /outside the office radius|comp off approval is required/i.test(reason),
+    ),
+    `reasons: ${result.rejectionReasons.join(' | ')}`,
+  );
 });

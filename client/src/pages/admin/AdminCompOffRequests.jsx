@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, getISTDateInputValue } from '../../utils/datetime.js';
 import { compOffApi, getErrorMessage } from '../../services/api.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -8,6 +8,7 @@ import SelectField from '../../components/SelectField.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
+import RequestsTabs from '../../components/RequestsTabs.jsx';
 
 const QUEUE_SIZE = 20;
 
@@ -169,6 +170,7 @@ function formatAssessDayKey(dayKey) {
 
 export default function AdminCompOffRequests() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { showSuccess, showError } = useToast();
   const { showActionPopup } = useActionPopup();
 
@@ -414,6 +416,10 @@ export default function AdminCompOffRequests() {
 
   return (
     <div className="page page--approvals">
+      <RequestsTabs
+        active="compoff"
+        onSelect={(tab) => navigate(tab === 'compoff' ? '/admin/leave/comp-off' : `/admin/leave/approvals${tab === 'leave' ? '' : `?tab=${tab}`}`)}
+      />
       <section className="approvals-stats" aria-label="Comp off queue summary">
         <div className="approvals-stats__grid">
           <article className="approvals-stat card approvals-stat--info">
@@ -490,6 +496,14 @@ export default function AdminCompOffRequests() {
                     const staged = item.pendingAction;
                     const isPendingQueue = queueStatus === 'pending';
                     const isAssessmentQueue = queueStatus === 'worked';
+                    const mobileSubline = [
+                      compactDateRangeLabel(item),
+                      durationLabel(item.days),
+                    ]
+                      .map((part) => String(part ?? '').trim())
+                      .filter(Boolean)
+                      .join(' · ');
+                    const mobileAction = isPendingQueue ? 'review' : isAssessmentQueue ? 'assess' : null;
 
                     return (
                       <Fragment key={item.id}>
@@ -507,8 +521,74 @@ export default function AdminCompOffRequests() {
                             }
                           }}
                         >
+                          {/* Mobile card (≤720px): identity, subline, status, action */}
+                          <td className="approval-card-cell" colSpan={7}>
+                            <div className="approval-card">
+                              <button
+                                type="button"
+                                className="approval-row__toggle approval-card__toggle"
+                                aria-expanded={isExpanded}
+                                aria-controls={detailId}
+                                aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${item.userName || 'employee'} request`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleExpanded(item.id);
+                                }}
+                              >
+                                <span
+                                  className={`approval-row__chevron${isExpanded ? ' is-open' : ''}`}
+                                  aria-hidden="true"
+                                >
+                                  ▼
+                                </span>
+                              </button>
+                              <div className="approval-card__main">
+                                <div className="approval-card__identity">
+                                  <span
+                                    className="approval-row__avatar"
+                                    style={{ backgroundColor: color }}
+                                    aria-hidden="true"
+                                  >
+                                    {initials}
+                                  </span>
+                                  <span className="approval-card__name">{item.userName || 'Employee'}</span>
+                                </div>
+                                {mobileSubline ? (
+                                  <p className="approval-card__subline muted">{mobileSubline}</p>
+                                ) : null}
+                              </div>
+                              <div
+                                className="approval-card__footer"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <StatusToneBadge status={item.status} />
+                                {mobileAction && !isExpanded && !staged ? (
+                                  mobileAction === 'review' ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm btn--compact approval-card__action"
+                                      disabled={busy}
+                                      onClick={() => toggleExpanded(item.id)}
+                                    >
+                                      Review
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm btn--compact approval-card__action"
+                                      disabled={busy}
+                                      onClick={() => setAssessment({ open: true, item, values: defaultAssessmentValues(item), comment: '' })}
+                                    >
+                                      Assess
+                                    </button>
+                                  )
+                                ) : null}
+                              </div>
+                            </div>
+                          </td>
+
                           <td
-                            className="approvals-table__expand-cell"
+                            className="approvals-table__expand-cell approval-desktop-cell"
                             onClick={(event) => event.stopPropagation()}
                           >
                             <button
@@ -522,10 +602,10 @@ export default function AdminCompOffRequests() {
                               <span className={`approval-row__chevron${isExpanded ? ' is-open' : ''}`} aria-hidden="true">▼</span>
                             </button>
                           </td>
-                          <td data-label="#" className="approvals-table__row-num" aria-label={`Row ${rowNumber}`}>
+                          <td data-label="#" className="approvals-table__row-num approval-desktop-cell" aria-label={`Row ${rowNumber}`}>
                             {rowNumber}
                           </td>
-                          <td data-label="Employee" className="approval-row__employee-cell">
+                          <td data-label="Employee" className="approval-row__employee-cell approval-desktop-cell">
                             <div className="approval-row__identity">
                               <span className="approval-row__avatar" style={{ backgroundColor: color }} aria-hidden="true">
                                 {initials}
@@ -533,18 +613,18 @@ export default function AdminCompOffRequests() {
                               <span className="approval-row__name">{item.userName || 'Employee'}</span>
                             </div>
                           </td>
-                          <td data-label="Period" className="approval-row__dates muted" title={dateRangeLabel(item)}>
+                          <td data-label="Period" className="approval-row__dates muted approval-desktop-cell" title={dateRangeLabel(item)}>
                             {compactDateRangeLabel(item)}
                           </td>
-                          <td data-label="Days" className="approval-row__days">
+                          <td data-label="Days" className="approval-row__days approval-desktop-cell">
                             {durationLabel(item.days)}
                           </td>
-                          <td data-label="Status" className="approval-row__status">
+                          <td data-label="Status" className="approval-row__status approval-desktop-cell">
                             <StatusToneBadge status={item.status} />
                           </td>
                           {!isExpanded ? (
                             <td
-                              className="approvals-table__actions-cell"
+                              className="approvals-table__actions-cell approval-desktop-cell"
                               onClick={(event) => event.stopPropagation()}
                             >
                               {isPendingQueue && (
@@ -569,7 +649,7 @@ export default function AdminCompOffRequests() {
                               )}
                             </td>
                           ) : (
-                            <td className="approvals-table__actions-cell" />
+                            <td className="approvals-table__actions-cell approval-desktop-cell" />
                           )}
                         </tr>
 

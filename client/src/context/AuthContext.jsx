@@ -198,4 +198,13 @@ export function useAuth() {
   return ctx;
 }
 
+/**
+ * Null-safe variant for badge/tab chrome rendered outside the provider
+ * (isolated page tests). Returns null instead of throwing; callers treat
+ * a missing user as "no permission" and hide their badges.
+ */
+export function useOptionalAuth() {
+  return useContext(AuthContext);
+}
+
 export { PERMISSIONS };

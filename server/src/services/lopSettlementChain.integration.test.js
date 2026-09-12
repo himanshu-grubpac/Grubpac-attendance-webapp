@@ -217,3 +217,36 @@ test('monthly audit reflects settled LOP for the employee', async () => {
   assert.equal(audit.totals.lopDays, 3);
   assert.equal(audit.totals.lopDeduction, 4285.71);
 });
+
+test('overdrawn settlement finalizes LOP records AND resets negative carried in one run', async () => {
+  // Locks in the deduct-then-reset ordering inside settleMonthPayroll: an
+  // overdrawn SL balance (used 5 > entitled 2, carried 0) settles its 3 LOP
+  // days while a leftover minus bucket on another type resets to zero.
+  // (The minus bucket lives on CL so it cannot change the SL LOP math.)
+  const { user, leaveType, request } = await createOverdrawnFixture();
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  await LeaveBalance.create({
+    userId: user._id,
+    leaveTypeId: clType._id,
+    year: YEAR,
+    entitled: 0,
+    used: 0,
+    pending: 0,
+    carried: -2,
+    encashed: 0,
+  });
+  await createLopOnApproval(user._id, leaveType._id, request._id, START, 5);
+
+  const result = await settleMonthPayroll(PERIOD, user._id);
+
+  assert.equal(result.settled, true);
+  assert.equal(result.employeesWithLop, 1);
+  assert.equal(result.totalLopDays, 3);
+
+  const settled = await LopRecord.findOne({ leaveRequestId: request._id });
+  assert.equal(settled.status, 'settled');
+  assert.equal(settled.days, 3);
+
+  const clBalance = await LeaveBalance.findOne({ userId: user._id, leaveTypeId: clType._id, year: YEAR });
+  assert.equal(clBalance.carried, 0);
+});

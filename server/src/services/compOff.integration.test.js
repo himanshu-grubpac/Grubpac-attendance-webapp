@@ -37,7 +37,13 @@ import { createLeaveRequest } from './leaveService.js';
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
 import { clearTestSmsOutbox, testSmsOutbox } from './smsService.js';
 import { seedLeaveTypesAndPolicies } from './leaveBalanceService.js';
-import { getISTDateInputValue, parseDateInputAsISTDay, startOfDayIST } from '../utils/istDate.js';
+import {
+  getISTDateInputValue,
+  getISTWeekday,
+  isWeekendIST,
+  parseDateInputAsISTDay,
+  startOfDayIST,
+} from '../utils/istDate.js';
 
 const ADMIN_PERMS = [
   PERMISSIONS.LEAVE_READ_ALL,
@@ -101,22 +107,38 @@ async function createUser(name, { reportingManagerId = null, isManager = false }
   });
 }
 
-/** Next weekend day (Sat=6 or Sun=0) strictly after `afterKey`, up to 40 days out. */
+/** Next weekend day strictly after `afterKey`, up to 40 days out (IST-based). */
 function nextWeekendKey(afterKey) {
   let day = parseDateInputAsISTDay(afterKey);
   for (let i = 0; i < 40; i += 1) {
     day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
-    const dow = day.getUTCDay();
-    if (dow === 6 || dow === 0) return getISTDateInputValue(day);
+    if (isWeekendIST(day)) return getISTDateInputValue(day);
   }
   throw new Error('no weekend found');
+}
+
+/**
+ * Next Saturday on or after `fromKey` (IST-based). Unlike nextWeekendKey
+ * (strictly after), this anchors the fixture weekend correctly when today
+ * itself is a Saturday — otherwise satKey lands on Sunday and sunKey on the
+ * following Saturday, and the Sat→Sun range spans weekdays.
+ */
+function nextSaturdayKey(fromKey) {
+  let day = parseDateInputAsISTDay(fromKey);
+  for (let i = 0; i < 8; i += 1) {
+    if (isWeekendIST(day) && getISTWeekday(day) === 6) return getISTDateInputValue(day);
+    day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
+  }
+  throw new Error('no saturday found');
 }
 
 async function createCompOffFixture({ manager = null, employeeName = 'Employee' } = {}) {
   const managerUser = manager ?? (await createUser('Manager', { isManager: true }));
   const employee = await createUser(employeeName, { reportingManagerId: managerUser._id });
-  const satKey = nextWeekendKey(getISTDateInputValue());
-  const sunKey = nextWeekendKey(satKey);
+  const satKey = nextSaturdayKey(getISTDateInputValue());
+  const sunKey = getISTDateInputValue(
+    new Date(parseDateInputAsISTDay(satKey).getTime() + 24 * 60 * 60 * 1000),
+  );
   return { manager: managerUser, employee, satKey, sunKey };
 }
 
@@ -549,8 +571,7 @@ async function findNextWorkingDayKey() {
   let day = parseDateInputAsISTDay(getISTDateInputValue());
   for (let i = 0; i < 30; i += 1) {
     day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
-    const dow = day.getUTCDay();
-    if (dow !== 0 && dow !== 6) return getISTDateInputValue(day);
+    if (!isWeekendIST(day)) return getISTDateInputValue(day);
   }
   throw new Error('no working day found');
 }
@@ -579,21 +600,71 @@ test('lapse boundary is exact to the millisecond (startOfDayIST math)', async ()
   assert.equal(await countNotifications('comp_off_assessed'), 0);
 });
 
-test('past-date comp-off requests are rejected with a clear message', async () => {
-  const { employee, satKey } = await createCompOffFixture();
-  const pastDay = (() => {
-    let day = parseDateInputAsISTDay(satKey);
-    for (let i = 0; i < 14; i += 1) {
-      day = new Date(day.getTime() - 24 * 60 * 60 * 1000);
-      const dow = day.getUTCDay();
-      if (dow === 6 || dow === 0) return getISTDateInputValue(day);
+test('previous-month comp-off requests are rejected with a clear message', async () => {
+  const { employee } = await createCompOffFixture();
+  const todayKey = getISTDateInputValue();
+  const firstOfMonth = `${todayKey.slice(0, 7)}-01`;
+  // Most recent weekend strictly before the current calendar month.
+  let day = parseDateInputAsISTDay(firstOfMonth);
+  let prevMonthWeekendKey = null;
+  for (let i = 0; i < 14; i += 1) {
+    day = new Date(day.getTime() - 24 * 60 * 60 * 1000);
+    const dow = day.getUTCDay();
+    if (dow === 6 || dow === 0) {
+      prevMonthWeekendKey = getISTDateInputValue(day);
+      break;
     }
-    throw new Error('no past weekend');
-  })();
+  }
+  assert.ok(prevMonthWeekendKey, 'expected a weekend before this month');
+  assert.ok(prevMonthWeekendKey < firstOfMonth, 'fixture must be previous-month');
   await assert.rejects(
-    submitCompOff(employee, pastDay, null, 'Backdated weekend work'),
-    (err) => err.statusCode === 400 && /past dates/i.test(err.message),
+    submitCompOff(employee, prevMonthWeekendKey, null, 'Backdated weekend work'),
+    (err) => err.statusCode === 400 && /current calendar month/i.test(err.message),
   );
+});
+
+test('same-month past comp-off weekend is accepted (already-worked backdate)', async () => {
+  const { employee } = await createCompOffFixture();
+  const todayKey = getISTDateInputValue();
+  const monthPrefix = todayKey.slice(0, 7);
+  // Most recent past weekend still inside the current calendar month.
+  let day = parseDateInputAsISTDay(todayKey);
+  let sameMonthPastWeekend = null;
+  for (let i = 0; i < 31; i += 1) {
+    day = new Date(day.getTime() - 24 * 60 * 60 * 1000);
+    const key = getISTDateInputValue(day);
+    if (!key.startsWith(monthPrefix)) break;
+    const dow = day.getUTCDay();
+    if (dow === 6 || dow === 0) {
+      sameMonthPastWeekend = key;
+      break;
+    }
+  }
+  if (!sameMonthPastWeekend) {
+    // 1st/2nd of month: no past weekend exists in-month yet. Prove the
+    // month floor still passes for in-month dates — a weekday fails on
+    // eligibility (weekend/holiday-only), never on the month rule.
+    const probeKey = todayKey.endsWith('-01') ? todayKey : `${monthPrefix}-01`;
+    const probeDow = parseDateInputAsISTDay(probeKey).getUTCDay();
+    if (probeDow === 6 || probeDow === 0) {
+      const created = await submitCompOff(employee, probeKey, null, 'Month-start weekend work');
+      assert.equal(created.status, 'pending');
+    } else {
+      await assert.rejects(
+        submitCompOff(employee, probeKey, null, 'Month-start probe'),
+        (err) => err.statusCode === 400 && /weekends and holidays/i.test(err.message),
+      );
+    }
+    return;
+  }
+  const created = await submitCompOff(employee, sameMonthPastWeekend, null, 'Backdated weekend work');
+  assert.equal(created.status, 'pending');
+});
+
+test('future comp-off weekend is still accepted (pre-approval unchanged)', async () => {
+  const { employee, satKey } = await createCompOffFixture();
+  const created = await submitCompOff(employee, satKey);
+  assert.equal(created.status, 'pending');
 });
 
 test('self-approval is forbidden even with approve permission', async () => {

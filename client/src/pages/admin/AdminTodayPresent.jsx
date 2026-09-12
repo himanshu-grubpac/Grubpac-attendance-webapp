@@ -194,7 +194,7 @@ export default function AdminTodayPresent() {
           </div>
         ) : (
           <>
-            <div className="table-wrap table-wrap--responsive">
+            <div className="table-wrap table-wrap--responsive today-present-table-wrap">
               <table className="table data-table today-present-table">
                 <thead>
                   <tr>

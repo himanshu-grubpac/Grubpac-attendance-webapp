@@ -42,8 +42,9 @@ function setup() {
 }
 
 async function openAssessModal(user) {
-  // The Assess button lives in the expanded row detail.
-  const nameCell = await screen.findByText('Anuj Jha');
+  // The Assess button lives in the expanded row detail. The name renders in
+  // both the mobile card and the desktop cell (same row), so take the first.
+  const [nameCell] = await screen.findAllByText('Anuj Jha');
   await user.click(nameCell.closest('tr'));
   await user.click(await screen.findByRole('button', { name: 'Assess work' }));
   await screen.findByText('Assess comp off work');

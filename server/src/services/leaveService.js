@@ -2180,6 +2180,37 @@ export async function listLeaveRequests(actor, permissions, query) {
     filter.userId = query.userId;
   }
 
+  if (query.leaveTypeCode) {
+    // Tab filter for split approval queues (e.g. WFH-only). Unknown codes
+    // match nothing rather than leaking the unfiltered queue.
+    const leaveType = await LeaveType.findOne({
+      code: String(query.leaveTypeCode).toUpperCase(),
+    }).select('_id');
+    if (!leaveType) {
+      return {
+        requests: [],
+        pagination: {
+          page: query.page,
+          limit: query.limit,
+          total: 0,
+          totalPages: 1,
+        },
+      };
+    }
+    filter.leaveTypeId = leaveType._id;
+  }
+
+  if (query.excludeLeaveTypeCode) {
+    const excludedType = await LeaveType.findOne({
+      code: String(query.excludeLeaveTypeCode).toUpperCase(),
+    }).select('_id');
+    // Unknown code excludes nothing (fail-open would leak the queue on a
+    // typo in reverse); match-nothing only applies to the positive filter.
+    if (excludedType) {
+      filter.leaveTypeId = filter.leaveTypeId ?? { $ne: excludedType._id };
+    }
+  }
+
   if (query.status && query.status !== 'all') {
     filter.status = query.status;
   }
@@ -2225,6 +2256,33 @@ export async function listLeaveRequests(actor, permissions, query) {
       totalPages: Math.ceil(total / query.limit) || 1,
     },
   };
+}
+
+/**
+ * Pending approval-queue counts split by type for badges/KPIs.
+ * RM-scoped via the approvals resolver unless LEAVE_READ_ALL.
+ * Non-approvers get zeros (never a 403 — nav badges simply stay empty).
+ */
+export async function getLeavePendingCounts(actor, permissions) {
+  if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
+    return { leave: 0, wfh: 0 };
+  }
+  const scopedIds = hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)
+    ? null
+    : await resolveLeaveApprovalUserIds(actor);
+  const userFilter = scopedIds === null ? {} : { userId: { $in: scopedIds } };
+  const wfhType = await LeaveType.findOne({ code: 'WFH' }).select('_id');
+  const [leave, wfh] = await Promise.all([
+    LeaveRequest.countDocuments({
+      status: 'pending',
+      ...userFilter,
+      ...(wfhType ? { leaveTypeId: { $ne: wfhType._id } } : {}),
+    }),
+    wfhType
+      ? LeaveRequest.countDocuments({ status: 'pending', ...userFilter, leaveTypeId: wfhType._id })
+      : 0,
+  ]);
+  return { leave, wfh };
 }
 
 export async function getTeamCalendar(actor, permissions, query) {

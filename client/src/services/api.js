@@ -309,6 +309,8 @@ export const leaveApi = {
   },
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
+  getApprovalsPendingCounts: () =>
+    api.get('/leave/requests/pending-counts').then((r) => r.data),
   createRequest: (payload, { idempotencyKey } = {}) =>
     api
       .post('/leave/requests', payload, {
