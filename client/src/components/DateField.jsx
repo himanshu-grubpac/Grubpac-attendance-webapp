@@ -60,6 +60,13 @@ function mondayFirstWeekday(year, month, day) {
   return (jsDay + 6) % 7;
 }
 
+function isWeekendValue(dateValue) {
+  const parsed = parseDateValue(dateValue);
+  if (!parsed) return false;
+  const jsDay = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day)).getUTCDay();
+  return jsDay === 0 || jsDay === 6;
+}
+
 function formatDisplayValue(value) {
   const parsed = parseDateValue(value);
   if (!parsed) return null;
@@ -103,10 +110,16 @@ export default function DateField({
   id: idProp,
   min,
   max,
+  // Leave flow: block non-working days at pick time. `disabledDates` is an
+  // array/Set of YYYY-MM-DD (e.g. admin holidays); `disableWeekends` blocks
+  // Saturdays/Sundays; `disabledDateTitles` optionally maps date → tooltip.
+  // Already-selected values still display (user data is never cleared).
+  disabledDates = [],
+  disableWeekends = false,
+  disabledDateTitles = {},
   /**
-   * Optional per-date gate (YYYY-MM-DD key → allowed). Absent = all in-range
-   * dates allowed (current behavior). When provided it is ANDed with the
-   * min/max range check on day buttons, the Today shortcut, and commit.
+   * Optional extra per-date gate (YYYY-MM-DD key → allowed). ANDed with the
+   * range check and the non-working-day rules above; absent = no extra gate.
    */
   isDateAllowed,
   'aria-label': ariaLabel,
@@ -217,20 +230,38 @@ export default function DateField({
   const monthName = MONTH_NAME_FORMATTER.format(new Date(Date.UTC(viewYear, viewMonth - 1, 1)));
   const displayLabel = formatDisplayValue(value) ?? placeholder;
 
+  const disabledDateSet = useMemo(() => new Set(disabledDates ?? []), [disabledDates]);
+
+  function isNonWorkingDay(dateValue) {
+    if (disabledDateSet.has(dateValue)) return true;
+    if (disableWeekends && isWeekendValue(dateValue)) return true;
+    return false;
+  }
+
+  function nonWorkingReason(dateValue) {
+    if (disabledDateSet.has(dateValue)) {
+      return disabledDateTitles?.[dateValue] ?? 'Holiday — leave cannot start or end here';
+    }
+    if (disableWeekends && isWeekendValue(dateValue)) {
+      return 'Weekend — leave cannot start or end here';
+    }
+    return null;
+  }
+
   function isOutOfRange(dateValue) {
     if (min && dateValue < min) return true;
     if (max && dateValue > max) return true;
     return false;
   }
 
-  function isDateDisallowed(dateValue) {
-    if (isOutOfRange(dateValue)) return true;
+  function isUnpickable(dateValue) {
+    if (isOutOfRange(dateValue) || isNonWorkingDay(dateValue)) return true;
     if (isDateAllowed && !isDateAllowed(dateValue)) return true;
     return false;
   }
 
   function commitDate(dateValue) {
-    if (disabled || isDateDisallowed(dateValue)) return;
+    if (disabled || isUnpickable(dateValue)) return;
 
     // Prevent the synthetic click from hitting the trigger after the panel unmounts.
     ignoreTriggerClickRef.current = true;
@@ -377,10 +408,16 @@ export default function DateField({
               </div>
 
               <div className="date-field__grid">
-                {cells.map((cell) =>
-                  cell.empty ? (
-                    <span key={cell.key} className="date-field__day date-field__day--empty" />
-                  ) : (
+                {cells.map((cell) => {
+                  if (cell.empty) {
+                    return (
+                      <span key={cell.key} className="date-field__day date-field__day--empty" />
+                    );
+                  }
+                  const weekendCell = disableWeekends && isWeekendValue(cell.value);
+                  const holidayCell = disabledDateSet.has(cell.value);
+                  const reason = nonWorkingReason(cell.value);
+                  return (
                     <button
                       key={cell.key}
                       type="button"
@@ -388,26 +425,29 @@ export default function DateField({
                         'date-field__day',
                         cell.value === value ? 'date-field__day--selected' : '',
                         cell.value === todayValue ? 'date-field__day--today' : '',
+                        weekendCell ? 'date-field__day--weekend' : '',
+                        holidayCell ? 'date-field__day--holiday' : '',
                       ]
                         .filter(Boolean)
                         .join(' ')}
-                      disabled={isDateDisallowed(cell.value)}
+                      disabled={isUnpickable(cell.value)}
                       aria-label={cell.value}
                       aria-pressed={cell.value === value}
+                      title={reason ?? undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => commitDate(cell.value)}
                     >
                       {cell.day}
                     </button>
-                  ),
-                )}
+                  );
+                })}
               </div>
 
               <div className="date-field__footer">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  disabled={isDateDisallowed(todayValue)}
+                  disabled={isUnpickable(todayValue)}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => commitDate(todayValue)}
                 >

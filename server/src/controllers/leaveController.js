@@ -49,9 +49,13 @@ import {
   previewYearEndCarryForward,
   recordEncashment,
 } from '../services/leaveBalanceService.js';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { isUserInTeamScope } from '../services/teamScopeService.js';
 import {
   cancelLeaveRequest,
   cancelApprovedLeaveByApprover,
+  canGrantLeaveException,
+  canApproveLeave,
   createLeaveRequest,
   decideLeaveRequest,
   decideLeaveRequestByToken,
@@ -176,6 +180,24 @@ export async function getLeaveBalances(req, res) {
   const parsed = leaveBalanceQuerySchema.parse(req.query);
   const userId = parsed.userId ?? req.user._id.toString();
   const year = parsed.year ?? getISTYear();
+
+  // Read-all / adjust roles see anyone; team roles (RM) see their scope only.
+  const canReadAll =
+    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) ||
+    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES);
+  if (!canReadAll && userId !== req.user._id.toString()) {
+    const inScope = await isUserInTeamScope(
+      req.user,
+      req.userPermissions,
+      userId,
+      PERMISSIONS.LEAVE_READ_ALL,
+      PERMISSIONS.LEAVE_READ_TEAM,
+    );
+    if (!inScope) {
+      return res.status(403).json({ message: "You do not have permission to view this employee's leave balances." });
+    }
+  }
+
   const balances = await getBalancesForUser(userId, year);
   res.json({ userId, year, balances });
 }
@@ -197,6 +219,19 @@ export async function adjustLeaveBalances(req, res) {
 
 export async function createLeaveRequestHandler(req, res) {
   const parsed = createLeaveRequestSchema.parse(req.body);
+  if (parsed.adminException) {
+    // B-011: the exception flag skips apply-deadline and lead/deputy checks.
+    // Only HR/admin may set it; everyone else fails closed with an audit trail.
+    if (!canGrantLeaveException(req.user)) {
+      auditLog('leave_admin_exception_denied', {
+        applicantId: req.user._id.toString(),
+      });
+      throwError('Only HR or admin can request an admin exception.', 403);
+    }
+    auditLog('leave_admin_exception_granted', {
+      applicantId: req.user._id.toString(),
+    });
+  }
   const request = await createLeaveRequest(req.user._id, parsed);
   res.status(201).json({ request });
 }
@@ -221,6 +256,11 @@ export async function getLeaveRequestHandler(req, res) {
   if (canViewTeam || req.userPermissions.includes('leave.approve')) {
     const requester = await User.findById(requesterId);
     if (requester?.reportingManagerId?.toString() === req.user._id.toString()) {
+      return res.json({ request: request.toSafeJSON() });
+    }
+    // Delegates can act on the requests (canApproveLeave) so they must be
+    // able to view them too — same direct-report/delegate boundary.
+    if (requester && canApproveLeave(req.user, requester, req.userPermissions)) {
       return res.json({ request: request.toSafeJSON() });
     }
   }

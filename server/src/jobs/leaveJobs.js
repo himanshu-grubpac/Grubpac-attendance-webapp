@@ -51,6 +51,15 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   }
   try {
     const leaveResult = await leaveServiceRunLeaveDecisionNotifyJob(now);
+    // A repeatedly failing item hangs its request as PENDING forever with no
+    // user-visible signal. Log loudly (CloudWatch alarm source on Lambda) so
+    // poison rows get human attention instead of silent infinite retries.
+    if (Array.isArray(leaveResult?.failed) && leaveResult.failed.length > 0) {
+      logError('leave_decision_finalize_failed', {
+        failed: leaveResult.failed.slice(0, 10),
+        failedCount: leaveResult.failed.length,
+      });
+    }
     const compOffResult = await runCompOffSweep(now);
     return { ...leaveResult, compOff: compOffResult };
   } finally {

@@ -328,6 +328,144 @@ test('parseCarryBulkWorkbook parses wide format when fixed headers share the sub
   assert.equal(rows[1].data.carriedDays, 0);
 });
 
+test('parseCarryBulkWorkbook survives an XLSX rewrite round-trip with edited Carry', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('CarriedLeave');
+  sheet.mergeCells(1, 1, 1, 16);
+  sheet.getCell(1, 1).value = 'Grubpac Technologies';
+  sheet.mergeCells(2, 1, 2, 16);
+  sheet.getCell(2, 1).value = 'Leave Carry Forward';
+  sheet.mergeCells(3, 1, 3, 16);
+  sheet.getCell(3, 1).value = 'Fill Carry columns and reason only.';
+  sheet.getRow(5).values = [
+    null,
+    'employeeName',
+    'employeeCode',
+    'contractStartDate',
+    'contractEndDate',
+    'balanceYear',
+    'fromYear',
+    'toYear',
+    'Casual Leave (CL)',
+    null,
+    null,
+    null,
+    'Sick Leave (SL)',
+    null,
+    null,
+    null,
+    'reason',
+  ];
+  sheet.getRow(6).values = [
+    null, null, null, null, null, null, null, null,
+    'Entitled', 'Used', 'Remaining', 'Carry',
+    'Entitled', 'Used', 'Remaining', 'Carry', null,
+  ];
+  sheet.getRow(7).values = [
+    null, 'Jane Doe', 'EMP001', '2025-01-01', '', 2025, 2025, 2026,
+    12, 3, 9, '', 10, 1, 9, '', 'Year-end carry',
+  ];
+
+  const template = Buffer.from(await workbook.xlsx.writeBuffer());
+  // Simulate an Excel open/save round-trip, then an HR edit of Carry cells.
+  const roundTripped = XLSX.write(XLSX.read(template, { type: 'buffer' }), {
+    type: 'buffer',
+    bookType: 'xlsx',
+  });
+  const editable = XLSX.read(roundTripped, { type: 'buffer' });
+  const aoa = XLSX.utils.sheet_to_json(editable.Sheets.CarriedLeave, { header: 1, defval: '' });
+  aoa[6][11] = 4; // CL Carry
+  const editedSheet = XLSX.utils.aoa_to_sheet(aoa);
+  const editedBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(editedBook, editedSheet, 'CarriedLeave');
+  const edited = XLSX.write(editedBook, { type: 'buffer', bookType: 'xlsx' });
+
+  const rows = parseCarryBulkWorkbook(edited);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.employeeCode, 'EMP001');
+  assert.equal(rows[0].data.leaveType, 'CL');
+  assert.equal(rows[0].data.carriedDays, 4);
+});
+
+test('parseCarryBulkWorkbook prefers the CarriedLeave sheet over sheet order', () => {
+  const carried = XLSX.utils.aoa_to_sheet([
+    ['employeeName', 'employeeCode', 'fromYear', 'toYear', 'leaveType', 'carriedDays', 'reason'],
+    ['Jane Doe', 'EMP001', 2025, 2026, 'CL', 3, 'Approved carry'],
+  ]);
+  const decoy = XLSX.utils.aoa_to_sheet([['notes'], ['hello']]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, decoy, 'Notes');
+  XLSX.utils.book_append_sheet(workbook, carried, 'CarriedLeave');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  const rows = parseCarryBulkWorkbook(buffer);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.employeeCode, 'EMP001');
+  assert.equal(rows[0].data.carriedDays, 3);
+});
+
+test('parseCarryBulkWorkbook names available sheets when CarriedLeave is missing', () => {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['a']]), 'Notes');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['b']]), 'Scratch');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  assert.throws(
+    () => parseCarryBulkWorkbook(buffer),
+    /Could not find the "CarriedLeave" sheet\. Found sheet\(s\): Notes, Scratch/,
+  );
+});
+
+test('parseCarryBulkWorkbook reports employee rows with blank Carry instead of empty', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('CarriedLeave');
+  sheet.getRow(5).values = [
+    null,
+    'employeeName', 'employeeCode', 'contractStartDate', 'contractEndDate',
+    'balanceYear', 'fromYear', 'toYear',
+    'Casual Leave (CL)', null, null, null, 'reason',
+  ];
+  sheet.getRow(6).values = [
+    null, null, null, null, null, null, null, null,
+    'Entitled', 'Used', 'Remaining', 'Carry', null,
+  ];
+  sheet.getRow(7).values = [
+    null, 'Jane Doe', 'EMP001', '2025-01-01', '', 2025, 2025, 2026,
+    12, 3, 9, '', '',
+  ];
+
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  assert.throws(
+    () => parseCarryBulkWorkbook(buffer),
+    /Found 1 employee row\(s\) but no Carry values\. Fill at least one Carry cell/,
+  );
+});
+
+test('parseCarryBulkWorkbook parses ragged rows trimmed by spreadsheet editors', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('CarriedLeave');
+  sheet.getRow(5).values = [
+    null,
+    'employeeName', 'employeeCode', 'contractStartDate', 'contractEndDate',
+    'balanceYear', 'fromYear', 'toYear',
+    'Casual Leave (CL)', null, null, null, 'reason',
+  ];
+  sheet.getRow(6).values = [
+    null, null, null, null, null, null, null, null,
+    'Entitled', 'Used', 'Remaining', 'Carry', null,
+  ];
+  sheet.getRow(7).values = [
+    null, 'Jane Doe', 'EMP001', '2025-01-01', '', 2025, 2025, 2026,
+    12, 3, 9, 2,
+  ];
+
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const rows = parseCarryBulkWorkbook(buffer);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.leaveType, 'CL');
+  assert.equal(rows[0].data.carriedDays, 2);
+});
+
 test('parseCarryBulkWorkbook rejects files without a recognizable header row', () => {
   const worksheet = XLSX.utils.aoa_to_sheet([
     ['Grubpac Technologies'],

@@ -95,16 +95,13 @@ async function upsertSystemRoles() {
       role = await Role.create(seedRole);
       changes.push(`Created role: ${seedRole.slug}`);
     } else {
-      const before = [...(role.permissions ?? [])].sort().join(',');
+      // Roles are dynamically editable via Roles & Permissions: never
+      // overwrite an existing role's permissions here — seed defaults apply
+      // to freshly created roles only.
       role.name = seedRole.name;
       role.description = seedRole.description;
       role.isSystem = true;
-      role.permissions = seedRole.permissions;
       await role.save();
-      const after = [...(role.permissions ?? [])].sort().join(',');
-      if (before !== after) {
-        changes.push(`Updated permissions for role: ${seedRole.slug}`);
-      }
     }
     roleMap.set(seedRole.slug, role);
   }

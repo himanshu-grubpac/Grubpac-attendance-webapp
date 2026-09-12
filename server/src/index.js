@@ -38,7 +38,9 @@ app.use(express.json({ limit: '1mb' }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'test' ? 10_000 : 300,
+  // Strict caps apply in production only; dev/test get headroom for
+  // polling, HMR-driven refetching, and e2e bursts.
+  max: process.env.NODE_ENV === 'production' ? 300 : 10_000,
   standardHeaders: true,
   legacyHeaders: false,
 });

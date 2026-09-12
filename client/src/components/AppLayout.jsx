@@ -270,6 +270,7 @@ function SidebarAccountFooter({
 
 function MoreDrawer({ open, onClose, sections }) {
   useEscapeKey(open, onClose);
+  const location = useLocation();
 
   if (!open) return null;
 
@@ -291,7 +292,17 @@ function MoreDrawer({ open, onClose, sections }) {
                 <NavLink
                   key={link.to}
                   to={link.to}
-                  className={({ isActive }) => `more-drawer__link${isActive ? ' active' : ''}`}
+                  end={
+                    link.to === '/employee/dashboard' ||
+                    link.to === '/admin/dashboard' ||
+                    link.to === '/admin/attendance' ||
+                    link.to === '/admin/users/register' ||
+                    link.to === '/admin/users/bulk-upload'
+                  }
+                  className={({ isActive }) => {
+                    const active = resolveNavItemActive(link.to, { isActive, location });
+                    return `more-drawer__link${active ? ' active' : ''}`;
+                  }}
                   onClick={onClose}
                 >
                   <span aria-hidden="true">{link.icon}</span>

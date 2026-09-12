@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { getISTDateInputValue } from '../../utils/datetime.js';
+import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 
 export default function EmployeeLeaveBalances() {
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(getISTYear());
   const [balances, setBalances] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);

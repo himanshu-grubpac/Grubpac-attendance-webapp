@@ -435,6 +435,27 @@ export default function AdminBulkUpload() {
                       <tr
                         className={hasDetails ? 'bulk-upload__row--expandable' : ''}
                         onClick={hasDetails ? () => toggleRowExpand(row.rowNumber) : undefined}
+                        onKeyDown={
+                          hasDetails
+                            ? (event) => {
+                                if (event.target !== event.currentTarget) return;
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  toggleRowExpand(row.rowNumber);
+                                }
+                              }
+                            : undefined
+                        }
+                        tabIndex={hasDetails ? 0 : undefined}
+                        role={hasDetails ? 'button' : undefined}
+                        aria-expanded={hasDetails ? isExpanded : undefined}
+                        aria-label={
+                          hasDetails
+                            ? `Row ${row.rowNumber} field changes, activate to ${
+                                isExpanded ? 'collapse' : 'expand'
+                              }`
+                            : undefined
+                        }
                       >
                         <td data-label="Row">{row.rowNumber}</td>
                         <td data-label="Status">

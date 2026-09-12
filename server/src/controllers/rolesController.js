@@ -1,4 +1,4 @@
-import { PERMISSION_GROUPS } from '../../../shared/permissions.js';
+import { PERMISSION_GROUPS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import {
@@ -48,6 +48,30 @@ export async function updateRole(req, res) {
 
   if (!role) {
     return res.status(404).json({ message: 'Role not found.' });
+  }
+
+  // Roles are fully dynamic — any role's permissions can be edited, EXCEPT
+  // the Admin system role, which must never lose permissions (superadmin
+  // lockout protection). Slugs are never applied (ignored below) and system
+  // roles cannot be deleted (see deleteRole).
+  if (role.isSystem && role.slug === SYSTEM_ROLE_SLUGS.ADMIN && parsed.permissions !== undefined) {
+    return res.status(403).json({ message: 'Admin role permissions cannot be modified.' });
+  }
+
+  // Self-lockout guard: nobody may REMOVE permissions from the role they
+  // currently hold (additions are fine). Without this, an admin could strip
+  // their own role and lock themselves out with no other admin to recover.
+  if (parsed.permissions !== undefined) {
+    const actorRoleId =
+      req.user?.roleId?._id?.toString?.() ?? req.user?.roleId?.toString?.() ?? null;
+    if (actorRoleId && actorRoleId === role._id.toString()) {
+      const removed = (role.permissions ?? []).filter((key) => !parsed.permissions.includes(key));
+      if (removed.length > 0) {
+        return res.status(403).json({
+          message: 'You cannot remove permissions from your own role. Ask another admin to make this change.',
+        });
+      }
+    }
   }
 
   const previous = {

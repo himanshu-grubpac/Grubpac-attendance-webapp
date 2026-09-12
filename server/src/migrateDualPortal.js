@@ -1,6 +1,7 @@
 /**
- * One-shot migration: sync system role permissions for dual-portal login
- * and fix legacy user.role vs roleId.slug mismatches.
+ * One-shot migration: ensure system roles exist (permissions seeded on
+ * create only — never overwritten, roles are dynamically editable) and fix
+ * legacy user.role vs roleId.slug mismatches for dual-portal login.
  *
  * Usage: node src/migrateDualPortal.js
  * Does NOT reset passwords or wipe data.
@@ -29,16 +30,13 @@ async function upsertSystemRoles() {
       role = await Role.create(seedRole);
       changes.push(`Created role: ${seedRole.slug}`);
     } else {
-      const before = [...(role.permissions ?? [])].sort().join(',');
+      // Roles are dynamically editable via Roles & Permissions: never
+      // overwrite an existing role's permissions here — seed defaults apply
+      // to freshly created roles only.
       role.name = seedRole.name;
       role.description = seedRole.description;
       role.isSystem = true;
-      role.permissions = seedRole.permissions;
       await role.save();
-      const after = [...(role.permissions ?? [])].sort().join(',');
-      if (before !== after) {
-        changes.push(`Updated permissions for role: ${seedRole.slug}`);
-      }
     }
     roleMap.set(seedRole.slug, role);
   }

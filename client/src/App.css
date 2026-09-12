@@ -200,6 +200,25 @@
   border-radius: var(--radius);
   font-size: 0.875rem;
   border: 1px solid transparent;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.field-error,
+.modal__alert {
+  overflow-wrap: anywhere;
+}
+
+/* 44px minimum tap targets on touch-sized viewports. Desktop keeps its
+   current compact sizing. */
+@media (max-width: 640px) {
+  .btn {
+    min-height: 2.75rem;
+  }
+  .password-input__toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
 }
 
 .alert--error {
@@ -755,8 +774,7 @@ textarea:disabled {
 }
 
 .form-grid--dates {
-  grid-template-columns: repeat(2, minmax(0, var(--field-sm-max-width)));
-  column-gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--field-sm-max-width)), 1fr));
 }
 
 .form-grid>label.form-field--sm,
@@ -1049,6 +1067,25 @@ textarea:disabled {
   outline-offset: 2px;
 }
 
+/* Checkbox rows inside grids keep the box left of its label text.
+   (Beats .form-grid > label which otherwise forces a column stack.) */
+.form-grid > label.field-checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.6rem;
+  min-width: 0;
+  max-width: none;
+}
+
+.field-checkbox > input[type='checkbox'] {
+  margin-top: 0.2rem;
+}
+
+.field-checkbox > span {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
 .search-input,
 .search-field {
   --search-icon-size: 1rem;
@@ -1156,6 +1193,7 @@ textarea:disabled {
   gap: 0.4rem;
   align-content: start;
 }
+
 
 .field-inline.form-field--sm {
   max-width: var(--field-sm-max-width);
@@ -2344,8 +2382,8 @@ textarea:disabled {
   --login-surface-border: color-mix(in srgb, var(--login-accent-blue) 28%, var(--border));
   --login-glow: color-mix(in srgb, var(--login-accent-blue) 12%, transparent);
 
-  min-height: 100dvh;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -2518,6 +2556,20 @@ textarea:disabled {
 .login-card__forgot:focus-visible {
   color: var(--primary-dark, var(--primary));
   opacity: 0.85;
+}
+
+/* 16px stops iOS Safari auto-zooming on focus inside the reset modal. */
+.modal.forgot-password-modal .modal__body input.input,
+.forgot-password-modal.modal .modal__body input:not([type='checkbox']):not([type='radio']) {
+  font-size: 1rem;
+}
+
+/* Comfortable tap target for the text-link button without moving layout. */
+.login-card__forgot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin: -0.65rem 0;
 }
 
 .login-card__forgot:disabled {
@@ -4308,7 +4360,7 @@ body::-webkit-scrollbar-thumb {
 
 .office-weekend-fieldset {
   display: grid;
-  gap: 0.55rem;
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   border: 0;
@@ -4579,7 +4631,7 @@ body::-webkit-scrollbar-thumb {
 
 .time-field {
   display: grid;
-  grid-template-columns: minmax(3rem, 1fr) auto minmax(3rem, 1fr) 4.75rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.35rem;
   min-height: var(--input-height);
@@ -4614,12 +4666,18 @@ body::-webkit-scrollbar-thumb {
 
 .time-field__input:focus { border-color: var(--primary); }
 
+/* Tiny time boxes must keep slim side padding: the global text-input
+   padding (0 0.8rem) would otherwise leave zero room for the digits. */
+.time-field > input.time-field__input {
+  padding: 0 0.2rem !important;
+}
+
 .time-field__separator { color: var(--text-muted); font-weight: 700; }
 
 .time-field__period {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  min-width: 4.75rem;
+  min-width: 0;
   height: 2rem;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 2px);
@@ -4629,7 +4687,7 @@ body::-webkit-scrollbar-thumb {
 
 .time-field__period-button {
   min-width: 0;
-  padding: 0;
+  padding: 0 0.55rem;
   border: 0;
   border-left: 1px solid var(--border);
   background: transparent;
@@ -4747,8 +4805,9 @@ body::-webkit-scrollbar-thumb {
 
 .date-field__panel {
   position: fixed;
-  /* Above modal backdrop (75) and confirm dialog (80); below sign-out (90) and toasts (100). */
-  z-index: 85;
+  /* Above modals (120/130) and confirm dialogs (140) so pickers work inside
+     them; below action popups (200). Matches SelectField's layer. */
+  z-index: 150;
   box-sizing: border-box;
   width: 228px;
   max-width: 228px;
@@ -4911,6 +4970,16 @@ body::-webkit-scrollbar-thumb {
 .date-field__day:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.date-field__day--weekend:not(:disabled) {
+  color: var(--muted);
+}
+
+.date-field__day--holiday:not(.date-field__day--selected) {
+  color: var(--warning);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 
 .date-field__footer {
@@ -5420,6 +5489,72 @@ body::-webkit-scrollbar-thumb {
 
 .dash-team-table__empty {
   text-align: center;
+}
+
+@media (max-width: 768px) {
+  /* Team table rows become stacked cards on phones (scoped twin of the
+     generic table-wrap--responsive pattern; desktop styling untouched). */
+  .dash-calendar-team__scroll.table-wrap--responsive {
+    overflow-x: visible;
+    border: none;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table thead {
+    display: none;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody tr {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.65rem;
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody td {
+    min-width: 0;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody td:first-child {
+    flex: 1 1 100%;
+    display: block;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.75rem 0.6rem;
+    background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+    font-weight: 600;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody td:first-child::before {
+    display: none;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody td:not(:first-child) {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+  }
+
+  .dash-calendar-team__scroll.table-wrap--responsive .dash-team-table tbody td:not(:first-child)::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    line-height: 1.3;
+  }
 }
 
 .employee-history__quarter {
@@ -7160,9 +7295,41 @@ body::-webkit-scrollbar-thumb {
     gap: var(--space-2);
   }
 
-  .form-actions .btn-primary,
-  .form-actions .btn-danger {
+  .form-actions .btn {
     width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Sticky action bar spans the full card width (never the viewport):
+     negative margins match the card's horizontal padding exactly, so the
+     background reaches the card borders while buttons stay inside. Later in
+     the file than the card--form/card--dense overrides so this wins. */
+  .form-actions--sticky,
+  .card--form .form-actions--sticky,
+  .card--dense .form-actions--sticky {
+    width: auto;
+    max-width: none;
+    margin-left: calc(-1 * var(--space-4));
+    margin-right: calc(-1 * var(--space-4));
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+    border-radius: 0;
+  }
+
+  .form-actions--sticky .btn {
+    border-radius: var(--radius);
+  }
+
+  /* Phones (≤480px) use 12px card padding — match the bar pull so it stays
+     exactly inside the card borders. */
+  @media (max-width: 480px) {
+    .form-actions--sticky,
+    .card--form .form-actions--sticky,
+    .card--dense .form-actions--sticky {
+      margin-left: calc(-1 * var(--space-3));
+      margin-right: calc(-1 * var(--space-3));
+    }
   }
 
   .table-wrap--kv .kv-table tbody tr {
@@ -7188,6 +7355,13 @@ body::-webkit-scrollbar-thumb {
 
   .table-wrap--kv .kv-table th {
     font-size: 0.72rem;
+  }
+
+  /* A wrapper carrying both fit (desktop scroll floor) and responsive (mobile
+     cards) resolves to cards: drop the scroll min-width inside the breakpoint. */
+  .table-wrap--fit.table-wrap--responsive .table,
+  .table-wrap--fit.table-wrap--responsive .data-table {
+    min-width: 0;
   }
 
   /* Responsive list tables → enterprise card rows (all table-wrap--responsive pages) */
@@ -7242,6 +7416,12 @@ body::-webkit-scrollbar-thumb {
     padding: 0;
     background: var(--surface);
     overflow: hidden;
+  }
+
+  /* First card keeps the same distance from the toolbar above as cards keep apart. */
+  .table-wrap--responsive .table tbody tr:first-child,
+  .table-wrap--responsive .data-table tbody tr:first-child {
+    margin-top: 0.65rem;
   }
 
   .table-wrap--responsive .table tbody tr.empty-row,
@@ -7319,7 +7499,7 @@ body::-webkit-scrollbar-thumb {
   .table-wrap--responsive .data-table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status'])::before {
     content: attr(data-label);
     font-weight: 600;
-    font-size: 0.68rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--muted);
@@ -7343,6 +7523,18 @@ body::-webkit-scrollbar-thumb {
   .table-wrap--responsive .table tbody td.cell-ellipsis > *,
   .table-wrap--responsive .data-table tbody td.cell-ellipsis > * {
     font-size: 0.8rem;
+  }
+
+  /* Pills, badges, and menus keep intrinsic width inside stacked card cells.
+     Same selector weight as the width:100% rule above so this wins by order. */
+  .table-wrap--responsive .table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .badge,
+  .table-wrap--responsive .data-table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .badge,
+  .table-wrap--responsive .table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .stat-pill,
+  .table-wrap--responsive .data-table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .stat-pill,
+  .table-wrap--responsive .table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .action-menu__trigger,
+  .table-wrap--responsive .data-table tbody td:not(:first-child):not([data-label='Action']):not([data-label='Actions']):not([data-label='Status']) > .action-menu__trigger {
+    width: auto;
+    align-self: flex-start;
   }
 
   /* Card footer: status pill + action menu on one row */
@@ -7429,6 +7621,8 @@ body::-webkit-scrollbar-thumb {
 
 .confirm-dialog {
   width: min(100%, 26rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem));
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -7495,11 +7689,19 @@ body::-webkit-scrollbar-thumb {
   z-index: 120;
   display: grid;
   place-items: center;
-  padding: 1.25rem;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom));
   background: rgba(15, 23, 42, 0.45);
   transform: translateZ(0);
   will-change: transform;
   animation: fade-in 0.18s ease;
+}
+
+@media (max-width: 480px) {
+  .modal__backdrop,
+  .confirm-dialog-backdrop {
+    padding: 0.75rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
 }
 
 .modal__backdrop--elevated {
@@ -7512,7 +7714,7 @@ body::-webkit-scrollbar-thumb {
 
 .modal {
   width: min(100%, 26rem);
-  max-height: min(calc(100vh - 2.5rem), 32rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 32rem);
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -7529,7 +7731,7 @@ body::-webkit-scrollbar-thumb {
 
 .modal--wide {
   width: min(100%, 48rem);
-  max-height: min(calc(100vh - 2.5rem), 42rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 42rem);
   border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
   box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
 }
@@ -7633,7 +7835,7 @@ body::-webkit-scrollbar-thumb {
   z-index: 100;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 0.5rem;
   max-width: none;
   pointer-events: none;
@@ -7643,8 +7845,9 @@ body::-webkit-scrollbar-thumb {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
-  width: 100%;
+  width: min(26rem, 100%);
   padding: 0.85rem 1rem;
   border-radius: 10px;
   border: none;
@@ -7677,8 +7880,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .toast > span {
-  flex: 1 1 auto;
+  flex: 1 1 8rem;
   min-width: 0;
+  overflow-wrap: anywhere;
   text-align: left;
 }
 
@@ -8255,7 +8459,13 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (max-width: 720px) {
+@media (min-width: 769px) {
+  .approval-card-cell {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
   .approvals-table-wrap {
     overflow-x: visible;
     border-top: 1px solid var(--border);
@@ -8266,16 +8476,16 @@ body::-webkit-scrollbar-thumb {
   }
 
   .approvals-table tbody tr.approval-row--summary {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    border-bottom: 1px solid var(--border);
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.65rem;
+    background: var(--surface);
+    overflow: hidden;
   }
 
   .approvals-table tbody tr.approval-row--summary td {
-    display: block;
     border-bottom: 0;
-    padding: 0;
     background: transparent;
   }
 
@@ -8287,62 +8497,76 @@ body::-webkit-scrollbar-thumb {
     background: transparent;
   }
 
-  .approvals-table__expand-cell {
-    flex: 0 0 2.75rem;
-    align-self: flex-start;
-    padding: 0.55rem 0 0.55rem 0.75rem;
-  }
-
-  .approvals-table__row-num {
+  .approval-desktop-cell {
     display: none;
   }
 
-  .approval-row__employee-cell {
-    flex: 1 1 0;
+  .approval-card-cell {
+    display: block;
+    padding: 0;
+  }
+
+  .approval-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'toggle main'
+      'footer footer';
+    gap: 0.45rem 0.6rem;
+    align-items: start;
+    padding: 0.7rem 0.75rem 0.75rem;
+  }
+
+  .approval-card__toggle {
+    grid-area: toggle;
+    margin-top: 0.1rem;
+  }
+
+  .approval-card__main {
+    grid-area: main;
     min-width: 0;
-    padding: 0.55rem var(--space-2) 0 0;
+    display: grid;
+    gap: 0.2rem;
+    align-content: start;
   }
 
-  .approval-row__status {
+  .approval-card__identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .approval-card__name {
+    min-width: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-h);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .approval-card__subline {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .approval-card__footer {
+    grid-area: footer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .approval-card__footer .approval-card__action {
     flex: 0 0 auto;
-    padding: 0.55rem 0.75rem 0 0;
-    text-align: right;
-  }
-
-  .approvals-table__actions-cell {
-    flex: 0 0 auto;
-    padding: 0.55rem 0.75rem 0 0;
-    text-align: right;
-  }
-
-  .approval-row__type,
-  .approval-row__dates,
-  .approval-row__days {
-    flex: 0 0 auto;
-    display: inline;
-    width: auto;
-    padding-bottom: 0.55rem;
-    font-size: 0.76rem;
-  }
-
-  .approval-row__type {
-    padding-left: calc(2.75rem + 0.75rem);
-    padding-right: 0;
-  }
-
-  .approval-row__days {
-    padding-right: 0.75rem;
-  }
-
-  .approval-row__type::after {
-    content: ' · ';
-    color: var(--text-muted);
-    font-weight: 400;
-  }
-
-  .approval-row__dates::after {
-    content: ' · ';
-    color: var(--text-muted);
+    min-height: 2.5rem;
   }
 
   .approval-row__detail {
@@ -8353,13 +8577,21 @@ body::-webkit-scrollbar-thumb {
   .approval-row__detail-row td {
     display: block;
   }
+
+  .approval-row__detail-row .approval-row__actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 480px) {
   .approvals-stats__grid {
     grid-template-columns: 1fr;
   }
+}
 
+/* Stack filter fields below 640px: at 481–640 the 10–16rem minimums would
+   otherwise cramp the period selects and Clear action into one row. */
+@media (max-width: 640px) {
   .approvals-toolbar__field,
   .approvals-toolbar__clear {
     width: 100%;
@@ -8612,7 +8844,9 @@ body::-webkit-scrollbar-thumb {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  overscroll-behavior-y: contain;
+  /* No overscroll-behavior-y: vertical scroll must chain to the page once
+     the grid hits its edge, otherwise near-viewport-height boxes trap
+     touch scrolling and content above (toolbar, filters) is unreachable. */
   width: 100%;
   max-width: 100%;
   max-height: 38rem;
@@ -8675,8 +8909,10 @@ body::-webkit-scrollbar-thumb {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-width: 17rem;
-  max-width: 20rem;
+  min-width: min(17rem, calc(100vw - 2rem));
+  max-width: min(20rem, calc(100vw - 2rem));
+  max-height: min(28rem, calc(100dvh - 8rem));
+  overflow-y: auto;
   padding: var(--space-3);
   background: var(--surface-1, var(--surface));
   border: 1px solid var(--border);
@@ -8774,7 +9010,8 @@ body::-webkit-scrollbar-thumb {
   overflow-y: auto;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
+  /* No overscroll-behavior-y (see .attendance-grid-scroll): scroll must
+     chain to the page so surrounding content stays reachable on mobile. */
 }
 
 .attendance-history-scroll.table-wrap {
@@ -8814,6 +9051,79 @@ body::-webkit-scrollbar-thumb {
   background: var(--surface-hover, var(--surface-2, transparent));
 }
 
+@media (max-width: 768px) {
+  /* Attendance history rows become stacked cards (same pattern as the
+     generic table-wrap--responsive tables, scoped to this custom table). */
+  .attendance-history-scroll.table-wrap--responsive {
+    overflow-x: visible;
+    border: none;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history thead {
+    display: none;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody tr {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 0.65rem;
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody tr:hover {
+    background: var(--surface);
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody td:first-child {
+    flex: 1 1 100%;
+    display: block;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.75rem 0.6rem;
+    background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+    font-weight: 600;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody td:first-child::before {
+    display: none;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody td:not(:first-child) {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+  }
+
+  .attendance-history-scroll.table-wrap--responsive .attendance-history tbody td:not(:first-child)::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+}
+
 .attendance-history-more {
   display: flex;
   align-items: center;
@@ -8834,6 +9144,8 @@ body::-webkit-scrollbar-thumb {
   --attendance-grid-line-strong: var(--border-strong);
   --attendance-cell-padding: 0.5rem;
   --attendance-row-num-width: 3rem;
+  --attendance-employee-width: 14rem;
+  --attendance-day-width: 5.25rem;
   --attendance-actions-width: 9.75rem;
   --attendance-col-selected-radius: 0.5rem;
   --attendance-row-height: 6.75rem;
@@ -8896,8 +9208,8 @@ body::-webkit-scrollbar-thumb {
   position: sticky;
   left: var(--attendance-row-num-width);
   z-index: 4;
-  width: 14rem;
-  min-width: 14rem;
+  width: var(--attendance-employee-width);
+  min-width: var(--attendance-employee-width);
   text-align: left;
   padding-left: var(--space-4);
   padding-right: var(--space-3);
@@ -8956,8 +9268,8 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-grid__col-day {
-  width: 5.25rem;
-  min-width: 5.25rem;
+  width: var(--attendance-day-width);
+  min-width: var(--attendance-day-width);
 }
 
 .attendance-grid__col-day--weekend {
@@ -9081,9 +9393,9 @@ body::-webkit-scrollbar-thumb {
   position: sticky;
   left: var(--attendance-row-num-width);
   z-index: 2;
-  width: 14rem;
-  min-width: 14rem;
-  max-width: 14rem;
+  width: var(--attendance-employee-width);
+  min-width: var(--attendance-employee-width);
+  max-width: var(--attendance-employee-width);
   background: var(--surface);
   padding-left: var(--space-4);
   padding-right: var(--space-3);
@@ -9144,8 +9456,9 @@ body::-webkit-scrollbar-thumb {
   font-size: 0.62rem;
   color: var(--text-muted);
   line-height: 1.3;
-  overflow-wrap: anywhere;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attendance-grid__employee-meta {
@@ -9311,6 +9624,16 @@ body::-webkit-scrollbar-thumb {
 .attendance-day-card--stacked {
   height: calc(var(--attendance-day-card-height) + 1.25rem);
   min-height: calc(var(--attendance-day-card-height) + 1.25rem);
+}
+
+/* Day cards grow with their content instead of clipping: an edited present
+   day can hold mode + status tags, in/out times, and the Updated chip at
+   once. Table cells treat height as a minimum, so the row expands and tall
+   content never spills over neighbouring cells. */
+.attendance-day-card,
+.attendance-day-card--stacked {
+  height: auto;
+  min-height: var(--attendance-day-card-height);
 }
 
 .attendance-day-card--stacked .attendance-grid__cell {
@@ -9918,7 +10241,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .attendance-footer {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
     align-items: stretch;
@@ -9962,31 +10285,136 @@ body::-webkit-scrollbar-thumb {
     padding: 0.32rem 0.15rem;
   }
 
-  .attendance-grid__employee-name,
-  .attendance-grid__employee-designation {
-    white-space: normal;
+  .attendance-grid {
+    --attendance-employee-width: 9rem;
+    --attendance-day-width: 3.5rem;
+    --attendance-row-num-width: 2.25rem;
+    --attendance-row-height: 4.75rem;
+    --attendance-cell-padding: 0.35rem;
+    --attendance-actions-width: 6.5rem;
+    /* 2.25 + 9 + 7×3.5 + 6.5 + 6 ≈ content width: no squeeze, no dead scroll. */
+    min-width: 48.5rem;
+    font-size: 0.72rem;
   }
 
-  .attendance-grid {
-    min-width: 58.25rem;
+  .attendance-grid thead th {
+    height: 2.6rem;
+    padding: var(--attendance-cell-padding);
   }
 
   .attendance-grid thead .attendance-grid__col-employee,
   .attendance-grid__employee {
-    width: 12rem;
-    min-width: 12rem;
-    max-width: 12rem;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
   }
 
-  .attendance-grid__col-day {
-    width: 4.75rem;
-    min-width: 4.75rem;
+  .attendance-grid__employee-inner {
+    gap: 0.45rem;
+  }
+
+  .attendance-grid__avatar {
+    width: 1.6rem;
+    height: 1.6rem;
+    font-size: 0.55rem;
+  }
+
+  .attendance-grid__employee-name {
+    font-size: 0.74rem;
+  }
+
+  /* One-line identity only: designation + email hidden so at least one day
+     column stays visible next to the sticky employee column. Full values
+     remain one tap away via the name/email tooltips. */
+  .attendance-grid__employee-designation,
+  .attendance-grid__employee-email,
+  .attendance-grid__employee-meta {
+    display: none;
+  }
+
+  /* Touch has no hover tooltips: keep the designation line visible (stacked
+     block with ellipsis costs height, not width) so identity survives. */
+  @media (pointer: coarse) {
+    .attendance-grid__employee-designation {
+      display: block;
+    }
+  }
+
+  .attendance-grid__day-name {
+    font-size: 0.56rem;
+  }
+
+  .attendance-grid__day-num {
+    font-size: 0.72rem;
+  }
+
+  /* Narrow day columns: shrink cell text so nowrap times/tags fit inside
+     the card instead of spilling over neighbouring cells. */
+  .attendance-grid__time {
+    font-size: 0.58rem;
+  }
+
+  .attendance-grid__times-stack {
+    min-height: 0;
+  }
+
+  .attendance-day-card .attendance-tag {
+    font-size: 0.52rem;
+    min-width: 0;
+    padding-inline: 0.12rem;
+  }
+
+  /* NOTE: the selected-day sticky overlay tracks its column on small screens
+     because --selected-day-left now derives from these same width vars
+     (previously hardcoded desktop widths slid the frame off-column). */
+
+  /* Stacking fix (the actual overlap defect): the selected header carried
+     z-index 4 — tied with the sticky employee header — so while sliding
+     underneath it, the orange frame painted ON TOP of "EMPLOYEE" (later in
+     DOM wins ties). Dropping it below the pinned columns makes it pass
+     beneath like every other day column. Body selected cells (z-index 1)
+     already sit below the sticky employee cells (z-index 2). */
+  .attendance-grid thead .attendance-grid__col-day--selected {
+    z-index: 3;
+  }
+
+  /* Un-pin the selected/today day columns on small screens: a sticky overlay
+     sized for wide viewports detaches and floats over the employee column and
+     neighbouring days while touch-sliding. `relative` keeps the highlight
+     frames (::before/::after inset frames) anchored to their own cells while
+     the columns scroll naturally with their rows. Desktop pinning untouched. */
+  .attendance-grid__col-day--selected,
+  .attendance-grid thead .attendance-grid__col-day--selected,
+  .attendance-grid__day--selected,
+  .attendance-grid tbody tr:last-child .attendance-grid__day--selected {
+    position: relative;
+    left: auto;
   }
 
   .attendance-grid__actions-inner {
     flex-wrap: wrap;
     row-gap: 0.35rem;
     justify-content: center;
+  }
+
+  /* Action buttons sized to their surroundings: compact text + padding so
+     Edit/Confirm sit inside the row height instead of towering over cells. */
+  .attendance-grid__actions {
+    padding: 0.35rem 0.3rem;
+  }
+
+  .attendance-grid__actions-inner {
+    min-height: 0;
+    gap: 0.3rem;
+  }
+
+  .attendance-grid__actions .btn,
+  .attendance-grid__edit,
+  .attendance-grid__confirm,
+  .attendance-grid__undo {
+    font-size: 0.62rem;
+    min-height: 1.8rem;
+    padding: 0.28rem 0.5rem;
+    white-space: nowrap;
   }
 
   .attendance-grid__col-warnings {
@@ -10376,8 +10804,8 @@ body::-webkit-scrollbar-thumb {
   font-size: 0.82rem;
   border-radius: var(--radius);
 }
-@media (min-width: 541px) { .calendar-management__months { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width: 801px) { .calendar-management__layout { grid-template-columns: minmax(0, 1fr) 20rem; } .calendar-management__editor { position: sticky; top: var(--space-3); } .calendar-management__months { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 641px) { .calendar-management__months { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 961px) { .calendar-management__layout { grid-template-columns: minmax(0, 1fr) 20rem; } .calendar-management__editor { position: sticky; top: var(--space-3); } .calendar-management__months { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 /* Calendar management — view switcher (weekly / monthly / yearly) */
 .calendar-management__nav { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-h); font-size: 1rem; }
 .calendar-management__nav .btn { width: 2rem; min-width: 2rem; padding-inline: 0; font-size: 1.35rem; line-height: 1; }
@@ -10420,8 +10848,8 @@ body::-webkit-scrollbar-thumb {
 .calendar-management__week-holiday:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .calendar-management__week-holiday .calendar-management__legend-dot { flex-shrink: 0; margin-top: 0.25rem; }
 .calendar-management__week-empty { color: var(--text-muted); font-size: 0.72rem; text-align: center; opacity: 0.5; }
-@media (max-width: 900px) { .calendar-management__week-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .calendar-management__week-day { min-height: 0; } }
-@media (max-width: 540px) { .calendar-management__week-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 960px) { .calendar-management__week-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .calendar-management__week-day { min-height: 0; } }
+@media (max-width: 640px) { .calendar-management__week-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ── Employee list ──────────────────────────────────────────────── */
 
@@ -10442,7 +10870,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .page--employees .employees-stats__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -10571,7 +10999,11 @@ body::-webkit-scrollbar-thumb {
 }
 
 .employees-toolbar__filters {
-  flex: 1 1 auto;
+  /* Full-width filter row: the selects' min-content widths previously
+     overflowed this container and painted over the action buttons at
+     desktop widths. Filters always own row 1; actions flow to row 2,
+     left-aligned — identical at every viewport, no overlap possible. */
+  flex: 1 1 100%;
   min-width: min(100%, 16rem);
   padding-bottom: 0;
   margin-bottom: 0;
@@ -10594,13 +11026,20 @@ body::-webkit-scrollbar-thumb {
 }
 
 .employees-toolbar__actions {
+  /* Content-sized row 2, left-aligned (never shrink-to-overflow): at any
+     viewport the buttons stack inside the card instead of spilling past
+     its edge or colliding with the filter row above. */
   flex: 0 0 auto;
+  min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
 
 .employees-toolbar__actions .btn {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
 }
 
@@ -10623,7 +11062,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .employees-table-wrap {
-  padding: 0 var(--space-4);
+  padding: 0;
 }
 
 .employees-table th {
@@ -10707,7 +11146,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 .streaks-panel .table-wrap {
-  padding: 0 var(--space-4) var(--space-4);
+  padding: 0 0 var(--space-4);
   border: none;
   border-radius: 0;
   border-top: 1px solid var(--border);
@@ -10826,7 +11265,7 @@ body::-webkit-scrollbar-thumb {
   pointer-events: none;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 961px) {
   .employees-toolbar__filters {
     flex-wrap: nowrap;
   }
@@ -10837,70 +11276,115 @@ body::-webkit-scrollbar-thumb {
 }
 
 @media (max-width: 640px) {
+  /* Card header band: serial + name share one row. !important beats the
+     generic card-stacking chain above (higher specificity), which would
+     otherwise force every cell to full width. */
   .table-wrap--responsive .employees-table tbody td.employees-table__row-num {
-    flex: 0 0 3rem;
-    order: 0;
+    flex: 0 0 3rem !important;
+    order: 0 !important;
     align-self: stretch;
-    display: flex;
-    align-items: center;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
     justify-content: center;
     width: auto;
     min-width: 3rem;
     max-width: 3rem;
-    padding: 0.7rem 0 0.6rem 0.75rem;
+    padding: 0.7rem 0 0.6rem 0.75rem !important;
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
   .table-wrap--responsive .employees-table tbody td.employees-table__row-num::before {
-    display: none;
+    display: none !important;
   }
 
   .table-wrap--responsive .employees-table tbody td.employees-table__name {
-    flex: 1 1 calc(100% - 3rem);
-    order: 0;
-    display: block;
+    flex: 1 1 0 !important;
+    order: 0 !important;
+    align-self: stretch;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    min-width: 0;
     border-bottom: 1px solid var(--border);
-    padding: 0.7rem 0.75rem 0.6rem 0.35rem;
+    padding: 0.7rem 0.75rem 0.6rem 0.35rem !important;
     text-align: left;
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
   .table-wrap--responsive .employees-table tbody td.employees-table__name::before {
-    display: none;
+    display: none !important;
   }
 
-  .table-wrap--responsive .streaks-table tbody td.streaks-table__row-num {
-    flex: 0 0 3rem;
+  .table-wrap--responsive .employees-table tbody td.employees-table__name .table-link {
+    font-size: 0.95rem !important;
+    min-width: 0;
+  }
+
+  .table-wrap--responsive .streaks-table tbody td.streaks-table__select {
+    flex: 0 0 2.75rem;
     order: 0;
     align-self: stretch;
     display: flex;
     align-items: center;
     justify-content: center;
     width: auto;
-    min-width: 3rem;
-    max-width: 3rem;
+    min-width: 2.75rem;
+    max-width: 2.75rem;
     padding: 0.7rem 0 0.6rem 0.75rem;
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
-  .table-wrap--responsive .streaks-table tbody td.streaks-table__row-num::before {
+  .table-wrap--responsive .streaks-table tbody td.streaks-table__select::before {
     display: none;
   }
 
-  .table-wrap--responsive .streaks-table tbody td[data-label='Employee'] {
-    flex: 1 1 calc(100% - 3rem);
-    order: 0;
-    display: block;
+  /* Same header-band fix as employees-table: must outrank the generic
+     card-stacking chain, which otherwise forces every cell full width. */
+  .table-wrap--responsive .streaks-table tbody td.streaks-table__row-num {
+    flex: 0 0 3rem !important;
+    order: 0 !important;
+    align-self: stretch;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center;
+    width: auto;
+    min-width: 3rem;
+    max-width: 3rem;
+    padding: 0.7rem 0 0.6rem 0 !important;
     border-bottom: 1px solid var(--border);
-    padding: 0.7rem 0.75rem 0.6rem 0.35rem;
+    background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+  }
+
+  .table-wrap--responsive .streaks-table tbody td.streaks-table__row-num::before {
+    display: none !important;
+  }
+
+  .table-wrap--responsive .streaks-table tbody td[data-label='Employee'] {
+    flex: 1 1 0 !important;
+    order: 0 !important;
+    align-self: stretch;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    min-width: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.75rem 0.6rem 0.35rem !important;
     text-align: left;
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
   .table-wrap--responsive .streaks-table tbody td[data-label='Employee']::before {
-    display: none;
+    display: none !important;
+  }
+
+  .table-wrap--responsive .streaks-table tbody td[data-label='Employee'] .table-link {
+    font-size: 0.95rem !important;
+    font-weight: 700;
+    min-width: 0;
   }
 
   .employees-toolbar {
@@ -11513,6 +11997,11 @@ body::-webkit-scrollbar-thumb {
   cursor: pointer;
 }
 
+.bulk-upload__row--expandable:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .bulk-upload__row--expandable:hover {
     background: color-mix(in srgb, var(--primary) 4%, var(--surface-2));
@@ -11565,7 +12054,7 @@ body::-webkit-scrollbar-thumb {
   opacity: 0.8;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 961px) {
   .bulk-upload__steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: stretch;
@@ -11672,7 +12161,7 @@ body::-webkit-scrollbar-thumb {
 
 .audit-logs-table-wrap {
   overflow-x: hidden;
-  padding: 0 var(--space-4) var(--space-3);
+  padding: 0 0 var(--space-3);
   border: none;
   border-radius: 0;
 }
@@ -11807,7 +12296,7 @@ body::-webkit-scrollbar-thumb {
   font-weight: 700;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .audit-logs-toolbar__actions {
     flex: 1 1 100%;
     justify-content: flex-start;
@@ -12044,7 +12533,7 @@ body::-webkit-scrollbar-thumb {
 
 .departments-table-wrap {
   overflow-x: auto;
-  padding: 0 var(--space-4) var(--space-4);
+  padding: 0 0 var(--space-4);
 }
 
 .departments-table {
@@ -12079,7 +12568,7 @@ body::-webkit-scrollbar-thumb {
   box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
 }
 
-@media (min-width: 900px) {
+@media (min-width: 961px) {
   .departments-toolbar__filters {
     flex-wrap: nowrap;
   }
@@ -12187,7 +12676,18 @@ body::-webkit-scrollbar-thumb {
 
 .roles-table-wrap {
   overflow-x: auto;
-  padding: 0 var(--space-4) var(--space-4);
+  padding: 0 0 var(--space-4);
+}
+
+/* Edge-to-edge tables: no reserved scrollbar gutter, otherwise a permanent
+   ~16px dead gap remains on the right even with nothing to scroll. */
+.table-wrap.employees-table-wrap,
+.streaks-panel .table-wrap,
+.table-wrap.audit-logs-table-wrap,
+.table-wrap.departments-table-wrap,
+.table-wrap.roles-table-wrap,
+.table-wrap.leave-policies-table-wrap {
+  scrollbar-gutter: auto;
 }
 
 .roles-table {
@@ -12216,6 +12716,15 @@ body::-webkit-scrollbar-thumb {
   font-size: 0.8rem;
   line-height: 1.35;
   max-width: 22rem;
+}
+
+/* Mobile card rows force the first-column td to display:block, which kills
+   .roles-table__name's grid and lays name + description side-by-side
+   ("AdminFull system access..."). Re-assert grid with higher specificity so
+   the description sits below the role name. */
+.table-wrap--responsive .table tbody td:first-child.roles-table__name,
+.table-wrap--responsive .data-table tbody td:first-child.roles-table__name {
+  display: grid;
 }
 
 .roles-table__slug {
@@ -12466,7 +12975,7 @@ body::-webkit-scrollbar-thumb {
   cursor: default;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 961px) {
   .roles-toolbar__filters {
     flex-wrap: nowrap;
   }
@@ -12566,7 +13075,7 @@ body::-webkit-scrollbar-thumb {
 
 .leave-policies-table-wrap {
   overflow-x: auto;
-  padding: 0 var(--space-4) var(--space-4);
+  padding: 0 0 var(--space-4);
 }
 
 .leave-policies-table {
@@ -12827,7 +13336,7 @@ body::-webkit-scrollbar-thumb {
   padding-inline: 0.55rem;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .leave-carry-forward-panel__summary {
     flex-direction: column;
     gap: 0.35rem;
@@ -13000,7 +13509,7 @@ body::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--text-muted) 78%, var(--primary));
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .leave-carry-forward-modal {
     max-height: calc(100vh - 1rem);
   }
@@ -13087,6 +13596,12 @@ body::-webkit-scrollbar-thumb {
   flex-wrap: wrap;
   gap: var(--space-2);
   flex-shrink: 0;
+  min-width: 0;
+}
+
+.leave-adjustment-panel__header-actions .btn {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .leave-adjustment-panel__lead {
@@ -13270,6 +13785,15 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
+@media (max-width: 640px) {
+  .leave-adjustment-panel__header {
+    flex-direction: column;
+  }
+  .leave-adjustment-panel__header-actions {
+    width: 100%;
+  }
+}
+
 /* ── Salary management ──────────────────────────────────────────── */
 
 .page--salary {
@@ -13283,10 +13807,18 @@ body::-webkit-scrollbar-thumb {
   gap: var(--space-4);
   padding: 0 var(--space-1);
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.salary-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .salary-tabs__tab {
   padding: 0.7rem 0;
+  white-space: nowrap;
+  flex-shrink: 0;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -13380,7 +13912,7 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 960px) {
+@media (min-width: 961px) {
   .page--salary .salary-stats__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -13492,20 +14024,29 @@ body::-webkit-scrollbar-thumb {
 }
 
 .salary-toolbar__field--period {
-  min-width: min(100%, 16rem);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.salary-toolbar__field--period .label {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .salary-toolbar__period {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
 
 .salary-toolbar__period .select-field {
-  flex: 1 1 6.5rem;
-  min-width: 6.5rem;
+  flex: 0 0 9rem;
+  min-width: 9rem;
 }
 
 .salary-toolbar__search {
@@ -13556,9 +14097,24 @@ body::-webkit-scrollbar-thumb {
   max-width: 100%;
   min-width: 0;
   -webkit-overflow-scrolling: touch;
-  padding: 0 var(--space-4);
+  padding-inline: 0rem;
+  box-sizing: border-box;
 }
 
+.salary-structure-table th:first-child,
+.salary-structure-table td:first-child {
+  padding-left: 22px;
+}
+
+.salary-structure-table th:last-child,
+.salary-structure-table td:last-child {
+  padding-right: 0;
+}
+.salary-table th:last-child,
+.salary-table td:last-child {
+  padding-right: 22px;
+  text-align: right;
+}
 .salary-table {
   min-width: 52rem;
 }
@@ -13700,7 +14256,7 @@ body::-webkit-scrollbar-thumb {
   word-break: break-word;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .salary-toolbar {
     align-items: stretch;
   }
@@ -13718,37 +14274,95 @@ body::-webkit-scrollbar-thumb {
     display: table-cell;
   }
 
-  .table-wrap--responsive .salary-table tbody td.salary-table__row-num {
-    flex: 0 0 3rem;
-    order: 0;
-    align-self: stretch;
+  /* Totals footer becomes a stacked card like the body rows. */
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals {
     display: flex;
-    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 0.65rem;
+    background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+    overflow: hidden;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td {
+    border-top: none;
+    background: transparent;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td:first-child {
+    flex: 1 1 100%;
+    display: block;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.75rem 0.6rem;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td:first-child::before {
+    display: none;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td:not(:first-child):not([data-label='']) {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    border-bottom: 1px solid var(--border);
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td:not(:first-child):not([data-label=''])::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+
+  .table-wrap--responsive .salary-table tfoot tr.salary-table__totals td[data-label=''] {
+    display: none;
+  }
+
+  /* Same header-band fix: outrank the generic card-stacking chain. */
+  .table-wrap--responsive .salary-table tbody td.salary-table__row-num {
+    flex: 0 0 3rem !important;
+    order: 0 !important;
+    align-self: stretch;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
     justify-content: center;
     width: auto;
     min-width: 3rem;
     max-width: 3rem;
-    padding: 0.7rem 0 0.6rem 0.75rem;
+    padding: 0.7rem 0 0.6rem 0.75rem !important;
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
   .table-wrap--responsive .salary-table tbody td.salary-table__row-num::before {
-    display: none;
+    display: none !important;
   }
 
   .table-wrap--responsive .salary-table tbody td[data-label='Employee'] {
-    flex: 1 1 calc(100% - 3rem);
-    order: 0;
-    display: block;
+    flex: 1 1 0 !important;
+    order: 0 !important;
+    align-self: stretch;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    min-width: 0;
     border-bottom: 1px solid var(--border);
-    padding: 0.7rem 0.75rem 0.6rem 0.35rem;
+    padding: 0.7rem 0.75rem 0.6rem 0.35rem !important;
     text-align: left;
     background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
   }
 
   .table-wrap--responsive .salary-table tbody td[data-label='Employee']::before {
-    display: none;
+    display: none !important;
   }
 
   .table-wrap--responsive .salary-structure-table tbody td[data-label='Employee'] {
@@ -13771,7 +14385,9 @@ body::-webkit-scrollbar-thumb {
   z-index: 200;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
+  pointer-events: none;
 }
 .action-popup {
   background: #1f2937;
@@ -13779,16 +14395,22 @@ body::-webkit-scrollbar-thumb {
   border-radius: 10px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   overflow: hidden;
+  width: min(26rem, 100%);
+  pointer-events: auto;
 }
 .action-popup__body {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 0.75rem;
   padding: 0.85rem 1rem;
 }
 .action-popup__message {
   margin: 0;
-  flex: 1;
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 0.92rem;
   line-height: 1.4;
 }
@@ -13801,6 +14423,7 @@ body::-webkit-scrollbar-thumb {
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .action-popup__undo:hover { background: #fbbf24; }
 .action-popup__close {
@@ -13810,6 +14433,7 @@ body::-webkit-scrollbar-thumb {
   font-size: 1.25rem;
   cursor: pointer;
   line-height: 1;
+  flex-shrink: 0;
 }
 .action-popup__progress {
   height: 4px;
@@ -13824,23 +14448,23 @@ body::-webkit-scrollbar-thumb {
 
 .leave-type-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
   align-items: start;
 }
 .leave-type-row__type {
-  flex: 0 1 48%;
+  flex: 1 1 min(100%, 14rem);
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
 }
 .leave-type-row__balance {
-  flex: 0 1 48%;
+  flex: 1 1 min(100%, 14rem);
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  margin-left: 30px;
 }
 .leave-balance-summary {
   display: flex;
@@ -13890,6 +14514,36 @@ body::-webkit-scrollbar-thumb {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .today-present-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .today-present-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .today-present-summary__value {
+    font-size: 1.25rem;
+  }
+}
+
+/* Team panel header: title + action button share the row and wrap on narrow
+   screens instead of stacking full-width. */
+.dash-calendar-team__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.dash-calendar-team__title {
+  margin: 0;
+  min-width: 0;
 }
 
 .today-present-summary__card {
@@ -14031,3 +14685,704 @@ body::-webkit-scrollbar-thumb {
 .leave-carry-bulk-modal__body > section + section {
   margin-top: 1rem;
 }
+
+/* ΓöÇΓöÇ Fluid mobile responsiveness overhaul (no device-specific hacks) ΓöÇΓöÇ
+   Primitives only: minmax/min/clamp/flex-wrap/auto-fit. Breakpoint
+   re-flow reuses the existing shell system (960/640/480). */
+
+.page-center {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-layout {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-sidebar--desktop {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.notification-bell__panel {
+  max-height: min(28rem, calc(100vh - var(--header-height) - 1.5rem), calc(100dvh - var(--header-height) - 1.5rem));
+}
+
+.more-drawer {
+  max-height: min(78vh, 78dvh, 640px);
+}
+
+.slide-panel {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* W1 ΓÇö Toast + action-popup: top-center, contained, tappable */
+.toast-stack,
+.action-popup-stack {
+  left: var(--sidebar-width);
+  right: 0.5rem;
+  padding-inline: 0.25rem;
+  max-width: none;
+  pointer-events: none;
+}
+
+.toast,
+.action-popup {
+  width: min(26rem, 100%);
+  max-width: min(26rem, calc(100vw - 1.5rem));
+  margin-inline: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-stack {
+  top: max(0.75rem, env(safe-area-inset-top));
+}
+
+.action-popup-stack {
+  top: max(0.75rem, env(safe-area-inset-top));
+  pointer-events: none;
+}
+
+.action-popup__body {
+  min-width: 0;
+}
+
+.action-popup__message {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.action-popup__undo,
+.toast__action {
+  flex-shrink: 0;
+  min-height: 2.75rem;
+  align-self: center;
+}
+
+.action-popup__close,
+.toast__close {
+  flex-shrink: 0;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  display: grid;
+  place-items: center;
+  padding: 0.5rem;
+  margin: -0.5rem -0.5rem -0.5rem 0;
+}
+
+.modal__alert,
+.alert,
+.field-error {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.modal__footer .btn,
+.confirm-dialog__actions .btn {
+  min-height: 2.75rem;
+}
+
+/* W2 ΓÇö Tables: contained scroll by default, card-stack where responsive */
+.table-wrap {
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+
+.table-wrap--fit {
+  overflow-x: auto;
+}
+
+.table-wrap--fit .table,
+.table-wrap--fit .data-table {
+  table-layout: auto;
+  min-width: min(100%, 34rem);
+}
+
+.attendance-grid-scroll,
+.attendance-history-scroll {
+  max-width: 100%;
+}
+
+.attendance-grid-scroll.table-wrap {
+  overflow-x: auto;
+}
+
+.approval-row__detail,
+.approval-row__meta,
+.bulk-upload__diff,
+.salary-detail__grid,
+.leave-submit-summary {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.approval-row__meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.table-wrap--kv .kv-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.table-wrap--kv .kv-table th,
+.table-wrap--kv .kv-table td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.audit-logs-table-wrap .table,
+.audit-logs-table-wrap .data-table {
+  min-width: 44rem;
+}
+
+@media (max-width: 768px) {
+  /* Card rows take over — the desktop min-width would force a swipe. */
+  .audit-logs-table-wrap.table-wrap--responsive .table,
+  .audit-logs-table-wrap.table-wrap--responsive .data-table {
+    min-width: 0;
+  }
+}
+
+/* Today-present toolbar: search + action wrap, never nested */
+.today-present-toolbar {
+  gap: 0.75rem;
+}
+
+.today-present-toolbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.today-present-toolbar__search {
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+  max-width: min(100%, 20rem);
+}
+
+/* W3 ΓÇö Forms, toolbars, pickers */
+.card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.filter-bar__field {
+  flex: 1 1 min(100%, 11rem);
+  min-width: 0;
+}
+
+.filter-bar__field .input,
+.filter-bar__field select,
+.filter-bar__field input,
+.filter-bar__field .select-field,
+.filter-bar__field .date-field {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.filter-bar__search {
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__filters,
+.salary-toolbar__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  min-width: 0;
+}
+
+.approvals-toolbar__field,
+.salary-toolbar__field {
+  flex: 1 1 min(100%, 10rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__field .select-field,
+.salary-toolbar__period .select-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.approvals-toolbar__period,
+.salary-toolbar__period {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex: 1 1 min(100%, 16rem);
+  min-width: 0;
+}
+
+.approvals-toolbar__period .select-field,
+.salary-toolbar__period .select-field {
+  flex: 0 0 9rem;
+  min-width: 9rem;
+}
+.salary-toolbar__search {
+  flex: 1 1 min(100%, 14rem);
+  min-width: 0;
+}
+
+.salary-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.salary-toolbar__actions .btn {
+  flex: 1 1 min(100%, 12rem);
+  min-width: 0;
+}
+
+.form-grid--dates {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+}
+
+.help-ticket-form__meta-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+
+.help-ticket-form__meta-row > label {
+  min-width: 0;
+}
+
+.roles-modal__fields-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 1rem;
+  min-width: 0;
+}
+
+.roles-modal .permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.office-weekend-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.auto-checkout-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.auto-checkout-summary span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.time-field {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.time-field__period {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.select-field__panel,
+.date-field__panel {
+  max-width: calc(100vw - 1rem);
+  min-width: 0;
+}
+
+.date-field__panel {
+  z-index: 150;
+}
+
+.cell-actions__group {
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+
+.approval-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.approval-row__actions .btn {
+  flex: 1 1 min(100%, 10rem);
+  min-width: 0;
+}
+
+.assessment-options--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.assessment-option--chip {
+  flex: 1 1 min(100%, 8.5rem);
+  min-width: 0;
+}
+
+/* W4 ΓÇö Dashboard, header, misc grids */
+@media (max-width: 960px) {
+  .employee-home__desktop-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.dash-hero__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  min-width: 0;
+}
+
+.dash-hero__times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.6rem 1rem;
+  min-width: 0;
+}
+
+.dash-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.dash-hero__actions .btn {
+  flex: 1 1 min(100%, 12rem);
+  min-width: 0;
+}
+
+.dash-shortcuts__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.check-in-map,
+.check-in-map__canvas {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.check-in-map__canvas {
+  /* Bounded by viewport height: a fixed 16rem eats ~40% of short phones
+     and pushes the actions below the fold. */
+  height: min(16rem, 38dvh);
+  min-height: 11rem;
+}
+
+.month-calendar__grid {
+  width: 100%;
+  min-width: 0;
+}
+
+.month-calendar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+
+.dash-calendar-team__scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.today-present-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.admin-home__grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.salary-stats__grid,
+.salary-detail__grid,
+.attendance-summary__grid,
+.attendance-legend__grid,
+.employees-stats__grid,
+.bulk-upload__steps {
+  min-width: 0;
+}
+
+.bulk-upload__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1rem;
+}
+
+.bulk-upload__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.bulk-upload__footer form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.app-header__title-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-header__actions {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.detail-list--grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+.help-ticket-hero__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.slide-panel {
+  width: min(20rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+}
+
+/* Password visibility toggle: keep text clear of the icon at any width */
+.password-input__control {
+  padding-right: 3.75rem;
+  text-overflow: ellipsis;
+}
+
+.password-input__toggle.btn,
+button.password-input__toggle {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* W5 ΓÇö Auth + forgot password */
+.modal.forgot-password-modal .modal__body input.input,
+.forgot-password-modal.modal .modal__body input:not([type='checkbox']):not([type='radio']) {
+  font-size: 1rem;
+}
+
+.forgot-password-modal .modal__footer .btn {
+  min-height: 2.75rem;
+}
+
+.login-card__forgot {
+  min-height: 2.75rem;
+}
+
+.page-toolbar__actions {
+  min-width: 0;
+}
+
+.page-toolbar__actions .btn {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Global small-screen fluid guards: no device-specific values */
+@media (max-width: 960px) {
+  .toast-stack,
+  .action-popup-stack {
+    left: 0.5rem;
+    right: 0.5rem;
+    padding-inline: 0.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .btn {
+    min-height: 2.75rem;
+    max-width: 100%;
+  }
+
+  .page-toolbar__actions {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .page-toolbar__actions .btn {
+    flex: 1 1 min(100%, 10rem);
+    white-space: normal;
+    text-wrap: balance;
+  }
+
+  input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']),
+  select,
+  textarea,
+  .select-field,
+  .date-field,
+  .time-field__input {
+    font-size: 1rem;
+  }
+
+  /* Uniform control text on mobile: inputs/selects are 1rem (also the iOS
+     no-zoom threshold), so buttons match instead of rendering smaller. */
+  .btn {
+    font-size: 1rem;
+  }
+
+  .btn-sm {
+    min-height: 2.75rem;
+  }
+
+  .action-menu__trigger {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .back-link {
+    min-height: 2.75rem;
+    padding-block: 0.5rem;
+  }
+
+  .back-link__label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .date-field__day {
+    min-width: 2rem;
+    min-height: 2.75rem;
+  }
+
+  .card__toolbar {
+    flex-wrap: wrap;
+  }
+
+  .filter-checkbox {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .table .cell-ellipsis,
+  .data-table .cell-ellipsis {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .modal--wide {
+    width: min(100%, 48rem);
+  }
+
+  .leave-submit-summary > div {
+    grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr);
+  }
+
+  .preview-box,
+  .leave-submit-summary {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-center {
+    padding: 1rem 0.75rem;
+  }
+
+  .card {
+    padding: var(--space-3);
+  }
+
+  .page-toolbar__actions .btn {
+    flex: 1 1 100%;
+  }
+
+  /* Single-column stats on small phones: 2-col squeezes values. */
+  .card-grid--stats,
+  .status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── Touch: 44px minimum hit areas on coarse pointers ───────────────────
+   Dense day grids are sized up separately where their panels allow it;
+   everything below keeps its visual size and only grows the hit area. */
+@media (pointer: coarse) {
+  .approval-row__toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .attendance-week-toolbar__arrow,
+  .month-field__nav,
+  .calendar-management__nav .btn,
+  .action-menu__trigger {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .month-field__nav--year {
+    min-width: 2.75rem;
+  }
+
+  .date-field__nav,
+  .date-field__nav--compact {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .time-field__period-button {
+    min-height: 2.75rem;
+    padding-inline: 0.8rem;
+  }
+
+  .check-in-map .leaflet-control-zoom a {
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+    line-height: 2.75rem !important;
+  }
+
+  .btn-sm {
+    min-height: 2.75rem;
+  }
+}
+

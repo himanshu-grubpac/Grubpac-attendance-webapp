@@ -58,7 +58,8 @@ export async function updateUserSalaryHandler(req, res) {
     fieldsUpdated: Object.keys(parsed),
   });
 
-  res.json({ employee: user.toSafeJSON() });
+  // Route is gated by SALARY_WRITE, so the caller may view salary fields.
+  res.json({ employee: user.toSafeJSON({ canViewSalary: true }) });
 }
 
 export async function getSalarySummaryHandler(req, res) {

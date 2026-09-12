@@ -15,7 +15,7 @@
     "wipe:keep-holidays-geo": "node src/wipeKeepHolidaysGeo.js",
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
-    "test": "node --test src/**/*.test.js",
+    "test": "node --test --test-concurrency=4 src/**/*.test.js",
     "test:e2e": "node --env-file=.env.e2e scripts/dev/e2e-password-reset.mjs",
     "test:e2e:auto-checkout": "node --env-file=.env.e2e scripts/dev/e2e-auto-checkout.mjs",
     "test:e2e:job-lock": "node --env-file=.env.e2e scripts/dev/e2e-job-lock.mjs",

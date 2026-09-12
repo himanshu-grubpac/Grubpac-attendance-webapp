@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import {
   getISTDateInputValue,
   getISTYear,
+  getISTMonth,
   computeLeaveDaysIST,
   parseDateInputAsISTDay,
   endOfDayIST,
@@ -39,7 +40,7 @@ import { createLopOnApproval } from './lopSettlementService.js';
 import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
   resolveLeaveApprovalUserIds,
-  resolveTeamScopedUserIds,
+  resolveLeaveTeamUserIds,
 } from './teamScopeService.js';
 import { validateLeaveApplyDeadline } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
@@ -309,6 +310,29 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
   const isApproved = decision === 'approve' || decision === 'approved';
   const pendingDecision = isApproved ? 'approved' : 'rejected';
   const userId = request.userId?._id ?? request.userId;
+
+  // Finalizability pre-check (before staging anything): the finalizer can
+  // only commit against a live leave type and an existing balance row. If
+  // either vanished since submission (e.g. type deleted), staging would
+  // create a poison row that fails every sweep forever while looking
+  // PENDING. Fail loudly here instead, leaving the request untouched.
+  const decisionLeaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  // NB: request.startDate is a Date object here (loaded document), so use
+  // getISTYear directly — resolveLeaveYear/parseDateInputAsISTDay only parse
+  // YYYY-MM-DD strings and would return null for a Date.
+  const decisionYear = getISTYear(request.startDate);
+  const [decisionLeaveType, decisionBalance] = await Promise.all([
+    LeaveType.findById(decisionLeaveTypeId).select('_id isActive').lean(),
+    LeaveBalance.findOne({ userId, leaveTypeId: decisionLeaveTypeId, year: decisionYear })
+      .select('_id')
+      .lean(),
+  ]);
+  if (!decisionLeaveType || !decisionLeaveType.isActive) {
+    throwError('This leave type is no longer available. Cancel the request instead.', 409);
+  }
+  if (!decisionBalance) {
+    throwError('Leave balance is missing for this request. Ask HR to re-run balance setup, then decide again.', 409);
+  }
 
   // Nothing changes until the undo window expires. The status, balance, and
   // WFH markers all stay frozen while the admin can still undo.
@@ -586,6 +610,30 @@ export function canApproveLeave(actor, requester, permissions) {
     managerDoc?.delegateApproverId?.toString?.() ??
     null;
   return delegateId === actor._id.toString();
+}
+
+const LEAVE_EXCEPTION_ROLE_SLUGS = new Set([
+  SYSTEM_ROLE_SLUGS.ADMIN,
+  SYSTEM_ROLE_SLUGS.HR,
+]);
+
+function resolveActorRoleSlug(actor) {
+  const roleId = actor?.roleId;
+  if (roleId && typeof roleId === 'object') {
+    return roleId.slug ?? null;
+  }
+  return null;
+}
+
+/**
+ * Whether the actor may set/grant the leave `adminException` flag.
+ *
+ * Deliberately role-slug based, NOT legacy `user.role`: the legacy field is
+ * coarse ('admin' covers reporting managers) and would admit exactly the
+ * callers this gate must block. Missing/unpopulated role fails closed.
+ */
+export function canGrantLeaveException(actor) {
+  return LEAVE_EXCEPTION_ROLE_SLUGS.has(resolveActorRoleSlug(actor));
 }
 
 export async function validateLeaveRequestInput({
@@ -1206,6 +1254,10 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
     const cancelTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS);
     const setUpdate = {
       pendingDecision: 'cancelled',
+      // Who initiated this cancellation (owner self-cancel vs approver
+      // cancel) — the finalizer attributes notifications from this, since
+      // approverId keeps pointing at the original approver either way.
+      cancelledBy: actor._id,
       undoExpiresAt: cancelTiming.undoExpiresAt,
       notifyAfter: cancelTiming.notifyAfter,
       notificationsSent: false,
@@ -1280,7 +1332,7 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
       session.endSession();
     }
 
-    await notifyLeaveCancelled(request, false, originalApproverId, { sendChannels: true });
+    await notifyLeaveCancelled(request, false, originalApproverId, { sendChannels: true, cancelledBy: userId });
   }
 
   auditLog('leave_request_cancelled', {
@@ -1341,10 +1393,12 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
     },
     {
       // Nothing changed during the undo window — status, balance and WFH
-      // markers are all untouched. Just clear the pending decision fields.
+      // markers are all untouched. Just clear the pending decision fields
+      // (including who staged the cancellation, now void).
       // Keep the original approval metadata (approverId/decidedAt) intact.
       $set: {
         pendingDecision: null,
+        cancelledBy: null,
         notifyAfter: null,
         undoExpiresAt: null,
         pendingRevision: null,
@@ -1390,14 +1444,26 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
  * Notifies the applicant (and original approver) that an approved leave was
  * cancelled. The in-app notification is always sent immediately; email/SMS can
  * be deferred (sendChannels=false) until the cancellation's undo window expires.
+ *
+ * `cancelledBy` is the initiator's user id (owner self-cancel vs approver
+ * cancel). Copy attributes the action to the real initiator — never tell an
+ * approver "cancelled by employee" about a cancellation they made themselves.
  */
-async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChannels = true } = {}) {
+async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChannels = true, cancelledBy = null } = {}) {
   const userId = request.userId?._id?.toString?.() ?? request.userId?.toString?.();
   const applicant = await User.findById(userId).select('name email mobile whatsappOptIn');
   const leaveTypeName =
     request.leaveTypeId?.name || request.leaveTypeId?.code || 'leave';
   const dateText = formatLeaveDateText(request);
   const timeText = formatLeaveTimeText(request);
+  const cancelledById = cancelledBy ? String(cancelledBy) : null;
+  const cancelledByApplicant = !cancelledById || cancelledById === String(userId);
+  let cancellerName = null;
+  if (!cancelledByApplicant) {
+    const canceller = await User.findById(cancelledById).select('name').lean();
+    cancellerName = canceller?.name ?? null;
+  }
+  const cancelledBySuffix = !cancelledByApplicant && cancellerName ? ` Cancelled by ${cancellerName}.` : '';
 
   try {
     await createNotification({
@@ -1405,8 +1471,8 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
       type: 'leave.cancelled',
       title: wasApproved ? 'Leave cancelled' : 'Leave request cancelled',
       body: wasApproved
-        ? `Your ${leaveTypeName} leave (${dateText}) was cancelled. The leave days have been returned to your balance.`
-        : `Your ${leaveTypeName} leave request (${dateText}) was cancelled.`,
+        ? `Your ${leaveTypeName} leave (${dateText}) was cancelled. The leave days have been returned to your balance.${cancelledBySuffix}`
+        : `Your ${leaveTypeName} leave request (${dateText}) was cancelled.${cancelledBySuffix}`,
       link: '/employee/leave/requests',
       metadata: { requestId: request._id.toString() },
     });
@@ -1443,11 +1509,16 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
   if (approverId) notifiedUserIds.add(String(approverId));
   try {
     const requesterDoc = await User.findById(userId).select('name reportingManagerId delegateApproverId');
-    const managerIds = collectManagerIds(requesterDoc).map((id) => String(id)).filter((id) => !notifiedUserIds.has(id));
+    // Never notify the cancelling actor of their own action either.
+    const managerIds = collectManagerIds(requesterDoc).map((id) => String(id)).filter((id) => !notifiedUserIds.has(id) && id !== cancelledById);
     const managers = managerIds.length
       ? await User.find({ _id: { $in: managerIds }, isActive: true }).select('name email mobile')
       : [];
     const applicantName = applicant?.name || requesterDoc?.name || 'An employee';
+    // Attribute to the real initiator: approver-cancelled reads
+    // "<Canceller> cancelled <Applicant>'s ...", self-cancelled keeps the
+    // existing "<Applicant> cancelled ..." wording.
+    const cancelledByOther = !cancelledByApplicant && cancellerName;
     for (const manager of managers) {
       notifiedUserIds.add(String(manager._id));
       if (manager.email) {
@@ -1457,20 +1528,25 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
           dateText,
           timeText,
           wasApproved,
+          cancelledByName: cancelledByOther ? cancellerName : null,
         });
         await sendEmail({ to: manager.email, subject, html, text, tag: 'leave-cancelled-manager' });
       }
       if (manager.mobile) {
         await sendSms({
           to: manager.mobile,
-          message: `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
+          message: cancelledByOther
+            ? `${cancellerName} cancelled ${applicantName}'s ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`
+            : `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
         });
       }
       await createNotification({
         userId: manager._id,
         type: 'leave.cancelled',
         title: wasApproved ? 'Approved leave cancelled' : 'Leave request cancelled',
-        body: `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
+        body: cancelledByOther
+          ? `${cancellerName} cancelled ${applicantName}'s ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`
+          : `${applicantName} cancelled ${wasApproved ? 'approved ' : ''}${leaveTypeName} leave (${dateText}).`,
         link: '/admin/leave/approvals',
         metadata: { requestId: request._id.toString() },
       });
@@ -1480,31 +1556,59 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
   }
 
   // Notify the original approver that the approved leave was cancelled.
-  if (wasApproved && approverId) {
+  // When they are the canceller, they get a self-confirmation record instead
+  // (never "cancelled by employee" about their own action). When someone else
+  // cancelled, attribute it to them instead of defaulting to the employee.
+  const approverIsCanceller = Boolean(
+    approverId && cancelledById && String(approverId) === cancelledById,
+  );
+  if (wasApproved && approverId && approverIsCanceller) {
+    try {
+      const applicantName = applicant?.name || 'An employee';
+      await createNotification({
+        userId: approverId,
+        type: 'leave.cancelled',
+        title: 'Leave cancelled by you',
+        body: `You cancelled ${applicantName}'s approved ${leaveTypeName} leave (${dateText}).`,
+        link: '/admin/leave/approvals',
+        metadata: { requestId: request._id.toString() },
+      });
+    } catch (err) {
+      console.error('[leave] canceller self-notice failed', request._id?.toString(), err?.message);
+    }
+  }
+  if (wasApproved && approverId && !approverIsCanceller) {
     try {
       const approver = await User.findById(approverId).select('name email mobile whatsappOptIn');
       if (!approver) return;
       const applicantName = applicant?.name || 'An employee';
+      const cancelledByTitle = cancelledByApplicant
+        ? 'Leave cancelled by employee'
+        : `Leave cancelled by ${cancellerName ?? 'approver'}`;
+      const cancelledByBody = cancelledByApplicant
+        ? `${applicantName} cancelled their approved ${leaveTypeName} leave (${dateText}).`
+        : `${cancellerName ?? 'An approver'} cancelled ${applicantName}'s approved ${leaveTypeName} leave (${dateText}).`;
       if (approver.email) {
         const { subject, html, text } = renderLeaveCancelledForApproverEmail({
           applicantName,
           leaveTypeName,
           dateText,
           timeText,
+          cancelledByName: cancelledByApplicant ? null : (cancellerName ?? 'An approver'),
         });
         await sendEmail({ to: approver.email, subject, html, text, tag: 'leave-cancelled-approver' });
       }
       if (approver.mobile) {
         await sendSms({
           to: approver.mobile,
-          message: `${applicantName} cancelled their approved ${leaveTypeName} leave (${dateText}).`,
+          message: cancelledByBody,
         });
       }
       await createNotification({
         userId: approverId,
         type: 'leave.cancelled',
-        title: 'Leave cancelled by employee',
-        body: `${applicantName} cancelled their approved ${leaveTypeName} leave (${dateText}).`,
+        title: cancelledByTitle,
+        body: cancelledByBody,
         link: '/admin/leave/approvals',
         metadata: { requestId: request._id.toString() },
       });
@@ -1568,6 +1672,7 @@ export async function editLeaveRequest(requestId, actor, payload) {
       request.reason = payload.reason;
       request.documentUrl = payload.documentUrl ?? null;
       request.adminException = adminException;
+      request.cancelledBy = null;
       request.status = 'pending';
       request.notificationsSent = false;
       request.submitNotificationsSent = false;
@@ -1692,6 +1797,22 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
   const requester = await loadRequester(request.userId?._id ?? request.userId);
   if (!canApproveLeave(actor, requester, permissions)) {
     throwError('You are not authorized to approve this leave request.', 403);
+  }
+
+  if (payload.adminException) {
+    // B-011: stamping the exception flag is an HR/admin power, even for an
+    // otherwise authorized approver (direct manager / delegate).
+    if (!canGrantLeaveException(actor)) {
+      auditLog('leave_admin_exception_denied', {
+        actorId: actor._id.toString(),
+        requestId: request._id.toString(),
+      });
+      throwError('Only HR or admin can grant an admin exception.', 403);
+    }
+    auditLog('leave_admin_exception_granted', {
+      actorId: actor._id.toString(),
+      requestId: request._id.toString(),
+    });
   }
 
   return processLeaveDecision(request, actor, decision, comment, {
@@ -1930,7 +2051,14 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
           const approverId = request.approverId?._id?.toString?.()
             ?? request.approverId?.toString?.()
             ?? null;
-          await notifyLeaveCancelled(request, true, approverId, { sendChannels: true });
+          // request.* is the populated sweep doc re-read after staging, so
+          // cancelledBy records who actually initiated the cancellation
+          // (owner vs approver), which approverId alone cannot tell (it
+          // keeps pointing at the original approver).
+          const cancelledBy = request.cancelledBy?._id?.toString?.()
+            ?? request.cancelledBy?.toString?.()
+            ?? null;
+          await notifyLeaveCancelled(request, true, approverId, { sendChannels: true, cancelledBy });
         } else {
           const requester = await loadRequester(userId);
           await notifyApplicantDecision({
@@ -2023,12 +2151,8 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
       // unscoped
     } else {
-      const reportIds = await resolveTeamScopedUserIds(
-        actor,
-        permissions,
-        PERMISSIONS.LEAVE_READ_ALL,
-        PERMISSIONS.LEAVE_READ_TEAM,
-      );
+      // Direct reports (+ delegate chain) only — never managed departments.
+      const reportIds = await resolveLeaveTeamUserIds(actor);
       filter.userId = { $in: reportIds ?? [] };
     }
   } else if (scope === 'all') {
@@ -2038,6 +2162,21 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   if (query.userId) {
+    // An explicit userId filter must never widen the caller's scope: without
+    // LEAVE_READ_ALL it is confined to self ('mine') or the actor's reports
+    // ('team' / 'approvals'). Without this, any LEAVE_READ holder could read
+    // anyone's requests via ?userId=.
+    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+      const allowedIds =
+        scope === 'approvals'
+          ? await resolveLeaveApprovalUserIds(actor)
+          : scope === 'team'
+            ? await resolveLeaveTeamUserIds(actor)
+            : [actor._id];
+      if (!allowedIds.map(String).includes(String(query.userId))) {
+        throwError("You are not authorized to view this user's leave requests.", 403);
+      }
+    }
     filter.userId = query.userId;
   }
 
@@ -2099,7 +2238,9 @@ export async function getTeamCalendar(actor, permissions, query) {
     throwError('You do not have permission to view team calendar.', 403);
   }
 
-  const month = query.month ?? `${getISTYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  // IST month (not UTC): near IST midnight on the 1st, UTC getMonth() still
+  // points at the previous month.
+  const month = query.month ?? `${getISTYear()}-${String(getISTMonth()).padStart(2, '0')}`;
   const [yearStr, monthStr] = month.split('-');
   const year = Number(yearStr);
   const monthNum = Number(monthStr);
@@ -2109,17 +2250,15 @@ export async function getTeamCalendar(actor, permissions, query) {
   const calendarStart = startOfDayIST(start);
   const calendarEnd = endOfDayIST(end);
 
+  // Team scope is always enforced for non-read-all callers; an explicit
+  // departmentId only narrows within the actor's reports, never widens.
   const userFilter = { isActive: true };
+  if (!canViewAllLeave) {
+    const scopedIds = await resolveLeaveTeamUserIds(actor);
+    userFilter._id = { $in: scopedIds ?? [] };
+  }
   if (query.departmentId) {
     userFilter.departmentId = query.departmentId;
-  } else if (!canViewAllLeave) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      actor,
-      permissions,
-      PERMISSIONS.LEAVE_READ_ALL,
-      PERMISSIONS.LEAVE_READ_TEAM,
-    );
-    userFilter._id = { $in: scopedIds ?? [] };
   }
 
   const users = await User.find(userFilter).select('name email departmentId');

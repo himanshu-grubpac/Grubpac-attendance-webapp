@@ -100,7 +100,7 @@ export default function ForgotPasswordModal({ open, onClose }) {
     >
       <div
         ref={dialogRef}
-        className="modal modal--compact"
+        className="modal modal--compact forgot-password-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

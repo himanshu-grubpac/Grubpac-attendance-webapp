@@ -18,6 +18,7 @@ vi.mock('../services/api.js', () => ({
     ),
     listPolicies: vi.fn(() => Promise.resolve({ policies: [] })),
     getMyBalances: vi.fn(() => Promise.resolve({ balances: [] })),
+    listHolidays: vi.fn(() => Promise.resolve({ holidays: [] })),
     previewDays: vi.fn(() => Promise.resolve({ days: 1, workingDays: [], sandwichApplied: false })),
   },
   getErrorMessage: (err) => err?.message ?? 'Something went wrong.',

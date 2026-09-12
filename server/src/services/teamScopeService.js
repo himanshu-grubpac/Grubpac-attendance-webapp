@@ -90,15 +90,14 @@ export async function isUserInTeamScope(
   return scopedIds.some((id) => id.toString() === String(targetUserId));
 }
 
-/** Leave approvals: direct reports + delegate chain, or managed-department employees. */
+/**
+ * Leave visibility scope: direct reports + delegate chain ONLY.
+ * Managed departments deliberately do NOT widen leave visibility — a
+ * reporting manager sees leave requests of employees under them and nobody
+ * else. (The generic resolveTeamScopedUserIds keeps its department branch
+ * for attendance/salary callers; leave paths must use this resolver.)
+ */
 export async function resolveLeaveApprovalUserIds(actor) {
-  const managedIds = await getActorManagedDepartmentIds(actor);
-  if (managedIds.length > 0) {
-    const objectIds = managedIds.map((id) => new mongoose.Types.ObjectId(id));
-    const users = await User.find({ departmentId: { $in: objectIds }, isActive: true }).select('_id');
-    return users.map((user) => user._id);
-  }
-
   const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id');
   const delegatedManagers = await User.find({ delegateApproverId: actor._id, isActive: true }).select('_id');
   const managerIds = delegatedManagers.map((item) => item._id);
@@ -110,4 +109,13 @@ export async function resolveLeaveApprovalUserIds(actor) {
     ...directReports.map((item) => item._id),
     ...delegatedReports.map((item) => item._id),
   ];
+}
+
+/**
+ * Team-scope (all statuses) user set for leave reads. Identical membership
+ * to the approvals scope: direct reports + delegate chain, never managed
+ * departments. Separate name so call sites read by intent.
+ */
+export async function resolveLeaveTeamUserIds(actor) {
+  return resolveLeaveApprovalUserIds(actor);
 }

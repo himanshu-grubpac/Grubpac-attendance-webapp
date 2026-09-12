@@ -2056,8 +2056,11 @@ export default function AdminAttendance() {
             className="attendance-grid-scroll table-wrap"
             onScroll={handleGridScroll}
             style={{
+              // Derives from the same width vars as the columns (which shrink
+              // per breakpoint) — hardcoded widths slid the sticky highlight
+              // off its column on small screens.
               '--selected-day-left': selectedDayKey
-                ? `calc(var(--attendance-row-num-width) + 14rem + ${weekDays.indexOf(selectedDayKey)} * 5.25rem)`
+                ? `calc(var(--attendance-row-num-width) + var(--attendance-employee-width) + ${weekDays.indexOf(selectedDayKey)} * var(--attendance-day-width))`
                 : undefined,
             }}
           >
@@ -2137,12 +2140,18 @@ export default function AdminAttendance() {
                             {getInitials(employee.name)}
                           </span>
                           <div className="attendance-grid__employee-text">
-                            <span className="attendance-grid__employee-name">{employee.name}</span>
+                            <span className="attendance-grid__employee-name" title={employee.name}>
+                              {employee.name}
+                            </span>
                             {designation ? (
-                              <span className="attendance-grid__employee-designation">{designation}</span>
+                              <span className="attendance-grid__employee-designation" title={designation}>
+                                {designation}
+                              </span>
                             ) : null}
                             {email ? (
-                              <span className="attendance-grid__employee-email">{email}</span>
+                              <span className="attendance-grid__employee-email" title={email}>
+                                {email}
+                              </span>
                             ) : null}
                             {!designation && !email ? (
                               <span className="attendance-grid__employee-meta">—</span>
@@ -2268,7 +2277,7 @@ export default function AdminAttendance() {
           </div>
         ) : (
           <div
-            className="attendance-history-scroll table-wrap"
+            className="attendance-history-scroll table-wrap table-wrap--responsive"
             onScroll={handleHistoryScroll}
           >
             <table className="attendance-history">

@@ -24,6 +24,8 @@ const INSTRUCTION_FILL = 'FFFFF7ED';
 const INSTRUCTION_TEXT = 'FF9A3412';
 const BORDER_COLOR = 'FFE5E7EB';
 const HEADER_SCAN_LIMIT = 12;
+const GROUP_HEADER_SCAN_RADIUS = 3;
+const CARRIED_LEAVE_SHEET_NAME = 'carriedleave';
 const TEMPLATE_GROUP_HEADER_ROW = 5;
 const TEMPLATE_HEADER_ROW = 6;
 const TEMPLATE_DATA_START_ROW = 7;
@@ -200,8 +202,11 @@ function resolveWideFormatGroupHeaderRowIndex(rows, headerRowIndex) {
     return headerRowIndex - 1;
   }
 
-  const scanStart = Math.max(0, headerRowIndex - 2);
-  const scanEnd = Math.min(rows.length - 2, headerRowIndex + 2);
+  // Excel re-saves can shift merged header rows (vertical merges for fixed
+  // columns, horizontal merges for leave groups), so scan a wider radius for
+  // the Entitled/Used/Remaining/Carry sub-header signature.
+  const scanStart = Math.max(0, headerRowIndex - GROUP_HEADER_SCAN_RADIUS);
+  const scanEnd = Math.min(rows.length - 2, headerRowIndex + GROUP_HEADER_SCAN_RADIUS);
   for (let rowIndex = scanStart; rowIndex <= scanEnd; rowIndex += 1) {
     if (isWideFormatSubHeaderRow(rows[rowIndex + 1])) {
       return rowIndex;
@@ -209,6 +214,65 @@ function resolveWideFormatGroupHeaderRowIndex(rows, headerRowIndex) {
   }
 
   return -1;
+}
+
+function normalizeSheetName(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function sheetToAoa(sheet) {
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+}
+
+/**
+ * Prefer the "CarriedLeave" sheet so extra/hidden/reordered sheets from an
+ * Excel round-trip (repair sheets, notes tabs) can never hijack the parse.
+ * Falls back to a header-bearing sheet, then to a lone sheet, so previously
+ * working single-sheet uploads behave identically.
+ */
+function resolveCarryBulkSheetAoa(workbook) {
+  const names = workbook.SheetNames ?? [];
+  if (names.length === 0) {
+    throwError('The uploaded Excel file does not contain any sheets.');
+  }
+
+  const preferred = names.find((name) => normalizeSheetName(name) === CARRIED_LEAVE_SHEET_NAME);
+  if (preferred) {
+    return { sheetName: preferred, aoa: sheetToAoa(workbook.Sheets[preferred]) };
+  }
+
+  if (names.length === 1) {
+    return { sheetName: names[0], aoa: sheetToAoa(workbook.Sheets[names[0]]) };
+  }
+
+  for (const name of names) {
+    const aoa = sheetToAoa(workbook.Sheets[name]);
+    if (findCarryBulkHeaderRowIndex(aoa) >= 0) {
+      return { sheetName: name, aoa };
+    }
+  }
+
+  throwError(
+    `Could not find the "CarriedLeave" sheet. Found sheet(s): ${names.join(', ')}. Download a fresh template and try again.`,
+  );
+  return { sheetName: '', aoa: [] };
+}
+
+/**
+ * Pad ragged rows to the header width. Spreadsheet readers trim trailing
+ * empty cells per row, so without padding a carry column index can read
+ * `undefined` (silently skipped) on rows shorter than the header.
+ */
+function padRowsToWidth(aoa) {
+  const width = aoa.reduce(
+    (max, row) => Math.max(max, Array.isArray(row) ? row.length : 0),
+    0,
+  );
+  return aoa.map((row) => {
+    const cells = Array.isArray(row) ? [...row] : [];
+    while (cells.length < width) cells.push('');
+    return cells;
+  });
 }
 
 function findCarryBulkHeaderRowIndex(rows) {
@@ -283,7 +347,7 @@ function parseWideLeaveGroups(groupRow, subRow, reasonCol) {
 
   if (groups.length === 0) {
     throwError(
-      'Wide-format sheet is missing leave type column groups with Entitled, Used, Remaining, and Carry sub-columns.',
+      'Wide-format sheet is missing leave type column groups with Entitled, Used, Remaining, and Carry sub-columns. Do not rename headers like "Casual Leave (CL)" — download a fresh template and try again.',
     );
   }
 
@@ -291,11 +355,12 @@ function parseWideLeaveGroups(groupRow, subRow, reasonCol) {
 }
 
 function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
-  const groupRow = aoa[groupHeaderRowIndex] ?? [];
-  const subRow = aoa[groupHeaderRowIndex + 1] ?? [];
+  const padded = padRowsToWidth(aoa);
+  const groupRow = padded[groupHeaderRowIndex] ?? [];
+  const subRow = padded[groupHeaderRowIndex + 1] ?? [];
   const { fixedColMap, reasonCol } = mapFixedColumns(groupRow, subRow);
   const leaveGroups = parseWideLeaveGroups(groupRow, subRow, reasonCol);
-  const dataRows = aoa.slice(groupHeaderRowIndex + 2);
+  const dataRows = padded.slice(groupHeaderRowIndex + 2);
 
   if (dataRows.length > MAX_BULK_UPLOAD_ROWS) {
     throwError(
@@ -304,6 +369,7 @@ function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
   }
 
   const mappedRows = [];
+  let employeeRowsSeen = 0;
 
   dataRows.forEach((row, index) => {
     if (!Array.isArray(row)) return;
@@ -317,6 +383,7 @@ function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
     const employeeCode = String(base.employeeCode ?? '').trim();
     const employeeName = String(base.employeeName ?? '').trim();
     if (!employeeCode && !employeeName) return;
+    employeeRowsSeen += 1;
 
     const reason =
       reasonCol >= 0 ? normalizeCellValue('reason', row[reasonCol]) : '';
@@ -343,6 +410,12 @@ function mapWideWorksheetRows(aoa, groupHeaderRowIndex) {
   if (mappedRows.length > MAX_BULK_UPLOAD_ROWS) {
     throwError(
       `The file expands to ${mappedRows.length} carry entries. Maximum allowed is ${MAX_BULK_UPLOAD_ROWS}.`,
+    );
+  }
+
+  if (mappedRows.length === 0 && employeeRowsSeen > 0) {
+    throwError(
+      `Found ${employeeRowsSeen} employee row(s) but no Carry values. Fill at least one Carry cell (-365 to 365) and re-upload.`,
     );
   }
 
@@ -589,16 +662,13 @@ export async function buildCarryAuditReport(options) {
 }
 
 export function parseCarryBulkWorkbook(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    throwError('The uploaded Excel file does not contain any sheets.');
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'buffer' });
+  } catch {
+    throwError('The uploaded file could not be read as an Excel workbook. Download a fresh template and try again.');
   }
-
-  const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-    header: 1,
-    defval: '',
-  });
+  const { aoa: rawRows } = resolveCarryBulkSheetAoa(workbook);
 
   const headerRowIndex = findCarryBulkHeaderRowIndex(rawRows);
   if (headerRowIndex < 0) {
