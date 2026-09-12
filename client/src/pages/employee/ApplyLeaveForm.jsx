@@ -56,6 +56,11 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState('');
+  // Admin-declared holidays (YYYY-MM-DD → name) for greying out non-working
+  // days in the pickers (leave mode only — WFH follows its own flow).
+  // Fail-open: an empty set simply disables nothing.
+  const [holidayDates, setHolidayDates] = useState([]);
+  const [holidayNames, setHolidayNames] = useState({});
   const [submitting, setSubmitting] = useState(false);
   // Synchronous in-flight guard: React state updates don't block a second
   // click in the same tick, which would otherwise fire a duplicate POST with
@@ -104,6 +109,29 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       .getMyBalances({ year })
       .then((data) => setBalances(data.balances ?? []))
       .catch(() => setBalances([]));
+
+    if (isWfhMode) return;
+    // Leave ranges may span the year boundary, so cover this year and next.
+    Promise.all([
+      leaveApi.listHolidays({ year }).catch(() => ({ holidays: [] })),
+      leaveApi.listHolidays({ year: year + 1 }).catch(() => ({ holidays: [] })),
+    ])
+      .then(([current, next]) => {
+        const names = {};
+        const dates = [];
+        for (const item of [...(current.holidays ?? []), ...(next.holidays ?? [])]) {
+          const key = item.dateInput ?? getISTDateInputValue(new Date(item.date));
+          if (!key || dates.includes(key)) continue;
+          dates.push(key);
+          if (item.name) names[key] = item.name;
+        }
+        setHolidayDates(dates);
+        setHolidayNames(names);
+      })
+      .catch(() => {
+        setHolidayDates([]);
+        setHolidayNames({});
+      });
   }, [isWfhMode]);
 
   useEffect(() => {
@@ -397,6 +425,9 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
               }))
             }
             aria-label="Start date"
+            disableWeekends={!isWfhMode}
+            disabledDates={!isWfhMode ? holidayDates : []}
+            disabledDateTitles={!isWfhMode ? holidayNames : {}}
           />
           <FieldError message={fieldErrors.startDate} />
         </label>
@@ -409,6 +440,9 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
             min={form.startDate || undefined}
             disabled={Boolean(form.halfDay)}
             aria-label="End date"
+            disableWeekends={!isWfhMode}
+            disabledDates={!isWfhMode ? holidayDates : []}
+            disabledDateTitles={!isWfhMode ? holidayNames : {}}
           />
           <FieldError message={fieldErrors.endDate} />
         </label>
