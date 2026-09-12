@@ -515,7 +515,7 @@ export default function EmployeeDashboard() {
             {teamLoading && <p className="muted small">Loading team…</p>}
             {teamError && <div className="alert alert--error">{teamError}</div>}
             {!teamLoading && !teamError && (
-              <div className="dash-calendar-team__scroll">
+              <div className="dash-calendar-team__scroll table-wrap table-wrap--responsive">
                 <table className="dash-team-table">
                   <thead>
                     <tr>
@@ -549,7 +549,7 @@ export default function EmployeeDashboard() {
                                 : 'Not Checked In';
                         return (
                           <tr key={member.userId}>
-                            <td className="dash-team-table__name">
+                            <td data-label="Employee" className="dash-team-table__name">
                               <span>
                                 {member.firstName ||
                                   member.name?.split(' ')[0] ||
@@ -562,7 +562,7 @@ export default function EmployeeDashboard() {
                                 </span>
                               )}
                             </td>
-                            <td>
+                            <td data-label="Status">
                               <span
                                 className={`dash-team-table__badge dash-team-table__badge--${badgeTone}`}
                               >

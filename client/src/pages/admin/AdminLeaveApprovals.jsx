@@ -225,7 +225,7 @@ function StatCardSkeleton() {
 
 function QueueSkeleton() {
   return (
-    <div className="table-wrap approvals-table-wrap" aria-busy="true" aria-label="Loading leave approvals">
+    <div className="table-wrap table-wrap--responsive approvals-table-wrap" aria-busy="true" aria-label="Loading leave approvals">
       <table className="table data-table approvals-table">
         <thead>
           <tr>
@@ -783,6 +783,16 @@ export default function AdminLeaveApprovals() {
                     const isExpanded = Boolean(expandedIds[item.id]);
                     const detailId = `approval-detail-${item.id}`;
 
+                    const mobileSubline = [
+                      compactLeaveTypeLabel(item),
+                      compactDateRangeLabel(item),
+                      durationLabel(item.days),
+                    ]
+                      .map((part) => String(part ?? '').trim())
+                      .filter(Boolean)
+                      .join(' · ');
+                    const mobileAction = isPendingQueue ? 'take-action' : queueStatus === 'approved' ? 'cancel' : null;
+
                     return (
                       <Fragment key={item.id}>
                         <tr
@@ -795,8 +805,78 @@ export default function AdminLeaveApprovals() {
                           onClick={() => toggleExpanded(item.id)}
                           onKeyDown={(event) => handleSummaryKeyDown(event, item.id)}
                         >
+                          {/* Mobile card (≤720px): identity, subline, status, action */}
+                          <td className="approval-card-cell" colSpan={8}>
+                            <div className="approval-card">
+                              <button
+                                type="button"
+                                className="approval-row__toggle approval-card__toggle"
+                                aria-expanded={isExpanded}
+                                aria-controls={detailId}
+                                aria-label={
+                                  isExpanded
+                                    ? `Collapse ${item.userName || 'employee'} leave request`
+                                    : `Expand ${item.userName || 'employee'} leave request`
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleExpanded(item.id);
+                                }}
+                              >
+                                <span
+                                  className={`approval-row__chevron${isExpanded ? ' is-open' : ''}`}
+                                  aria-hidden="true"
+                                >
+                                  ▼
+                                </span>
+                              </button>
+                              <div className="approval-card__main">
+                                <div className="approval-card__identity">
+                                  <span
+                                    className="approval-row__avatar"
+                                    style={{ backgroundColor: color }}
+                                    aria-hidden="true"
+                                  >
+                                    {initials}
+                                  </span>
+                                  <span className="approval-card__name">{item.userName || 'Employee'}</span>
+                                </div>
+                                {mobileSubline ? (
+                                  <p className="approval-card__subline muted">{mobileSubline}</p>
+                                ) : null}
+                              </div>
+                              <div
+                                className="approval-card__footer"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <LeaveStatusBadge status={item.status} />
+                                {mobileAction && !isExpanded ? (
+                                  mobileAction === 'take-action' ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-sm approval-card__action"
+                                      disabled={busy || Boolean(item.pendingDecision)}
+                                      onClick={() => setDecisionModal({ open: true, item, comment: comments[item.id] ?? '' })}
+                                    >
+                                      Take Action
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-sm approval-card__action"
+                                      disabled={busy || Boolean(item.pendingDecision)}
+                                      onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                    >
+                                      Cancel
+                                    </button>
+                                  )
+                                ) : null}
+                              </div>
+                            </div>
+                          </td>
+
                           <td
-                            className="approvals-table__expand-cell"
+                            className="approvals-table__expand-cell approval-desktop-cell"
                             onClick={(event) => event.stopPropagation()}
                           >
                             <button
@@ -822,14 +902,14 @@ export default function AdminLeaveApprovals() {
 
                           <td
                             data-label="#"
-                            className="approvals-table__row-num"
+                            className="approvals-table__row-num approval-desktop-cell"
                             aria-label={`Row ${rowNumber}`}
                           >
                             {rowNumber}
                           </td>
 
                           {isLeaveColumnVisible('employee') && (
-                            <td data-label="Employee" className="approval-row__employee-cell">
+                            <td data-label="Employee" className="approval-row__employee-cell approval-desktop-cell">
                               <div className="approval-row__identity">
                                 <span
                                   className="approval-row__avatar"
@@ -844,7 +924,7 @@ export default function AdminLeaveApprovals() {
                           )}
 
                           {isLeaveColumnVisible('type') && (
-                            <td data-label="Leave type" className="approval-row__type" title={leaveTypeLabel(item)}>
+                            <td data-label="Leave type" className="approval-row__type approval-desktop-cell" title={leaveTypeLabel(item)}>
                               {compactLeaveTypeLabel(item)}
                             </td>
                           )}
@@ -852,7 +932,7 @@ export default function AdminLeaveApprovals() {
                           {isLeaveColumnVisible('period') && (
                             <td
                               data-label="Period"
-                              className="approval-row__dates muted"
+                              className="approval-row__dates muted approval-desktop-cell"
                               title={dateRangeLabel(item)}
                             >
                               {compactDateRangeLabel(item)}
@@ -860,20 +940,20 @@ export default function AdminLeaveApprovals() {
                           )}
 
                           {isLeaveColumnVisible('days') && (
-                            <td data-label="Days" className="approval-row__days">
+                            <td data-label="Days" className="approval-row__days approval-desktop-cell">
                               {durationLabel(item.days)}
                             </td>
                           )}
 
                           {isLeaveColumnVisible('status') && (
-                            <td data-label="Status" className="approval-row__status">
+                            <td data-label="Status" className="approval-row__status approval-desktop-cell">
                               <LeaveStatusBadge status={item.status} />
                             </td>
                           )}
 
                           {!isExpanded ? (
                             <td
-                              className="approvals-table__actions-cell"
+                              className="approvals-table__actions-cell approval-desktop-cell"
                               onClick={(event) => event.stopPropagation()}
                             >
                               {isPendingQueue ? (
@@ -897,7 +977,7 @@ export default function AdminLeaveApprovals() {
                               ) : null}
                             </td>
                           ) : (
-                            <td className="approvals-table__actions-cell" />
+                            <td className="approvals-table__actions-cell approval-desktop-cell" />
                           )}
                         </tr>
 

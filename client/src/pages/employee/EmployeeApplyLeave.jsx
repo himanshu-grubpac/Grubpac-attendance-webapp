@@ -45,6 +45,10 @@ export default function EmployeeApplyLeave() {
   const [types, setTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [balances, setBalances] = useState([]);
+  // Admin-declared holidays (YYYY-MM-DD → name) for greying out non-working
+  // days in the pickers. Fail-open: an empty set simply disables nothing.
+  const [holidayDates, setHolidayDates] = useState([]);
+  const [holidayNames, setHolidayNames] = useState({});
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [preview, setPreview] = useState(null);
@@ -84,6 +88,29 @@ export default function EmployeeApplyLeave() {
       .getMyBalances({ year })
       .then((data) => setBalances(data.balances ?? []))
       .catch(() => setBalances([]));
+
+    // Leave ranges may span the year boundary, so cover this year and next.
+    // Non-working-day blocking is leave-mode only (WFH follows its own flow).
+    Promise.all([
+      leaveApi.listHolidays({ year }).catch(() => ({ holidays: [] })),
+      leaveApi.listHolidays({ year: year + 1 }).catch(() => ({ holidays: [] })),
+    ])
+      .then(([current, next]) => {
+        const names = {};
+        const dates = [];
+        for (const item of [...(current.holidays ?? []), ...(next.holidays ?? [])]) {
+          const key = item.dateInput ?? getISTDateInputValue(new Date(item.date));
+          if (!key || dates.includes(key)) continue;
+          dates.push(key);
+          if (item.name) names[key] = item.name;
+        }
+        setHolidayDates(dates);
+        setHolidayNames(names);
+      })
+      .catch(() => {
+        setHolidayDates([]);
+        setHolidayNames({});
+      });
   }, []);
 
   useEffect(() => {
@@ -342,6 +369,12 @@ export default function EmployeeApplyLeave() {
     : null;
 
   const selectedBalance = balances.find((item) => item.leaveTypeId === form.leaveTypeId);
+  // WFH follows its own day-count flow on the server (exempt from the
+  // zero-working-days rule), so non-working-day blocking applies to leave
+  // types only — never strand a WFH submit behind a disabled calendar.
+  const isWfhSelected = String(selectedType?.code ?? '').toUpperCase() === 'WFH';
+  const pickerDisabledDates = isWfhSelected ? [] : holidayDates;
+  const pickerDisabledTitles = isWfhSelected ? {} : holidayNames;
   const requestedDays = Number(preview?.days ?? 0);
   // True only when the resolved preview belongs to the currently selected
   // range: a stale (previous-range) preview must never warn or block.
@@ -421,6 +454,9 @@ export default function EmployeeApplyLeave() {
           <DateField
             value={form.startDate}
             min={minDate}
+            disableWeekends={!isWfhSelected}
+            disabledDates={pickerDisabledDates}
+            disabledDateTitles={pickerDisabledTitles}
             onChange={(value) =>
               setForm((current) => ({
                 ...current,
@@ -440,11 +476,19 @@ export default function EmployeeApplyLeave() {
             onChange={(value) => setForm({ ...form, endDate: value })}
             min={form.startDate || undefined}
             disabled={Boolean(form.halfDay)}
+            disableWeekends={!isWfhSelected}
+            disabledDates={pickerDisabledDates}
+            disabledDateTitles={pickerDisabledTitles}
             aria-label="End date"
           />
           <FieldError message={fieldErrors.endDate} />
         </label>
         </div>
+        {!isWfhSelected ? (
+          <p className="muted small form-grid__full" role="note">
+            Weekends and company holidays are disabled — leave can only start or end on a working day.
+          </p>
+        ) : null}
 
         <label className="form-grid__full">
           <span className="label">Duration</span>

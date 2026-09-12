@@ -541,7 +541,7 @@ function MonthlyPayrollTab({
                 {footerTotals.rowCount > 0 ? (
                   <tfoot>
                     <tr className="salary-table__totals">
-                      <td colSpan={3}>
+                      <td colSpan={3} data-label="Totals">
                         <strong>Totals</strong>
                         <span className="muted small">
                           {' '}
@@ -550,14 +550,14 @@ function MonthlyPayrollTab({
                           {hasActiveFilters ? ' matching search' : ''})
                         </span>
                       </td>
-                      <td className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
-                      <td className="salary-table__num">
+                      <td data-label="Base total" className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
+                      <td data-label="Deduction total" className="salary-table__num">
                         {formatINRCurrency(footerTotals.deductionTotal)}
                       </td>
-                      <td className="salary-table__num salary-table__net">
+                      <td data-label="Net total" className="salary-table__num salary-table__net">
                         {formatINRCurrency(footerTotals.netTotal)}
                       </td>
-                      <td colSpan={2} />
+                      <td colSpan={2} data-label="" aria-hidden="true" />
                     </tr>
                   </tfoot>
                 ) : null}
@@ -1213,7 +1213,7 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
         ) : (
           <>
             <div className="table-wrap table-wrap--responsive salary-table-wrap">
-              <table className="table data-table salary-table">
+              <table className="table data-table salary-table ">
                 <thead>
                   <tr>
                     <th scope="col" className="salary-table__col-row-num">
