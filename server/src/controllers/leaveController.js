@@ -50,7 +50,7 @@ import {
   recordEncashment,
 } from '../services/leaveBalanceService.js';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
-import { isUserInTeamScope } from '../services/teamScopeService.js';
+import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
 import {
   cancelLeaveRequest,
   cancelApprovedLeaveByApprover,
@@ -730,6 +730,21 @@ export async function getLopRecordsHandler(req, res) {
 
   if (!userId) {
     return res.status(400).json({ message: 'userId is required.' });
+  }
+
+  // Scope gate: own rows always allowed; READ_ALL / ADJUST bypass; otherwise
+  // confined to the caller's direct reports (+ delegate chain) so any
+  // LEAVE_READ holder cannot enumerate anyone's LOP rows via :userId.
+  const callerId = req.user._id.toString();
+  if (
+    String(userId) !== callerId &&
+    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) &&
+    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES)
+  ) {
+    const allowedIds = await resolveLeaveTeamUserIds(req.user);
+    if (!allowedIds.map(String).includes(String(userId))) {
+      return res.status(403).json({ message: "You are not authorized to view this user's LOP records." });
+    }
   }
 
   const { LopRecord } = await import('../models/LopRecord.js');

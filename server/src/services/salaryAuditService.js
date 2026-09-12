@@ -103,7 +103,7 @@ async function bulkFetchLeaveBalancesByUser(userIds, year) {
   const balances = await LeaveBalance.find({
     userId: { $in: userIds },
     year,
-  }).select('userId leaveTypeId entitled carried encashed').lean();
+  }).select('userId leaveTypeId entitled carried compOffEarned encashed').lean();
 
   const outerMap = new Map();
   for (const balance of balances) {

@@ -13,6 +13,7 @@ import {
 } from './salaryService.js';
 import {
   ensureBalancesForUser,
+  getAvailableBalance,
   getPaidLeaveQuota,
   refreshAccruedEntitlements,
 } from './leaveBalanceService.js';
@@ -56,8 +57,9 @@ function compareLeaveRequestsChronologically(a, b) {
  * Creates LOP records when a leave request is finalized (approved).
  * Called after approvePendingDays() inside the same transaction.
  *
- * Determines the unpaid portion by checking the balance after approval:
- *   available = entitled + carried - used - pending - encashed
+ * Determines the unpaid portion by checking the balance after approval
+ * via the shared getAvailableBalance() (entitled + carried + compOffEarned
+ * − used − pending − encashed, so comp-off credit counts as paid stock).
  * If available < 0, the negative portion is LOP.
  *
  * Idempotent: skips if a LopRecord already exists for this leaveRequestId.
@@ -90,9 +92,9 @@ export async function createLopOnApproval(userId, leaveTypeId, leaveRequestId, s
     return null;
   }
 
-  // Calculate available balance
-  const available = (balance.entitled ?? 0) + (balance.carried ?? 0) -
-    (balance.used ?? 0) - (balance.pending ?? 0) - (balance.encashed ?? 0);
+  // Calculate available balance (shared helper — includes compOffEarned
+  // so CO-covered leave never mints phantom LOP records).
+  const available = getAvailableBalance(balance);
 
   // If balance is not negative, no LOP
   if (available >= 0) {
@@ -369,10 +371,12 @@ export async function settleMonthPayroll(periodKey, actorId) {
   try {
     await session.withTransaction(async () => {
       for (const employee of employees) {
-        // Get balances for paid quota calculation (inside transaction)
+        // Get balances for paid quota calculation (inside transaction).
+        // compOffEarned must be selected: assessed comp-off credit is paid
+        // stock, and omitting it would over-settle LOP for CO-covered leave.
         const balances = await LeaveBalance.find({ userId: employee._id, year })
           .session(session)
-          .select('leaveTypeId entitled carried encashed');
+          .select('leaveTypeId entitled carried compOffEarned encashed');
 
         const paidQuotaByTypeId = new Map(
           balances.map((balance) => [

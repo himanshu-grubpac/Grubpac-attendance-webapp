@@ -319,26 +319,16 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     const employees = await User.find({ isActive: true }).select('_id').lean();
     userIds = employees.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Team strip scope: the actor's full report subtree (transitive) plus,
-    // when the actor reports to a superior, that superior and the superior's
-    // whole subtree (siblings at any depth). Other branches of the company —
-    // including unrelated reporting managers — are never included.
+    // Team strip scope: the actor's full report subtree (transitive) ONLY.
+    // Peer/sibling teams under the same superior are never included — a
+    // reporting manager sees their own team and nobody else's.
     const actorIdStr = actor._id.toString();
-    const seen = new Set();
-    const downIds = await collectReportSubtreeIds([actor._id], seen);
-    let upIds = [];
-    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
-    const bossId = actorDoc?.reportingManagerId ?? null;
-    if (bossId) {
-      // NOTE: do not pre-add bossId to `seen` — collectReportSubtreeIds
-      // filters roots against it, which would prune the entire traversal.
-      upIds = [bossId, ...(await collectReportSubtreeIds([bossId], seen))];
-    }
+    const downIds = await collectReportSubtreeIds([actor._id], new Set());
     // Dedupe (cycle-safe) and exclude the actor: the strip shows the team,
     // and the actor's own status already lives in the dashboard hero.
-    const combined = new Set([...downIds, ...upIds].map((id) => id.toString()));
+    const combined = new Set(downIds.map((id) => id.toString()));
     combined.delete(actorIdStr);
-    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id));
+    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id.toString()));
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;

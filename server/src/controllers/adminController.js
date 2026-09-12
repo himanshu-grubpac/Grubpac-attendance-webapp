@@ -308,6 +308,38 @@ export async function listManagers(req, res) {
     roleId: { $in: roleIds },
   };
 
+  // Hierarchy scope: Admin/HR see every manager; everyone else sees only
+  // their own chain (self, direct reports, managers above, delegate-linked
+  // users) so one RM can never enumerate other teams' managers.
+  const callerSlug = req.user.roleId && typeof req.user.roleId === 'object'
+    ? req.user.roleId.slug
+    : null;
+  if (callerSlug !== SYSTEM_ROLE_SLUGS.ADMIN && callerSlug !== SYSTEM_ROLE_SLUGS.HR) {
+    const chainIds = new Set([req.user._id.toString()]);
+    // Walk up the reporting chain (cycle-safe, bounded).
+    let cursor = req.user.reportingManagerId?._id?.toString?.()
+      ?? req.user.reportingManagerId?.toString?.()
+      ?? null;
+    for (let depth = 0; depth < 10 && cursor && !chainIds.has(cursor); depth += 1) {
+      chainIds.add(cursor);
+      const superior = await User.findById(cursor).select('reportingManagerId').lean();
+      cursor = superior?.reportingManagerId?._id?.toString?.()
+        ?? superior?.reportingManagerId?.toString?.()
+        ?? null;
+    }
+    const [reports, delegated, delegating] = await Promise.all([
+      User.find({ reportingManagerId: req.user._id, isActive: true }).select('_id').lean(),
+      User.find({ delegateApproverId: req.user._id, isActive: true }).select('_id').lean(),
+      User.find({ _id: { $in: [...chainIds] } }).select('delegateApproverId').lean(),
+    ]);
+    for (const doc of [...reports, ...delegated]) chainIds.add(doc._id.toString());
+    for (const doc of delegating) {
+      const delegateId = doc.delegateApproverId?._id?.toString?.() ?? doc.delegateApproverId?.toString?.();
+      if (delegateId) chainIds.add(delegateId);
+    }
+    query._id = { $in: [...chainIds] };
+  }
+
   if (search) {
     const regex = new RegExp(escapeRegex(search), 'i');
     query.$or = [{ name: regex }, { email: regex }, { employeeCode: regex }];

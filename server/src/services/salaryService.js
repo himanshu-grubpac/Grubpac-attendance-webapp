@@ -229,7 +229,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
 
   const [attendanceCreditByDay, balances, yearLeaveRequests] = await Promise.all([
     loadAttendanceCreditByDay(user._id, start, end),
-    LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried encashed'),
+    LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried compOffEarned encashed'),
     LeaveRequest.find({
       userId: user._id,
       status: 'approved',

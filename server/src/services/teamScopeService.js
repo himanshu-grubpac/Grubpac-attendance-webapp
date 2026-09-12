@@ -14,6 +14,13 @@ export async function getActorManagedDepartmentIds(actor) {
 /**
  * Returns null when unscoped (read-all), [] when team scope applies but no employees match,
  * or an array of user ObjectIds.
+ *
+ * Role model: there is NO separate department-lead role. Dept-lead =
+ * reporting-manager + `managedDepartmentIds` flag, and ONLY that flag may
+ * widen scope to full departments (below). A plain RM without the flag is
+ * confined to direct reports by the caller (leave paths MUST use
+ * resolveLeaveApprovalUserIds/resolveLeaveTeamUserIds instead, which never
+ * consult managed departments).
  */
 export async function resolveTeamScopedUserIds(
   actor,
