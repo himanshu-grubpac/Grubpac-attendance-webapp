@@ -612,6 +612,35 @@ textarea:disabled {
   max-width: var(--field-sm-max-width);
 }
 
+/* ── Permanent +91 prefix for Indian mobiles (10 digits only) ── */
+.mobile-input-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.mobile-input-prefix {
+  position: absolute;
+  left: 0.85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+}
+
+.mobile-input--with-prefix {
+  padding-left: 2.95rem !important;
+}
+
+.mobile-input--with-prefix:disabled {
+  opacity: 0.6;
+}
+
 .input--file {
   height: var(--input-height) !important;
   min-height: var(--input-height) !important;
@@ -15556,6 +15585,40 @@ button.password-input__toggle {
 
   .btn-sm {
     min-height: 2.75rem;
+  }
+}
+
+/* ── Laptop toast/banner fix: cover area between sidenav and right scrollbar ── */
+@media (min-width: 961px) {
+  .toast-stack {
+    left: var(--sidebar-width);
+    right: 0.5rem;
+    transform: none;
+    max-width: none;
+    padding-inline: 0;
+  }
+
+  .toast-stack .toast {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .action-popup-stack {
+    left: var(--sidebar-width);
+    right: 0.5rem;
+    padding-inline: 0;
+  }
+
+  .action-popup {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .app-layout--collapsed .toast-stack,
+  .app-layout--collapsed .action-popup-stack {
+    left: var(--sidebar-width-collapsed);
   }
 }
 

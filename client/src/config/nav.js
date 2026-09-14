@@ -121,6 +121,14 @@ export const NAV_ITEMS = [
     allPermissions: [PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE],
   },
   {
+    to: '/admin/help/team',
+    label: 'Team issues',
+    icon: '?',
+    section: 'Employees',
+    portal: 'admin',
+    permission: PERMISSIONS.HELP_MANAGE,
+  },
+  {
     to: '/admin/leave/policies',
     label: 'Leave policies',
     icon: '⚙',

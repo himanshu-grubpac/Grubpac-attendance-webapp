@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { adminAttendanceUpsertSchema } from '../../../shared/validation/attendance.js';
 import {
   isCheckInBlockedByApprovedLeave,
   monthCalendarStatusForCheckInTag,
@@ -12,6 +13,28 @@ import {
   filterOrphanCheckOuts,
   monthCalendarStatusForCheckIn,
 } from './attendanceService.js';
+
+test('admin upsert schema allows leave-only payload without check-in time', () => {
+  const parsed = adminAttendanceUpsertSchema.parse({
+    userId: '507f1f77bcf86cd799439011',
+    dayKey: '2026-08-04',
+    leaveTypeId: '507f1f77bcf86cd799439012',
+  });
+  assert.equal(parsed.leaveTypeId, '507f1f77bcf86cd799439012');
+  assert.equal(parsed.checkInTime, undefined);
+});
+
+test('admin upsert schema requires check-in time when leave type is omitted', () => {
+  assert.throws(
+    () =>
+      adminAttendanceUpsertSchema.parse({
+        userId: '507f1f77bcf86cd799439011',
+        dayKey: '2026-08-04',
+        statusCode: 'P',
+      }),
+    /Check-in time is required/,
+  );
+});
 
 test('month calendar maps HD check-ins to half_day status', () => {
   assert.equal(monthCalendarStatusForCheckInTag('HD'), 'half_day');

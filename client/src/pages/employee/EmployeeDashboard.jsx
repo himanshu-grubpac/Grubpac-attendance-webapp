@@ -557,14 +557,16 @@ export default function EmployeeDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {teamStatus.length === 0 ? (
+                    {teamStatus.filter((member) => member.userId !== user?.id).length === 0 ? (
                       <tr>
                         <td colSpan={2} className="muted small dash-team-table__empty">
                           No team members found.
                         </td>
                       </tr>
                     ) : (
-                      teamStatus.map((member) => {
+                      teamStatus
+                        .filter((member) => member.userId !== user?.id)
+                        .map((member) => {
                         const present =
                           member.status === 'checked_in' || member.status === 'wfh';
                         const onLeave = !present && member.status === 'on_leave';

@@ -13,11 +13,12 @@ const istDayKeySchema = z
 
 export const ATTENDANCE_STATUS_CODES = ['P', 'HD', 'LV', ...Array.from({ length: 10 }, (_, i) => `W${i + 1}`)];
 
-export const adminAttendanceEditSchema = z.object({
-  checkInTime: hhmmTimeSchema,
+const adminAttendancePayloadFields = {
+  checkInTime: hhmmTimeSchema.optional(),
   checkOutTime: hhmmTimeSchema.nullable().optional(),
-  statusCode: z.enum(ATTENDANCE_STATUS_CODES),
-  attendanceMode: z.enum(['office', 'wfh']),
+  statusCode: z.enum(ATTENDANCE_STATUS_CODES).optional(),
+  leaveTypeId: objectIdSchema.optional(),
+  attendanceMode: z.enum(['office', 'wfh']).optional().default('office'),
   lateNote: z
     .string()
     .trim()
@@ -25,13 +26,37 @@ export const adminAttendanceEditSchema = z.object({
     .optional()
     .nullable()
     .transform((value) => (value ? value : null)),
-});
+};
+
+function refineAdminAttendancePayload(data, ctx) {
+  if (!data.statusCode && !data.leaveTypeId) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Either attendance status or leave type is required.',
+      path: ['statusCode'],
+    });
+  }
+  if (!data.leaveTypeId && !data.checkInTime) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Check-in time is required unless applying leave only.',
+      path: ['checkInTime'],
+    });
+  }
+}
+
+export const adminAttendanceEditSchema = z
+  .object(adminAttendancePayloadFields)
+  .superRefine(refineAdminAttendancePayload);
 
 /** Admin create-or-upsert attendance for a user on an IST calendar day (no existing check-in required). */
-export const adminAttendanceUpsertSchema = adminAttendanceEditSchema.extend({
-  userId: objectIdSchema,
-  dayKey: istDayKeySchema,
-});
+export const adminAttendanceUpsertSchema = z
+  .object({
+    userId: objectIdSchema,
+    dayKey: istDayKeySchema,
+    ...adminAttendancePayloadFields,
+  })
+  .superRefine(refineAdminAttendancePayload);
 
 export const attendancePayloadSchema = z.object({
   deviceId: deviceIdSchema,

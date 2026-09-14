@@ -43,7 +43,7 @@ export default function ProfilePage() {
     setForm({
       firstName: user.firstName ?? '',
       lastName: user.lastName ?? '',
-      mobile: user.mobile ?? '',
+      mobile: String(user.mobile ?? '').replace(/\D/g, '').slice(0, 10),
     });
   }, [user]);
 
@@ -154,14 +154,21 @@ export default function ProfilePage() {
           </label>
           <label className="form-grid__full">
             <span className="label">Mobile</span>
-            <input
-              className="input"
-              type="tel"
-              value={form.mobile}
-              onChange={(e) => setForm({ ...form, mobile: e.target.value })}
-              maxLength={15}
-              autoComplete="tel"
-            />
+            <div className="mobile-input-wrap">
+              <span className="mobile-input-prefix" aria-hidden="true">
+                +91
+              </span>
+              <input
+                className="input mobile-input--with-prefix"
+                type="text"
+                inputMode="numeric"
+                value={form.mobile}
+                onChange={(e) => setForm({ ...form, mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                maxLength={10}
+                autoComplete="tel"
+                placeholder="99999 99999"
+              />
+            </div>
             <p className="field-hint">10-digit Indian mobile number.</p>
             <FieldError message={fieldErrors.mobile} />
           </label>

@@ -22,8 +22,25 @@ function delay(ms) {
   });
 }
 
-export async function waitForServerReady(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
-  if (!import.meta.env.DEV) return true;
+/** CSRF cookie is issued with the httpOnly auth cookie on login. */
+export function hasSessionCookieHint() {
+  if (typeof document === 'undefined') return false;
+  return /(?:^|;\s*)attendance_csrf=([^;]+)/.test(document.cookie);
+}
+
+/**
+ * Best-effort ping to /api/health — warms Lambda on cold start and waits for
+ * the local dev API to accept connections. Does not touch authenticated routes.
+ */
+export async function coldStartPing(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+  if (!import.meta.env.DEV) {
+    try {
+      await api.get('/health', { timeout: 5000 });
+    } catch {
+      // Best-effort warm-up; subsequent API calls handle their own errors.
+    }
+    return;
+  }
 
   const deadline = Date.now() + maxWaitMs;
   let backoff = INITIAL_DELAY_MS;
@@ -31,39 +48,27 @@ export async function waitForServerReady(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
   while (Date.now() < deadline) {
     try {
       await api.get('/health', { timeout: 2000 });
-      return true;
+      return;
     } catch (error) {
-      if (!isTransientNetworkError(error)) return false;
+      if (!isTransientNetworkError(error)) return;
       await delay(backoff);
       backoff = Math.min(Math.round(backoff * 1.4), MAX_DELAY_MS);
     }
   }
-
-  return false;
 }
 
 /**
- * Deliberate Lambda cold-start warmer for public page loads.
- * Fire-and-forget: hits the cheap, auth-free /health check (no DB touch)
- * so a container is warm by the time the user submits. Errors are swallowed
- * silently — a down server must never break the login form, and the login
- * POST itself surfaces the real error. Idempotent (StrictMode double-mount
- * safe).
- */
-export function coldStartPing() {
-  api.get('/health', { timeout: 3000 }).catch(() => {
-    // Warmer only — ignore failures.
-  });
-}
-
-/**
- * Restores the signed-in session on app boot (previously named
- * fetchSessionWithRetry — renamed to state what it does; the retry loop only
- * covers local dev-server startup races).
+ * Restores the signed-in session on app boot. Skips /auth/me when no session
+ * cookies are present. The retry loop only covers local dev-server startup races.
  */
 export async function restoreSession(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+  if (!hasSessionCookieHint()) {
+    await coldStartPing(maxWaitMs);
+    return { user: null };
+  }
+
   if (import.meta.env.DEV) {
-    await waitForServerReady(maxWaitMs);
+    await coldStartPing(maxWaitMs);
   }
 
   const deadline = Date.now() + maxWaitMs;

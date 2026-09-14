@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema } from '@shared/validation/leave.js';
+import { createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema, updateLeaveTypeSchema } from '@shared/validation/leave.js';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { getISTYear } from '../../utils/datetime.js';
@@ -136,6 +136,8 @@ export default function AdminLeavePolicies() {
   const [typeFieldErrors, setTypeFieldErrors] = useState({});
   const [typeModalError, setTypeModalError] = useState('');
   const [typeSubmitting, setTypeSubmitting] = useState(false);
+  const [typeEditingId, setTypeEditingId] = useState(null);
+  const typeEditing = leaveTypes.find((item) => item.id === typeEditingId) ?? null;
 
   const [policyModalOpen, setPolicyModalOpen] = useState(false);
   const [policyForm, setPolicyForm] = useState(emptyPolicyForm);
@@ -200,11 +202,45 @@ export default function AdminLeavePolicies() {
     setModalError('');
   }
 
-  function openTypeModal() {
-    setTypeForm(emptyTypeForm);
+  function openTypeModal(type = null) {
+    if (type) {
+      setTypeEditingId(type.id);
+      setTypeForm({
+        code: type.code,
+        name: type.name,
+        description: type.description ?? '',
+        isActive: Boolean(type.isActive),
+      });
+    } else {
+      setTypeEditingId(null);
+      setTypeForm(emptyTypeForm);
+    }
     setTypeFieldErrors({});
     setTypeModalError('');
     setTypeModalOpen(true);
+  }
+
+  function openEditTypeModal(type) {
+    openTypeModal(type);
+  }
+
+  async function handleToggleTypeActive(type) {
+    const nextActive = !type.isActive;
+    const action = nextActive ? 'Reactivate' : 'Deactivate';
+    const confirmed = await requestConfirm({
+      title: `${action} leave type`,
+      message: `${action} "${type.code} — ${type.name}"? ${nextActive ? 'It will again be available when creating policies.' : 'It will be hidden from active selections.'}`,
+      confirmLabel: action,
+      variant: nextActive ? 'default' : 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await leaveApi.updateType(type.id, { isActive: nextActive });
+      showSuccess(`Leave type ${type.code} ${nextActive ? 'reactivated' : 'deactivated'}.`);
+      await loadLeaveTypes();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
   }
 
   function closeTypeModal() {
@@ -213,6 +249,7 @@ export default function AdminLeavePolicies() {
     setTypeForm(emptyTypeForm);
     setTypeFieldErrors({});
     setTypeModalError('');
+    setTypeEditingId(null);
   }
 
   function openPolicyModal() {
@@ -240,6 +277,37 @@ export default function AdminLeavePolicies() {
   async function handleTypeSubmit(event) {
     event.preventDefault();
     setTypeModalError('');
+
+    const isEditing = Boolean(typeEditingId);
+
+    if (isEditing) {
+      const payload = {
+        name: typeForm.name.trim(),
+        description: (typeForm.description ?? '').trim(),
+        isActive: Boolean(typeForm.isActive),
+      };
+      const validation = validateForm(updateLeaveTypeSchema, payload);
+
+      if (!validation.data) {
+        setTypeFieldErrors(validation.errors);
+        return;
+      }
+
+      setTypeFieldErrors({});
+      setTypeSubmitting(true);
+
+      try {
+        await leaveApi.updateType(typeEditingId, validation.data);
+        showSuccess(`Leave type ${typeEditing?.code ?? ''} updated.`);
+        closeTypeModal();
+        await loadLeaveTypes();
+      } catch (err) {
+        setTypeModalError(getErrorMessage(err));
+      } finally {
+        setTypeSubmitting(false);
+      }
+      return;
+    }
 
     const payload = {
       code: typeForm.code.trim().toUpperCase(),
@@ -339,6 +407,21 @@ export default function AdminLeavePolicies() {
     }
   }
 
+  function getTypeActionItems(type) {
+    return [
+      {
+        key: 'edit',
+        label: 'Edit',
+        onClick: () => openEditTypeModal(type),
+      },
+      {
+        key: 'toggleActive',
+        label: type.isActive ? 'Deactivate' : 'Reactivate',
+        onClick: () => handleToggleTypeActive(type),
+      },
+    ];
+  }
+
   function getActionItems(policy) {
     return [
       {
@@ -351,6 +434,66 @@ export default function AdminLeavePolicies() {
 
   return (
     <div className="page page--leave-policies">
+      {canManagePolicies ? (
+        <section className="card card--table leave-types-panel" aria-label="Leave types">
+          <div className="card__toolbar">
+            <h2 className="card__title">Leave types</h2>
+            <span className="badge badge-muted">{leaveTypes.length}</span>
+          </div>
+          <p className="muted small" style={{ padding: '0 var(--space-4) var(--space-3)' }}>
+            Fix typo names or deactivate unused types. Code is the short identifier and cannot be changed after creation.
+          </p>
+          {leaveTypes.length === 0 ? (
+            <div style={{ padding: '0 var(--space-4) var(--space-4)' }}>
+              <EmptyState
+                icon={EMPTY_ICONS.leave}
+                title="No leave types"
+                description="Create a leave type to start configuring yearly policies."
+                action={
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => openTypeModal()}>
+                    Add leave type
+                  </button>
+                }
+              />
+            </div>
+          ) : (
+            <div className="table-wrap table-wrap--responsive">
+              <table className="table data-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th className="cell-actions-col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaveTypes.map((type) => (
+                    <tr key={type.id}>
+                      <td data-label="Code">
+                        <code className="leave-policies-table__code">{type.code}</code>
+                      </td>
+                      <td data-label="Name" className="leave-policies-table__name">
+                        {type.name}
+                      </td>
+                      <td data-label="Status">
+                        <StatusBadge active={type.isActive} />
+                      </td>
+                      <td data-label="Actions" className="cell-actions-col">
+                        <ActionMenu
+                          ariaLabel={`Actions for ${type.code} leave type`}
+                          items={getTypeActionItems(type)}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
+
       <section className="leave-policies-panel card card--table" aria-label="Leave policies">
         <div className="leave-policies-toolbar card__toolbar">
           <div className="leave-policies-toolbar__filters filter-bar">
@@ -369,7 +512,7 @@ export default function AdminLeavePolicies() {
           </div>
           {canManagePolicies ? (
             <div className="leave-policies-toolbar__actions">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={openTypeModal}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => openTypeModal()}>
                 Add leave type
               </button>
               <button type="button" className="btn btn-primary btn-sm" onClick={openPolicyModal}>
@@ -484,10 +627,12 @@ export default function AdminLeavePolicies() {
               >
                 <header className="modal__header">
                   <h2 id={addTypeModalTitleId} className="modal__title">
-                    Add leave type
+                    {typeEditingId ? `Edit leave type: ${typeEditing?.code ?? ''}` : 'Add leave type'}
                   </h2>
                   <p className="modal__lead muted">
-                    Create a new leave type code and name. Policies are added separately per year.
+                    {typeEditingId
+                      ? 'Update the name, description, or active status. Code cannot be changed.'
+                      : 'Create a new leave type code and name. Policies are added separately per year.'}
                   </p>
                 </header>
 
@@ -501,7 +646,7 @@ export default function AdminLeavePolicies() {
                       <label className="modal__field">
                         <span className="label">Code</span>
                         <input
-                          autoFocus
+                          autoFocus={!typeEditingId}
                           className="input input--narrow"
                           type="text"
                           maxLength={5}
@@ -510,13 +655,19 @@ export default function AdminLeavePolicies() {
                           onChange={(event) =>
                             setTypeForm({ ...typeForm, code: event.target.value.toUpperCase() })
                           }
+                          disabled={Boolean(typeEditingId)}
+                          readOnly={Boolean(typeEditingId)}
                         />
+                        {typeEditingId ? (
+                          <span className="muted small">Code cannot be changed.</span>
+                        ) : null}
                         <FieldError message={typeFieldErrors.code} />
                       </label>
 
                       <label className="modal__field">
                         <span className="label">Name</span>
                         <input
+                          autoFocus={Boolean(typeEditingId)}
                           className="input"
                           type="text"
                           maxLength={100}
@@ -574,7 +725,13 @@ export default function AdminLeavePolicies() {
                       Cancel
                     </button>
                     <button type="submit" className="btn btn-primary" disabled={typeSubmitting}>
-                      {typeSubmitting ? 'Creating…' : 'Create leave type'}
+                      {typeEditingId
+                        ? typeSubmitting
+                          ? 'Saving…'
+                          : 'Save changes'
+                        : typeSubmitting
+                          ? 'Creating…'
+                          : 'Create leave type'}
                     </button>
                   </footer>
                 </form>

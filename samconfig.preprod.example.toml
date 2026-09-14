@@ -1,0 +1,20 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "grubpac-attendance-api-preprod"
+resolve_s3 = true
+s3_prefix = "grubpac-attendance-api-preprod"
+region = "ap-south-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+# Copy to samconfig.preprod.toml and fill MongoDbUri + JwtSecret locally (gitignored).
+# MongoDbUri: same SRV string as server/.env.preprod (mongodb+srv://...@attendance-preprod.wtj7gte.mongodb.net/...?appName=attendance-preprod).
+# Local CLI uses .env.preprod; Lambda uses MongoDbUri here. Do not use manual shard/replicaSet URIs locally.
+# Copy working SMTP/Brevo from samconfig.staging.toml for UAT email.
+# Set ClientOrigin after pre-prod CloudFront is created.
+parameter_overrides = "ApiFunctionName=\"grubpac-attendance-api-preprod\" JobFunctionName=\"grubpac-attendance-api-jobs-preprod\" ClientOrigin=\"https://REPLACE_PREPROD_CLOUDFRONT_DOMAIN\" HelpUploadsBucketName=\"grubpac-attendance-help-uploads-preprod-662252246711\" ReservedConcurrency=0 EnableWarmupSchedule=false MongoDbUri=\"REPLACE_ME\" JwtSecret=\"REPLACE_ME_PREPROD_JWT_MIN_32_CHARS\" JwtExpiresIn=\"12h\" JwtCookieMaxAgeMs=\"43200000\" SmtpHost=\"REPLACE_ME\" SmtpPort=\"587\" SmtpSecure=\"false\" SmtpUser=\"REPLACE_ME\" SmtpPass=\"REPLACE_ME\" EmailFrom=\"REPLACE_ME\" EmailFromName=\"Grubpac Attendance\" BrevoApiKey=\"REPLACE_ME\" SmsSender=\"GRUBPAC\" SmsDefaultCountryCode=\"91\" LeaveDecisionUndoMs=\"15000\" AutoCheckoutEnabled=\"true\" AutoCheckoutOfficeDay=\"same\" AutoCheckoutOfficeTime=\"23:59\" AutoCheckoutWfhDay=\"next\" AutoCheckoutWfhTime=\"06:00\""
+
+[default.global.parameters]
+region = "ap-south-1"
