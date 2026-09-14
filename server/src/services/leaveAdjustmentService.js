@@ -10,7 +10,7 @@ import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LeaveBalance, LEAVE_BALANCE_POPULATE } from '../models/LeaveBalance.js';
-import { adjustBalance } from './leaveBalanceService.js';
+import { adjustBalance, resolvePolicyForLeaveType } from './leaveBalanceService.js';
 import {
   applyTeamScopeToEmployeeQuery,
   isUserInTeamScope,
@@ -161,6 +161,17 @@ export async function batchAdjustLeaveCarried(actor, permissions, rawBody) {
   for (const adjustment of parsed.adjustments) {
     try {
       await assertEmployeeInScope(actor, permissions, adjustment.userId);
+
+      const policy = await resolvePolicyForLeaveType(adjustment.leaveTypeId, adjustment.year);
+      if (!policy) {
+        results.push({
+          userId: adjustment.userId,
+          leaveTypeId: adjustment.leaveTypeId,
+          status: 'error',
+          message: 'No leave policy for this leave type and year. Create a policy first.',
+        });
+        continue;
+      }
 
       const result = await adjustBalance(
         adjustment.userId,

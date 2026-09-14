@@ -1,5 +1,7 @@
 import { LeaveType } from '../models/LeaveType.js';
 import { LeavePolicy, LEAVE_POLICY_POPULATE } from '../models/LeavePolicy.js';
+import { LeaveBalance } from '../models/LeaveBalance.js';
+import { LeaveRequest } from '../models/LeaveRequest.js';
 import { Holiday } from '../models/Holiday.js';
 import { HolidayCategory } from '../models/HolidayCategory.js';
 import { User } from '../models/User.js';
@@ -115,6 +117,33 @@ export async function updateLeaveType(req, res) {
   await leaveType.save();
 
   res.json({ type: leaveType.toSafeJSON() });
+}
+
+export async function deleteLeaveType(req, res) {
+  const leaveType = await LeaveType.findById(req.params.id);
+  if (!leaveType) {
+    return res.status(404).json({ message: 'Leave type not found.' });
+  }
+
+  const [policyCount, balanceCount, requestCount] = await Promise.all([
+    LeavePolicy.countDocuments({ leaveTypeId: leaveType._id }),
+    LeaveBalance.countDocuments({ leaveTypeId: leaveType._id }),
+    LeaveRequest.countDocuments({ leaveTypeId: leaveType._id }),
+  ]);
+
+  if (policyCount > 0 || balanceCount > 0 || requestCount > 0) {
+    return res.status(409).json({
+      message: 'Cannot delete leave type: it is referenced by policies, balances, or leave requests. Deactivate it instead.',
+    });
+  }
+
+  await leaveType.deleteOne();
+  auditLog('leave_type_deleted', {
+    adminId: req.user._id.toString(),
+    leaveTypeId: leaveType._id.toString(),
+    code: leaveType.code,
+  });
+  res.json({ message: 'Leave type deleted successfully.' });
 }
 
 export async function listLeavePolicies(req, res) {

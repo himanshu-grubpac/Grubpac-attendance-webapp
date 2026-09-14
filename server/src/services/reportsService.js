@@ -9,13 +9,26 @@ import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { HelpTicket } from '../models/HelpTicket.js';
 import { User } from '../models/User.js';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { Role } from '../models/Role.js';
+import { SYSTEM_ROLE_SLUGS, PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { resolveLeaveApprovalUserIds } from './teamScopeService.js';
 
 /** Help tickets are raised by `createdBy` (not `userId`) — map the scope filter. */
 function helpRequesterFilter(scopedIds) {
   if (scopedIds === null) return {};
   return { createdBy: { $in: scopedIds } };
+}
+
+async function loadAdminRole() {
+  return Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+}
+
+function adminExclusionQuery(adminRole) {
+  return adminRole ? { roleId: { $ne: adminRole._id } } : {};
+}
+
+function adminUserFilter(adminRole) {
+  return adminRole ? { roleId: adminRole._id } : { _id: null };
 }
 
 export async function getAdminReportsSummary(actor = null, permissions = []) {
@@ -34,6 +47,10 @@ export async function getAdminReportsSummary(actor = null, permissions = []) {
   const todayKey = getISTDateInputValue();
   const todayDay = parseDateInputAsISTDay(todayKey);
 
+  const adminRole = await loadAdminRole();
+  const adminExclusion = adminExclusionQuery(adminRole);
+  const adminFilter = adminUserFilter(adminRole);
+
   const [
     pendingLeave,
     approvedLeaveDays,
@@ -41,6 +58,7 @@ export async function getAdminReportsSummary(actor = null, permissions = []) {
     activeEmployees,
     presentUserIds,
     onLeaveToday,
+    adminUserIds,
   ] = await Promise.all([
     LeaveRequest.countDocuments({ status: 'pending', ...userFilter }),
     LeaveRequest.aggregate([
@@ -55,8 +73,8 @@ export async function getAdminReportsSummary(actor = null, permissions = []) {
     ]),
     HelpTicket.countDocuments({ status: { $in: ['open', 'in_progress'] }, ...helpRequesterFilter(scopedIds) }),
     scopedIds === null
-      ? User.countDocuments({ isActive: true })
-      : User.countDocuments({ _id: { $in: scopedIds }, isActive: true }),
+      ? User.countDocuments({ isActive: true, ...adminExclusion })
+      : User.countDocuments({ _id: { $in: scopedIds }, isActive: true, ...adminExclusion }),
     AttendanceRecord.distinct('userId', {
       type: 'check_in',
       status: 'allowed',
@@ -69,9 +87,16 @@ export async function getAdminReportsSummary(actor = null, permissions = []) {
       endDate: { $gte: todayStart },
       ...userFilter,
     }),
+    User.find({ isActive: true, ...adminFilter }).select('_id').lean(),
   ]);
 
-  const presentSet = new Set(presentUserIds.map((id) => id.toString()));
+  const adminIdSet = new Set(adminUserIds.map((u) => u._id.toString()));
+
+  const presentSet = new Set(
+    presentUserIds
+      .map((id) => id.toString())
+      .filter((id) => !adminIdSet.has(id)),
+  );
   const leaveOnlyCount = onLeaveToday.filter((id) => !presentSet.has(id.toString())).length;
   const presentToday = presentSet.size;
   const absentToday = Math.max(0, activeEmployees - presentToday - leaveOnlyCount);

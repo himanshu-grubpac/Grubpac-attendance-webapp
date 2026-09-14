@@ -397,6 +397,9 @@ export async function presignCommentUpload(actor, ticketId, commentId, permissio
   if (!canViewTicket(actor, ticket, permissions)) {
     throwError('You do not have permission to view this ticket.', 403);
   }
+  if (ticket.status === 'closed' || ticket.status === 'resolved') {
+    throwError('This ticket is closed and cannot accept comments.', 400);
+  }
 
   const comment = await loadComment(ticketId, commentId);
 
@@ -468,6 +471,9 @@ export async function confirmCommentUpload(actor, ticketId, commentId, attachmen
   const ticket = await loadTicket(ticketId);
   if (!canViewTicket(actor, ticket, permissions)) {
     throwError('You do not have permission to view this ticket.', 403);
+  }
+  if (ticket.status === 'closed' || ticket.status === 'resolved') {
+    throwError('This ticket is closed and cannot accept comments.', 400);
   }
 
   await loadComment(ticketId, commentId);
