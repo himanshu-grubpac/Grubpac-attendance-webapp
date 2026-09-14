@@ -289,7 +289,7 @@ export default function AdminOfficeSettings() {
             <FieldError message={fieldErrors.halfDayThresholdTime} />
           </label>
           <fieldset className="form-grid__full office-weekend-fieldset">
-            <legend className="label">Weekend days (non-working)</legend>
+            <legend className="card__section-title">Weekend days (non-working)</legend>
             <div className="office-weekend-options">
               {WEEKDAY_OPTIONS.map((option) => (
                 <label key={option.value} className="office-weekend-option">

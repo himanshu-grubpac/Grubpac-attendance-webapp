@@ -412,9 +412,10 @@ test('approved cancel is silent under undo and notifies both sides after expiry'
   const final = await LeaveRequest.findById(created.id).lean();
   assert.equal(final.status, 'cancelled');
   assert.equal(emailsByTag('leave-cancelled').length, 1, 'applicant notified once');
-  assert.ok(
-    emailsByTag('leave-cancelled-manager').length + emailsByTag('leave-cancelled-approver').length >= 1,
-    'manager side notified once',
+  assert.equal(
+    emailsByTag('leave-cancelled-manager').length + emailsByTag('leave-cancelled-approver').length,
+    0,
+    'canceller gets no self-notice about their own cancellation',
   );
   assert.equal(await balancePending(applicant, leaveType, year), 0);
 });
@@ -591,4 +592,70 @@ test('approved SL cancels through the undo lifecycle', async () => {
   const final = await LeaveRequest.findById(created.id).lean();
   assert.equal(final.status, 'cancelled');
   assert.equal(emailsByTag('leave-cancelled').length, 1, 'applicant notified once');
+});
+
+// ── 17. Approver-cancelled leave attributes the canceller ───────────────────
+test('approver cancel never notifies "cancelled by employee"', async () => {
+  const { manager, applicant, leaveType, dayKey } = await seedLeaveSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitPayload(leaveType, dayKey));
+  await runLeaveDecisionNotifyJob(new Date(new Date(created.decisionUndoExpiresAt).getTime() + 5000));
+  await decideLeaveRequest(created.id, manager, managerPerms, 'approved', { comment: 'ok' });
+  const staged = await LeaveRequest.findById(created.id).lean();
+  await runLeaveDecisionNotifyJob(new Date(new Date(staged.notifyAfter).getTime() + 1000));
+  clearTestEmailOutbox();
+  clearTestSmsOutbox();
+
+  await cancelApprovedLeaveByApprover(created.id, manager, managerPerms, { decisionComment: 'coverage' });
+  const stagedCancel = await LeaveRequest.findById(created.id).lean();
+  assert.equal(
+    String(stagedCancel.cancelledBy),
+    String(manager._id),
+    'staged cancellation records the approver as canceller',
+  );
+  await runLeaveDecisionNotifyJob(new Date(new Date(stagedCancel.notifyAfter).getTime() + 1000));
+  const final = await LeaveRequest.findById(created.id).lean();
+  assert.equal(final.status, 'cancelled');
+
+  // The cancelling approver gets a self-confirmation — never a
+  // "cancelled by employee" notice about their own action.
+  const managerNotices = await Notification.find({ userId: manager._id, type: 'leave.cancelled' }).lean();
+  assert.equal(managerNotices.length, 1, 'canceller gets exactly one self-confirmation');
+  assert.equal(managerNotices[0].title, 'Leave cancelled by you');
+  assert.match(managerNotices[0].body, /You cancelled .* approved .* leave/, 'self-copy names the action');
+  assert.equal(
+    emailsByTag('leave-cancelled-approver').length,
+    0,
+    'no approver email for the canceller',
+  );
+
+  // The applicant is told who actually cancelled.
+  const applicantNotice = await Notification.findOne({ userId: applicant._id, type: 'leave.cancelled' }).lean();
+  assert.ok(applicantNotice, 'applicant gets a cancellation notice');
+  assert.match(applicantNotice.body, /Cancelled by /, 'applicant notice names the canceller');
+  assert.match(applicantNotice.body, new RegExp(manager.name.split(' ')[0]), 'canceller name present');
+});
+
+// ── 18. Employee self-cancel keeps the existing "by employee" wording ──────
+test('employee self-cancel still notifies the approver as by-employee', async () => {
+  const { manager, applicant, leaveType, dayKey } = await seedLeaveSetup();
+
+  const created = await createLeaveRequest(applicant._id, submitPayload(leaveType, dayKey));
+  await runLeaveDecisionNotifyJob(new Date(new Date(created.decisionUndoExpiresAt).getTime() + 5000));
+  await decideLeaveRequest(created.id, manager, managerPerms, 'approved', { comment: 'ok' });
+  const staged = await LeaveRequest.findById(created.id).lean();
+  await runLeaveDecisionNotifyJob(new Date(new Date(staged.notifyAfter).getTime() + 1000));
+  clearTestEmailOutbox();
+  clearTestSmsOutbox();
+
+  await cancelLeaveRequest(created.id, applicant);
+  const stagedCancel = await LeaveRequest.findById(created.id).lean();
+  await runLeaveDecisionNotifyJob(new Date(new Date(stagedCancel.notifyAfter).getTime() + 1000));
+  const final = await LeaveRequest.findById(created.id).lean();
+  assert.equal(final.status, 'cancelled');
+
+  const approverNotice = await Notification.findOne({ userId: manager._id, type: 'leave.cancelled' }).lean();
+  assert.ok(approverNotice, 'approver gets a cancellation notice');
+  assert.equal(approverNotice.title, 'Leave cancelled by employee');
+  assert.match(approverNotice.body, /cancelled their approved/, 'existing employee wording preserved');
 });

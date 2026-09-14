@@ -17,6 +17,8 @@ const leaveRequestSchema = new mongoose.Schema(
     },
     documentUrl: { type: String, default: null, trim: true },
     approverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    /** Who staged the current (or last) cancellation: applicant self-cancel or approver cancel. Cleared when the cancellation is undone or the request is edited. */
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionComment: { type: String, default: null, trim: true, maxlength: 1000 },
     adminException: { type: Boolean, default: false },
@@ -99,6 +101,7 @@ leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     documentUrl: this.documentUrl,
     approverId: approverDoc?._id?.toString() ?? this.approverId?.toString?.() ?? null,
     approverName: approverDoc?.name ?? null,
+    cancelledBy: this.cancelledBy?.toString?.() ?? null,
     decidedAt: this.decidedAt,
     decisionComment: this.decisionComment,
     adminException: this.adminException,

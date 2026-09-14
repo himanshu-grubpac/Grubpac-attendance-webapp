@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import AttendanceResultCard from '../../components/AttendanceResultCard.jsx';
 import LocationPanel from '../../components/LocationPanel.jsx';
 import MonthCalendar from '../../components/MonthCalendar.jsx';
@@ -9,7 +9,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { useGeolocation } from '../../hooks/useGeolocation.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
-import { attendanceApi, getErrorMessage } from '../../services/api.js';
+import { attendanceApi, compOffApi, getErrorMessage } from '../../services/api.js';
 import {
   formatISTDateTime,
   getCurrentISTClock,
@@ -83,7 +83,8 @@ const OFFICE_GEO_REJECTION_FALLBACK =
   'Outside office radius — move closer to the office to check in or check out.';
 
 export default function EmployeeDashboard() {
-  const { user } = useAuth();
+  const { user, switchPortal } = useAuth();
+  const navigate = useNavigate();
   const { showSuccess, showError } = useToast();
   const { showActionPopup } = useActionPopup();
   const [today, setToday] = useState(null);
@@ -91,6 +92,11 @@ export default function EmployeeDashboard() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  // Synchronous in-flight guards: state updates only apply on re-render, so
+  // rapid double-taps (especially during the slow GPS fix) would otherwise
+  // fire duplicate attendance/undo requests. Refs block re-entry instantly.
+  const attendanceInFlightRef = useRef(false);
+  const undoInFlightRef = useRef(false);
   const [clock, setClock] = useState(getCurrentISTClock());
   const [calendarMonth, setCalendarMonth] = useState(getISTMonthInputValue());
   const [calendarDays, setCalendarDays] = useState({});
@@ -108,6 +114,7 @@ export default function EmployeeDashboard() {
   const [teamStatus, setTeamStatus] = useState([]);
   const [teamLoading, setTeamLoading] = useState(true);
   const [teamError, setTeamError] = useState('');
+  const [hasCompOffAssessments, setHasCompOffAssessments] = useState(false);
 
   useEscapeKey(lateNoteOpen && !actionLoading, () => setLateNoteOpen(false));
 
@@ -160,6 +167,15 @@ export default function EmployeeDashboard() {
     try {
       const data = await attendanceApi.getTeamToday();
       setTeamStatus(data.teamStatus ?? []);
+      // Managers see an "Approve Comp. off work" button when any of their
+      // reports has checked out on an approved comp off day and is awaiting
+      // assessment (non-managers get { count: 0 } → no button).
+      try {
+        const countData = await compOffApi.approvalsCount({});
+        setHasCompOffAssessments(Number(countData?.count ?? 0) > 0);
+      } catch {
+        setHasCompOffAssessments(false);
+      }
     } catch (err) {
       setTeamError(getErrorMessage(err));
     } finally {
@@ -209,6 +225,8 @@ export default function EmployeeDashboard() {
       : 'office';
 
   async function handleAttendance(type, lateNote) {
+    if (attendanceInFlightRef.current) return;
+    attendanceInFlightRef.current = true;
     setActionLoading(true);
     setError('');
     setResult(null);
@@ -217,10 +235,12 @@ export default function EmployeeDashboard() {
       const todayCheckInMode = today?.checkIn?.attendanceMode ?? 'office';
       // With a pending WFH request the employee may check in from anywhere; the
       // mode is decided by location (inside office → office, elsewhere → wfh).
+      // An approved comp-off day behaves the same: sanctioned weekend/holiday
+      // work checks in as office inside the radius, WFH outside it.
       const hasPendingWfh = Boolean(today?.wfhPendingToday);
       const requiresOfficeGeo =
         type === 'check_in'
-          ? !today?.wfhApprovedToday && !hasPendingWfh
+          ? !today?.wfhApprovedToday && !hasPendingWfh && !today?.compOffApprovedToday
           : todayCheckInMode !== 'wfh';
 
       if (requiresOfficeGeo && office) {
@@ -279,12 +299,14 @@ export default function EmployeeDashboard() {
       setError(message);
       showError(message);
     } finally {
+      attendanceInFlightRef.current = false;
       setActionLoading(false);
     }
   }
 
   async function performUndo(token) {
-    if (!token) return;
+    if (!token || undoInFlightRef.current) return;
+    undoInFlightRef.current = true;
     setActionLoading(true);
     setError('');
     setResult(null);
@@ -298,6 +320,7 @@ export default function EmployeeDashboard() {
       setError(message);
       showError(message);
     } finally {
+      undoInFlightRef.current = false;
       setActionLoading(false);
     }
   }
@@ -404,9 +427,7 @@ export default function EmployeeDashboard() {
         <div className="dash-hero__actions">
           <button
             type="button"
-            className={`btn btn-lg dash-hero__cta ${
-              primaryAction === 'check_out' ? 'btn-secondary' : 'btn-primary'
-            }`}
+            className="btn btn-lg dash-hero__cta btn-primary"
             disabled={
               (primaryAction === 'check_in'
                 ? !today?.canCheckIn
@@ -467,6 +488,12 @@ export default function EmployeeDashboard() {
               <Link to="/employee/leave/apply" className="dash-shortcuts__item">
                 Apply leave
               </Link>
+              <Link to="/employee/leave/apply-wfh" className="dash-shortcuts__item">
+                Apply WFH
+              </Link>
+              <Link to="/employee/leave/comp-off" className="dash-shortcuts__item">
+                Request comp off
+              </Link>
               <Link to="/employee/history" className="dash-shortcuts__item">
                 Attendance history
               </Link>
@@ -503,11 +530,25 @@ export default function EmployeeDashboard() {
           />
 
           <div className="dash-calendar-team" aria-label="Team attendance today">
-            <h3 className="dash-calendar-team__title">Team Attendance Today</h3>
+            <div className="dash-calendar-team__header">
+              <h3 className="dash-calendar-team__title">Team Attendance Today</h3>
+              {hasCompOffAssessments ? (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    switchPortal('admin');
+                    navigate('/admin/leave/comp-off?queue=assessment');
+                  }}
+                >
+                  Approve Comp. off work
+                </button>
+              ) : null}
+            </div>
             {teamLoading && <p className="muted small">Loading team…</p>}
             {teamError && <div className="alert alert--error">{teamError}</div>}
             {!teamLoading && !teamError && (
-              <div className="dash-calendar-team__scroll">
+              <div className="dash-calendar-team__scroll table-wrap table-wrap--responsive">
                 <table className="dash-team-table">
                   <thead>
                     <tr>
@@ -541,7 +582,7 @@ export default function EmployeeDashboard() {
                                 : 'Not Checked In';
                         return (
                           <tr key={member.userId}>
-                            <td className="dash-team-table__name">
+                            <td data-label="Employee" className="dash-team-table__name">
                               <span>
                                 {member.firstName ||
                                   member.name?.split(' ')[0] ||
@@ -554,7 +595,7 @@ export default function EmployeeDashboard() {
                                 </span>
                               )}
                             </td>
-                            <td>
+                            <td data-label="Status">
                               <span
                                 className={`dash-team-table__badge dash-team-table__badge--${badgeTone}`}
                               >

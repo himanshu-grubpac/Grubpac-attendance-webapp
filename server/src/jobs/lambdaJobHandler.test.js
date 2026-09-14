@@ -239,6 +239,63 @@ test('handler: SQS finalize wake-up runs the sweep and reports no failures', asy
   }
 });
 
+test('handler: SQS comp-off wake-up runs the sweep without failures', async () => {
+  await setup();
+  try {
+    const { CompOffRequest } = await import('../models/CompOffRequest.js');
+    const { User } = await import('../models/User.js');
+    const past = new Date(Date.now() - 5000);
+    const applicant = await User.create({
+      firstName: 'Sqs',
+      lastName: 'Worker',
+      name: 'Sqs Worker',
+      email: 'sqs-worker@test.example',
+      mobile: '9000000042',
+      employeeCode: 'T00000042',
+      passwordHash: 'test-password-hash',
+      role: 'employee',
+      isActive: true,
+    });
+    await CompOffRequest.create({
+      userId: applicant._id,
+      startDate: past,
+      endDate: past,
+      days: 1,
+      reason: 'SQS sweep coverage',
+      status: 'pending',
+      notificationsSent: false,
+      submitNotificationsSent: false,
+      notifyAfter: past,
+      undoExpiresAt: new Date(Date.now() - 30_000),
+    });
+    const event = {
+      Records: [
+        {
+          messageId: 'sqs-comp-off-1',
+          eventSource: 'aws:sqs',
+          body: JSON.stringify({
+            type: 'leave-finalize',
+            requestId: '507f1f77bcf86cd799439013',
+            kind: 'comp-off',
+            notifyAfter: past.toISOString(),
+            revision: 0,
+          }),
+        },
+      ],
+    };
+    const result = await handler(event, makeContext());
+
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.batchItemFailures, []);
+    const body = JSON.parse(result.body);
+    assert.equal(body.trigger, 'sqs');
+    const swept = await CompOffRequest.findOne({ reason: 'SQS sweep coverage' }).lean();
+    assert.equal(swept.submitNotificationsSent, true, 'sweep claimed the due submit');
+  } finally {
+    await teardown();
+  }
+});
+
 test('handler: null event returns 400', async () => {
   await setup();
   try {

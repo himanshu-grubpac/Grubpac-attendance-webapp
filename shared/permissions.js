@@ -173,17 +173,23 @@ export const SYSTEM_ROLES = [
   {
     name: 'Reporting Manager',
     slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER,
-    description: 'View team attendance and approve leave/help for direct reports.',
+    description: 'Own self-service plus team attendance and approve leave/help for direct reports.',
     isSystem: true,
+    // Seed defaults for freshly created roles only — existing roles are
+    // dynamically editable via Roles & Permissions and are never overwritten
+    // by seed/migrate runs.
     permissions: [
       PERMISSIONS.USERS_READ,
       PERMISSIONS.ATTENDANCE_READ_OWN,
       PERMISSIONS.ATTENDANCE_READ_TEAM,
       PERMISSIONS.LEAVE_READ,
+      PERMISSIONS.LEAVE_APPLY,
       PERMISSIONS.LEAVE_APPROVE,
       PERMISSIONS.LEAVE_READ_TEAM,
       PERMISSIONS.HELP_READ,
+      PERMISSIONS.HELP_WRITE,
       PERMISSIONS.HELP_MANAGE,
+      PERMISSIONS.SALARY_READ,
       PERMISSIONS.SALARY_READ_TEAM,
       PERMISSIONS.NOTIFICATIONS_READ,
       PERMISSIONS.DEMO_FAQ_READ,

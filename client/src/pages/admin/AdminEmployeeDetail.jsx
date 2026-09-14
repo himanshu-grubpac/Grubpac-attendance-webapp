@@ -24,6 +24,7 @@ import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { formatInrCurrency, formatInrInput, parseInrInput } from '../../utils/formatNumber.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
+import { SalaryHistorySection } from './SalaryAuditSections.jsx';
 
 const emptyResetForm = {
   newPassword: '',
@@ -351,6 +352,8 @@ export default function AdminEmployeeDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { hasPermission } = useAuth();
   const canManageSalary = hasPermission(PERMISSIONS.SALARY_WRITE);
+  const canViewSalaryHistory =
+    hasPermission(PERMISSIONS.SALARY_READ) || hasPermission(PERMISSIONS.SALARY_READ_TEAM);
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
   const { setMeta } = usePageMetaContext();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
@@ -1067,6 +1070,23 @@ export default function AdminEmployeeDetail() {
                     }
                   />
                 </dl>
+              </section>
+            ) : null}
+
+            {canViewSalaryHistory && employee?.id ? (
+              <section
+                className="employee-detail-section card"
+                aria-labelledby="employee-salary-history-title"
+              >
+                <header className="employee-detail-section__header">
+                  <h2 id="employee-salary-history-title" className="employee-detail-section__title">
+                    Salary / History
+                  </h2>
+                  <p className="employee-detail-section__lead muted">
+                    Month-wise salary, LOP, deductions, and net — select a month for date-level detail.
+                  </p>
+                </header>
+                <SalaryHistorySection fixedUserId={employee.id} title="Salary history" />
               </section>
             ) : null}
           </>

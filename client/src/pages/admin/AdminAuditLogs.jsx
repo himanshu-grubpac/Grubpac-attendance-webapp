@@ -305,7 +305,7 @@ export default function AdminAuditLogs() {
           />
         ) : (
           <>
-            <div className="table-wrap table-wrap--fit audit-logs-table-wrap">
+            <div className="table-wrap table-wrap--fit table-wrap--responsive audit-logs-table-wrap">
               <table className="table data-table audit-logs-table">
                 <colgroup>
                   <col className="audit-logs-table__col-time" />

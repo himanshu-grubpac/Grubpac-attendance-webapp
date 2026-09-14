@@ -1,4 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ADMIN_PORTAL_PERMISSIONS, PERMISSIONS } from '@shared/permissions.js';
 import AppLayout from './components/AppLayout.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
@@ -23,11 +24,14 @@ import AdminEmployeeDetail from './pages/admin/AdminEmployeeDetail.jsx';
 import AdminRegisterEmployee from './pages/admin/AdminRegisterEmployee.jsx';
 import AdminAuditLogs from './pages/admin/AdminAuditLogs.jsx';
 import AdminLeaveApprovals from './pages/admin/AdminLeaveApprovals.jsx';
+import AdminCompOffRequests from './pages/admin/AdminCompOffRequests.jsx';
 import AdminLeavePolicies from './pages/admin/AdminLeavePolicies.jsx';
 import AdminTeamLeaveCalendar from './pages/admin/AdminTeamLeaveCalendar.jsx';
 import AdminStreaks from './pages/admin/AdminStreaks.jsx';
 import EmployeeDashboard from './pages/employee/EmployeeDashboard.jsx';
 import EmployeeApplyLeave from './pages/employee/EmployeeApplyLeave.jsx';
+import EmployeeApplyWfh from './pages/employee/EmployeeApplyWfh.jsx';
+import EmployeeCompOff from './pages/employee/EmployeeCompOff.jsx';
 import EmployeeLeaveBalances from './pages/employee/EmployeeLeaveBalances.jsx';
 import EmployeeMyLeaveRequests from './pages/employee/EmployeeMyLeaveRequests.jsx';
 import EmployeeHelp from './pages/employee/EmployeeHelp.jsx';
@@ -36,8 +40,17 @@ import EmployeeHistory from './pages/employee/EmployeeHistory.jsx';
 import AdminHelpTeam from './pages/admin/AdminHelpTeam.jsx';
 import AdminHelpTickets from './pages/admin/AdminHelpTickets.jsx';
 import AdminSalarySummary from './pages/admin/AdminSalarySummary.jsx';
+import TeamSalaryAudit from './pages/admin/TeamSalaryAudit.jsx';
 import HelpTicketDetail from './pages/help/HelpTicketDetail.jsx';
 import './App.css';
+
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
 
 function AuthenticatedShell() {
   return (
@@ -54,6 +67,7 @@ export default function App() {
         <ActionPopupProvider>
           <AuthProvider>
           <BrowserRouter>
+          <ScrollToTop />
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -181,6 +195,14 @@ export default function App() {
                 }
               />
               <Route
+                path="admin/leave/comp-off"
+                element={
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_APPROVE}>
+                    <AdminCompOffRequests />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="admin/leave/team-calendar"
                 element={
                   <ProtectedRoute portal="admin" permission={PERMISSIONS.LEAVE_MANAGE_POLICIES}>
@@ -223,6 +245,14 @@ export default function App() {
                     allPermissions={[PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ]}
                   >
                     <AdminSalarySummary />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/salary/team"
+                element={
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.SALARY_READ_TEAM}>
+                    <TeamSalaryAudit />
                   </ProtectedRoute>
                 }
               />
@@ -271,6 +301,22 @@ export default function App() {
                 element={
                   <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_APPLY}>
                     <EmployeeApplyLeave />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="employee/leave/apply-wfh"
+                element={
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_APPLY}>
+                    <EmployeeApplyWfh />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="employee/leave/comp-off"
+                element={
+                  <ProtectedRoute portal="employee" permission={PERMISSIONS.LEAVE_READ}>
+                    <EmployeeCompOff />
                   </ProtectedRoute>
                 }
               />

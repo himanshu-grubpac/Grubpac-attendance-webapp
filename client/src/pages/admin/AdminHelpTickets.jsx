@@ -101,7 +101,7 @@ export default function AdminHelpTickets() {
             description={statusFilter ? 'No tickets match this status filter.' : 'Support tickets will appear here when raised.'}
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive help-tickets-table-wrap">
             <table className="table data-table">
               <thead>
                 <tr>

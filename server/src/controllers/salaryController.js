@@ -1,6 +1,10 @@
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import {
+  salaryAuditExportQuerySchema,
+  salaryAuditQuerySchema,
   salaryExportQuerySchema,
+  salaryHistoryParamsSchema,
+  salaryHistoryQuerySchema,
   salaryStructureQuerySchema,
   salarySummaryQuerySchema,
   salaryTransferListQuerySchema,
@@ -17,14 +21,21 @@ import {
   generatePendingSalaryTransfers,
   getSalarySettingsPayload,
   getSalarySummaryForUser,
+  listRecentSettlements,
   listSalaryStructure,
   listSalarySummariesForMonth,
   listSalaryTransfers,
   loadSalarySubject,
+  settleMonthPayroll,
   updateSalarySettings,
   updateSalaryTransferStatus,
   updateUserSalary,
 } from '../services/salaryService.js';
+import {
+  getEmployeeSalaryHistory,
+  getMonthlySalaryAudit,
+  exportMonthlySalaryAudit,
+} from '../services/salaryAuditService.js';
 
 export async function updateUserSalaryHandler(req, res) {
   const parsed = updateUserSalarySchema.parse(req.body);
@@ -176,4 +187,66 @@ export async function updateSalaryTransferHandler(req, res) {
   });
 
   res.json({ transfer });
+}
+
+export async function settleMonthHandler(req, res) {
+  const parsed = generateSalaryTransfersSchema.parse(req.body);
+  const result = await settleMonthPayroll(parsed.month, req.user._id);
+  res.json(result);
+}
+
+export async function listSettlementsHandler(req, res) {
+  const settlements = await listRecentSettlements(6);
+  res.json({ settlements });
+}
+
+export async function getSalaryHistoryHandler(req, res) {
+  const { userId } = salaryHistoryParamsSchema.parse(req.params);
+  const { year } = salaryHistoryQuerySchema.parse(req.query);
+
+  const result = await getEmployeeSalaryHistory(
+    req.user,
+    req.userPermissions,
+    userId,
+    { year },
+  );
+
+  res.json(result);
+}
+
+export async function getSalaryAuditHandler(req, res) {
+  const { periodKey, departmentId } = salaryAuditQuerySchema.parse(req.query);
+
+  const result = await getMonthlySalaryAudit(
+    req.user,
+    req.userPermissions,
+    periodKey,
+    { departmentId },
+  );
+
+  res.json(result);
+}
+
+export async function exportSalaryAuditHandler(req, res) {
+  const { periodKey, departmentId } = salaryAuditExportQuerySchema.parse(req.query);
+
+  const { buffer, filename } = await exportMonthlySalaryAudit(
+    req.user,
+    req.userPermissions,
+    periodKey,
+    { departmentId },
+  );
+
+  auditLog('salary_audit_exported', {
+    adminId: req.user._id.toString(),
+    periodKey,
+  });
+
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
 }

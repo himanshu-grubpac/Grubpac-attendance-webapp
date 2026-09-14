@@ -175,6 +175,7 @@ export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDat
         pending: 0,
         carried: 0,
         encashed: 0,
+        compOffEarned: 0,
       });
     } else if (policy.accrualPerMonth > 0) {
       balance.entitled = entitled;
@@ -201,7 +202,8 @@ export async function initBalancesForAllUsers(year = getISTYear()) {
 export function getAvailableBalance(balance) {
   return (
     (balance.entitled ?? 0) +
-    (balance.carried ?? 0) -
+    (balance.carried ?? 0) +
+    (balance.compOffEarned ?? 0) -
     (balance.used ?? 0) -
     (balance.pending ?? 0) -
     (balance.encashed ?? 0)
@@ -212,7 +214,7 @@ export function getAvailableBalance(balance) {
 export function getPaidLeaveQuota(balance) {
   return Math.max(
     0,
-    (balance.entitled ?? 0) + (balance.carried ?? 0) - (balance.encashed ?? 0),
+    (balance.entitled ?? 0) + (balance.carried ?? 0) + (balance.compOffEarned ?? 0) - (balance.encashed ?? 0),
   );
 }
 
@@ -280,6 +282,15 @@ export async function validateCombinedAccumulation(
   extraPending = 0,
   pendingTypeId = null,
 ) {
+  // The cap governs combined-group accumulation only. A request for a type
+  // outside any combined group (e.g. WFH, SL, CO) neither consumes nor grows
+  // that stock, so it must be neither gated by nor counted toward the cap —
+  // otherwise unrelated requests (like a month of WFH) would falsely trip a
+  // "Combined CL+EL" error.
+  const pendingKey = pendingTypeId?._id?.toString?.() ?? pendingTypeId?.toString?.() ?? null;
+  const pendingPolicy = pendingKey ? policyMap.get(pendingKey) : null;
+  if (!pendingPolicy?.combinedCarryGroup) return;
+
   const balances = await LeaveBalance.find({ userId, year }).populate('leaveTypeId');
   let combinedStock = 0;
 
@@ -293,7 +304,7 @@ export async function validateCombinedAccumulation(
       (balance.carried ?? 0) -
       (balance.used ?? 0) -
       (balance.pending ?? 0);
-    if (typeId === pendingTypeId) {
+    if (typeId === pendingKey) {
       stock -= extraPending;
     }
     combinedStock += Math.max(0, stock);
@@ -561,6 +572,7 @@ async function prepareCarryForwardBalances(userId, fromYear, toYear, session = n
           pending: 0,
           carried: 0,
           encashed: 0,
+          compOffEarned: 0,
         });
         continue;
       }

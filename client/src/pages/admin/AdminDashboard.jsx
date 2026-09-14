@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { adminApi, getErrorMessage } from '../../services/api.js';
+import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
 
 const KPI_CARDS = [
   {
@@ -9,6 +9,15 @@ const KPI_CARDS = [
     icon: '✓',
     to: '/admin/leave/approvals',
     getValue: (summary) => summary.pendingLeaveRequests,
+    getHint: (_, counts) => {
+      if (!counts) return 'Awaiting your decision';
+      const parts = [];
+      if (counts.leave) parts.push(`${counts.leave} leave`);
+      if (counts.wfh) parts.push(`${counts.wfh} WFH`);
+      const compOff = (counts.compOff ?? 0) + (counts.compOffAssessment ?? 0);
+      if (compOff) parts.push(`${compOff} comp off`);
+      return parts.length > 0 ? parts.join(' · ') : 'Awaiting your decision';
+    },
   },
   {
     key: 'openTickets',
@@ -56,6 +65,7 @@ function DashboardCardSkeleton() {
 
 export default function AdminDashboard() {
   const [reports, setReports] = useState(null);
+  const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reportsError, setReportsError] = useState('');
 
@@ -63,12 +73,21 @@ export default function AdminDashboard() {
   useEffect(() => {
     setLoading(true);
     setReportsError('');
-    adminApi
-      .getReportsSummary()
-      .then((data) => setReports(data.summary ?? null))
-      .catch((err) => {
-        setReports(null);
-        setReportsError(getErrorMessage(err));
+    Promise.allSettled([adminApi.getReportsSummary(), leaveApi.getApprovalsPendingCounts()])
+      .then(([reportsResult, countsResult]) => {
+        if (reportsResult.status === 'fulfilled') {
+          setReports(reportsResult.value.summary ?? null);
+        } else {
+          setReports(null);
+          setReportsError(getErrorMessage(reportsResult.reason));
+        }
+        // Badge counts are RM-scoped to the caller's approval queue via the
+        // pending-counts endpoint; fail silent so the KPI grid still renders.
+        if (countsResult.status === 'fulfilled') {
+          setCounts(countsResult.value.counts ?? null);
+        } else {
+          setCounts(null);
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -97,7 +116,7 @@ export default function AdminDashboard() {
       ) : reports ? (
         <div className="admin-home__grid">
           {KPI_CARDS.map((card) => {
-            const hint = card.getHint?.(reports);
+            const hint = card.getHint?.(reports, counts);
             return (
               <Link key={card.key} to={card.to} className="admin-home__card card">
                 <span className="admin-home__card-chevron" aria-hidden="true">

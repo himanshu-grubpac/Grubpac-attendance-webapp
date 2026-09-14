@@ -11,6 +11,7 @@ import {
   resolveNavItemActive,
 } from '../config/nav.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useApprovalsBadgeCounts } from '../hooks/useApprovalsBadgeCounts.js';
 import { PageMetaProvider, usePageMetaContext } from '../context/PageMetaContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useConfirmDialog } from '../hooks/useConfirmDialog.jsx';
@@ -270,6 +271,7 @@ function SidebarAccountFooter({
 
 function MoreDrawer({ open, onClose, sections }) {
   useEscapeKey(open, onClose);
+  const location = useLocation();
 
   if (!open) return null;
 
@@ -291,7 +293,18 @@ function MoreDrawer({ open, onClose, sections }) {
                 <NavLink
                   key={link.to}
                   to={link.to}
-                  className={({ isActive }) => `more-drawer__link${isActive ? ' active' : ''}`}
+                  end={
+                    link.to === '/employee/dashboard' ||
+                    link.to === '/admin/dashboard' ||
+                    link.to === '/admin/attendance' ||
+                    link.to === '/admin/salary' ||
+                    link.to === '/admin/users/register' ||
+                    link.to === '/admin/users/bulk-upload'
+                  }
+                  className={({ isActive }) => {
+                    const active = resolveNavItemActive(link.to, { isActive, location });
+                    return `more-drawer__link${active ? ' active' : ''}`;
+                  }}
                   onClick={onClose}
                 >
                   <span aria-hidden="true">{link.icon}</span>
@@ -306,12 +319,13 @@ function MoreDrawer({ open, onClose, sections }) {
   );
 }
 
-function BottomNav({ items, activeKey, onMore }) {
+function BottomNav({ items, activeKey, onMore, badgeTotal }) {
   return (
     <nav className="bottom-nav" aria-label="Primary">
       {items.map((item) => {
         const displayLabel = item.shortLabel ?? item.label;
         const ariaLabel = item.shortLabel ? item.label : undefined;
+        const badge = item.badge === 'approvals' ? badgeTotal : 0;
 
         if (item.key === 'more') {
           return (
@@ -343,6 +357,11 @@ function BottomNav({ items, activeKey, onMore }) {
           >
             <span className="bottom-nav__icon" aria-hidden="true">
               {item.icon}
+              {badge > 0 ? (
+                <span className="bottom-nav__badge" aria-hidden="true">
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              ) : null}
             </span>
             <span className="bottom-nav__label">{displayLabel}</span>
           </NavLink>
@@ -363,6 +382,7 @@ function AppLayoutShell() {
 
   const navItems = useMemo(() => getVisibleNavItems(user, loginPortal), [user, loginPortal]);
   const bottomNavItems = useMemo(() => getBottomNavItems(user, loginPortal), [user, loginPortal]);
+  const { total: approvalsTotal } = useApprovalsBadgeCounts();
   const moreNavItems = useMemo(() => getMoreNavItems(user, loginPortal), [user, loginPortal]);
   const isAdminPortal = loginPortal === 'admin';
   const profilePath = isAdminPortal ? '/admin/profile' : '/employee/profile';
@@ -476,6 +496,7 @@ function AppLayoutShell() {
                     link.to === '/employee/dashboard' ||
                     link.to === '/admin/dashboard' ||
                     link.to === '/admin/attendance' ||
+                    link.to === '/admin/salary' ||
                     link.to === '/admin/users/register' ||
                     link.to === '/admin/users/bulk-upload'
                   }
@@ -489,6 +510,11 @@ function AppLayoutShell() {
                     {link.icon}
                   </span>
                   {!collapsed && <span className="nav-link__label">{link.label}</span>}
+                  {link.badge === 'approvals' && approvalsTotal > 0 ? (
+                    <span className="nav-link__badge" aria-hidden="true">
+                      {approvalsTotal > 99 ? '99+' : approvalsTotal}
+                    </span>
+                  ) : null}
                 </NavLink>
               ))}
             </div>
@@ -550,6 +576,7 @@ function AppLayoutShell() {
       <BottomNav
         items={bottomNavItems}
         activeKey={bottomActiveKey}
+        badgeTotal={approvalsTotal}
         onMore={() => setMoreOpen(true)}
       />
 

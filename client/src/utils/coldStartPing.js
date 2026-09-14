@@ -58,10 +58,10 @@ export async function coldStartPing(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
 }
 
 /**
- * Restore the current session when auth cookies may exist. Skips /auth/me when
- * no session cookies are present (e.g. login page before sign-in).
+ * Restores the signed-in session on app boot. Skips /auth/me when no session
+ * cookies are present. The retry loop only covers local dev-server startup races.
  */
-export async function fetchSessionWithRetry(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
+export async function restoreSession(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
   if (!hasSessionCookieHint()) {
     await coldStartPing(maxWaitMs);
     return { user: null };

@@ -24,9 +24,11 @@ import {
   deleteHolidayCategory,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
+  getApprovalsPendingCountsHandler,
   getLeaveBalances,
   getLeaveRequestHandler,
   getMyLeaveBalances,
+  getLopRecordsHandler,
   getTeamCalendarHandler,
   initUserBalancesHandler,
   listHolidays,
@@ -49,6 +51,8 @@ import {
   updateLeaveType,
 } from '../controllers/leaveController.js';
 import leaveCarryBulkRoutes from './leaveCarryBulkRoutes.js';
+import compOffRoutes from './compOffRoutes.js';
+import { compOffDecisionLoginHandler } from '../controllers/compOffController.js';
 import {
   batchAdjustLeaveCarriedHandler,
   getLeaveAdjustmentGridHandler,
@@ -63,6 +67,8 @@ router.get('/decision-link', leaveDecisionLimiter, asyncHandler(leaveDecisionLin
 router.post('/decision-link', leaveDecisionLimiter, urlencoded({ extended: false }), asyncHandler(leaveDecisionLinkHandler));
 // Auto-login: consumes the token, issues a JWT session, redirects to admin portal.
 router.get('/decision-login', leaveDecisionLimiter, asyncHandler(leaveDecisionLoginHandler));
+// Comp-off take-action auto-login: same mechanics, lands on Comp off requests.
+router.get('/comp-off/decision-login', leaveDecisionLimiter, asyncHandler(compOffDecisionLoginHandler));
 
 router.use(authenticate);
 
@@ -98,7 +104,12 @@ router.get('/balances/me', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandl
 router.post('/balances/init', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(initUserBalancesHandler));
 router.get(
   '/balances',
-  requirePermission(PERMISSIONS.LEAVE_READ_ALL, PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(
+    PERMISSIONS.LEAVE_READ_ALL,
+    PERMISSIONS.LEAVE_ADJUST_BALANCES,
+    PERMISSIONS.LEAVE_READ_TEAM,
+    PERMISSIONS.LEAVE_APPROVE,
+  ),
   asyncHandler(getLeaveBalances),
 );
 router.patch(
@@ -142,6 +153,11 @@ router.post(
   requirePermission(PERMISSIONS.LEAVE_APPLY),
   idempotencyMiddleware,
   asyncHandler(createLeaveRequestHandler),
+);
+router.get(
+  '/requests/pending-counts',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(getApprovalsPendingCountsHandler),
 );
 router.get(
   '/requests/:id',
@@ -253,5 +269,12 @@ router.post(
 );
 
 router.use(leaveCarryBulkRoutes);
+router.use(compOffRoutes);
+
+router.get(
+  '/lop-records/:userId',
+  requirePermission(PERMISSIONS.LEAVE_READ_ALL, PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_READ),
+  asyncHandler(getLopRecordsHandler),
+);
 
 export default router;

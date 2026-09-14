@@ -9,8 +9,11 @@
  * - LeavePolicy.year backfill + compound index (leaveTypeId + year) — missing year only
  * - LeaveRequest provisional→final lifecycle fields (revision, pendingRevision,
  *   undoExpiresAt, finalizedAt) + finalizer sweep indexes — additive $set only
+ * - LeaveBalance.compOffEarned backfill + CompOffRequest collection (comp-off module)
  * - User.managedDepartmentIds / roleId backfill (missing fields only)
+ * - Dual-portal system role permissions (HR attendance.read_own)
  * - HelpAttachment status + createdAt compound index (stale pending cleanup sweep)
+ * - DemoFaqItem collection indexes + demo_faq.* role permissions
  *
  * Usage (always from server/):
  *   node --env-file=.env.staging src/migrateRecentFeatures.js
@@ -57,6 +60,7 @@ import { LeaveType } from './models/LeaveType.js';
 import { LeavePolicy } from './models/LeavePolicy.js';
 import { LeaveBalance } from './models/LeaveBalance.js';
 import { LeaveRequest } from './models/LeaveRequest.js';
+import { CompOffRequest } from './models/CompOffRequest.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
 import { DemoFaqItem } from './models/DemoFaqItem.js';
 import { HelpAttachment } from './models/HelpAttachment.js';
@@ -131,6 +135,7 @@ const INDEX_MODELS = [
   LeavePolicy,
   LeaveBalance,
   LeaveRequest,
+  CompOffRequest,
   OfficeSettings,
   DemoFaqItem,
   HelpAttachment,
@@ -162,16 +167,13 @@ async function upsertSystemRoles() {
       role = await Role.create(seedRole);
       changes.push(`Created role: ${seedRole.slug}`);
     } else {
-      const before = [...(role.permissions ?? [])].sort().join(',');
+      // Roles are dynamically editable via Roles & Permissions: never
+      // overwrite an existing role's permissions here — seed defaults apply
+      // to freshly created roles only.
       role.name = seedRole.name;
       role.description = seedRole.description;
       role.isSystem = true;
-      role.permissions = seedRole.permissions;
       await role.save();
-      const after = [...(role.permissions ?? [])].sort().join(',');
-      if (before !== after) {
-        changes.push(`Updated permissions for role: ${seedRole.slug}`);
-      }
     }
     roleMap.set(seedRole.slug, role);
   }
@@ -313,6 +315,18 @@ async function migrateLeaveRequestUndoLifecycle(options = {}) {
   };
 }
 
+/**
+ * Backfills the comp-off earned-credit field on leave balances.
+ * Idempotent — only touches documents missing the new field.
+ */
+async function migrateCompOffEarnedField() {
+  const result = await LeaveBalance.updateMany(
+    { compOffEarned: { $exists: false } },
+    { $set: { compOffEarned: 0 } },
+  );
+  return result.modifiedCount ?? 0;
+}
+
 async function migrateRecentFeatures() {
   await connectDatabase();
 
@@ -334,6 +348,12 @@ async function migrateRecentFeatures() {
     : `granted fresh undo windows to ${undoBackfill.legacyPendingWindowed} legacy pending submission(s).`;
   console.log(
     `revision defaulted on ${undoBackfill.missingRevision} request(s); split notifyAfter on ${undoBackfill.inFlightSplit} in-flight staged decision(s); ${legacyPendingLine}`,
+  );
+
+  console.log('\n=== Comp-off earned credit backfill ===');
+  const compOffBackfill = await migrateCompOffEarnedField();
+  console.log(
+    `compOffEarned defaulted on ${compOffBackfill} leave balance(s).`,
   );
 
   console.log('\n=== Leave policy year backfill ===');

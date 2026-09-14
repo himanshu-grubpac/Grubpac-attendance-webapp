@@ -1,8 +1,14 @@
 import { refreshAccruedEntitlements, ensureBalancesForUser } from '../services/leaveBalanceService.js';
 import { runLeaveDecisionNotifyJob as leaveServiceRunLeaveDecisionNotifyJob, recoverPendingSubmitNotifications } from '../services/leaveService.js';
+import {
+  recoverPendingCompOffSubmitNotifications,
+  runCompOffSweep,
+} from '../services/compOffService.js';
 import { cleanupStalePendingAttachments } from '../services/helpAttachmentService.js';
+import { settleMonthPayroll } from '../services/lopSettlementService.js';
+import { MonthSettlement } from '../models/MonthSettlement.js';
 import { User } from '../models/User.js';
-import { getISTYear } from '../utils/istDate.js';
+import { getISTDateInputValue, getISTYear } from '../utils/istDate.js';
 import { logError } from '../utils/logger.js';
 import { acquireJobLock, releaseJobLock } from '../utils/jobLock.js';
 
@@ -33,6 +39,10 @@ export { applyYearEndCarryForward as runYearEndCarryForwardJob } from '../servic
  * Sweeps leave decisions whose undo window has elapsed and sends the deferred
  * email/SMS to the applicant. Decisions that are undone before the window
  * expires never reach this stage, so no mail/SMS is sent for them.
+ *
+ * Universal sweep: also finalizes comp-off staged actions, dispatches due
+ * comp-off submit notifications, and lapses stale comp-off requests (same
+ * JobLock, per-item isolation conventions).
  */
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const lock = await acquireJobLock('leave-decision-notify', { ttlMs: 120_000 });
@@ -40,7 +50,18 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
     return { skipped: true, reason: lock.reason };
   }
   try {
-    return await leaveServiceRunLeaveDecisionNotifyJob(now);
+    const leaveResult = await leaveServiceRunLeaveDecisionNotifyJob(now);
+    // A repeatedly failing item hangs its request as PENDING forever with no
+    // user-visible signal. Log loudly (CloudWatch alarm source on Lambda) so
+    // poison rows get human attention instead of silent infinite retries.
+    if (Array.isArray(leaveResult?.failed) && leaveResult.failed.length > 0) {
+      logError('leave_decision_finalize_failed', {
+        failed: leaveResult.failed.slice(0, 10),
+        failedCount: leaveResult.failed.length,
+      });
+    }
+    const compOffResult = await runCompOffSweep(now);
+    return { ...leaveResult, compOff: compOffResult };
   } finally {
     await releaseJobLock('leave-decision-notify', lock.lockId);
   }
@@ -59,11 +80,17 @@ export async function runHelpAttachmentCleanupJob() {
 
 /**
  * Recover stale pending submit notifications (Lambda cold-start safe).
- * Idempotent — safe to call multiple times.
+ * Idempotent — safe to call multiple times. Covers leave AND comp-off.
  */
 export async function recoverPendingSubmitNotificationsSafe() {
   try {
-    return await recoverPendingSubmitNotifications();
+    const leaveRecovered = await recoverPendingSubmitNotifications();
+    const compOffRecovered = await recoverPendingCompOffSubmitNotifications();
+    return {
+      recovered: leaveRecovered.recovered + compOffRecovered.recovered,
+      leave: leaveRecovered.recovered,
+      compOff: compOffRecovered.recovered,
+    };
   } catch (err) {
     logError('leave_submit_notification_recovery_failed', { error: err?.message });
     return { recovered: 0 };
@@ -83,6 +110,9 @@ export function startLeaveDecisionNotifyScheduler(intervalMs = 5 * 1000) {
   recoverPendingSubmitNotifications().catch((err) => {
     logError('leave_submit_notification_recovery_failed', { error: err?.message });
   });
+  recoverPendingCompOffSubmitNotifications().catch((err) => {
+    logError('comp_off_submit_notification_recovery_failed', { error: err?.message });
+  });
 
   const run = () => {
     runLeaveDecisionNotifyJob().catch((err) => {
@@ -91,4 +121,75 @@ export function startLeaveDecisionNotifyScheduler(intervalMs = 5 * 1000) {
   };
   run();
   return setInterval(run, intervalMs);
+}
+
+/**
+ * Auto month-end settlement: settles the previous month if not already settled.
+ * Runs daily. Idempotent — safe to call multiple times.
+ * Uses a system actor ID (null) since this is an automated job.
+ */
+export async function runMonthEndSettlementJob(now = new Date()) {
+  const lock = await acquireJobLock('month-end-settlement', { ttlMs: 300_000 });
+  if (!lock.acquired) {
+    return { skipped: true, reason: lock.reason };
+  }
+  try {
+    // Compute previous month in YYYY-MM format
+    const todayKey = getISTDateInputValue(now);
+    const [yearStr, monthStr] = todayKey.split('-');
+    let prevYear = Number(yearStr);
+    let prevMonth = Number(monthStr) - 1;
+    if (prevMonth < 1) {
+      prevMonth = 12;
+      prevYear -= 1;
+    }
+    const prevMonthKey = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+
+    // Check if already settled
+    const existing = await MonthSettlement.findOne({ periodKey: prevMonthKey });
+    if (existing) {
+      return {
+        settled: false,
+        alreadySettled: true,
+        periodKey: prevMonthKey,
+        job: 'month-end-settlement',
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    // Settle previous month (system actor = null)
+    const result = await settleMonthPayroll(prevMonthKey, null);
+
+    return {
+      ...result,
+      job: 'month-end-settlement',
+      completedAt: new Date().toISOString(),
+    };
+  } finally {
+    await releaseJobLock('month-end-settlement', lock.lockId);
+  }
+}
+
+/**
+ * Daily scheduler for month-end settlement. Checks once per day if the
+ * previous month needs settling. Runs at 00:05 IST (5 minutes after midnight).
+ */
+export function startMonthEndSettlementScheduler() {
+  if (process.env.NODE_ENV === 'test') return null;
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME) return null;
+
+  const run = () => {
+    runMonthEndSettlementJob().catch((err) => {
+      logError('month_end_settlement_job_failed', { error: err?.message });
+    });
+  };
+
+  // Run once on startup (delayed 10s to avoid boot contention)
+  const initial = setTimeout(() => { run(); }, 10_000);
+  if (initial.unref) initial.unref();
+
+  // Run every 24 hours
+  const timer = setInterval(run, 24 * 60 * 60 * 1000);
+  if (timer.unref) timer.unref();
+  return timer;
 }

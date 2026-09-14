@@ -44,3 +44,14 @@ test('scheduling without a target is a fail-open no-op', async () => {
   const result = await scheduleLeaveFinalize({ requestId: '', kind: 'submit', notifyAfter: null });
   assert.equal(result.scheduled, false);
 });
+
+test('comp-off kind follows the same fail-open path without a queue', async () => {
+  const result = await scheduleLeaveFinalize({
+    requestId: '507f1f77bcf86cd799439013',
+    kind: 'comp-off',
+    notifyAfter: new Date(Date.now() + 17500),
+    revision: 2,
+  });
+  assert.equal(result.scheduled, false);
+  assert.equal(result.reason, 'queue_not_configured');
+});

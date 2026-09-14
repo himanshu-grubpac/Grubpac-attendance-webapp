@@ -19,7 +19,7 @@ import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
 import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
 import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
-import { startLeaveDecisionNotifyScheduler } from './jobs/leaveJobs.js';
+import { startLeaveDecisionNotifyScheduler, startMonthEndSettlementScheduler } from './jobs/leaveJobs.js';
 import { cleanupStalePendingAttachments } from './services/helpAttachmentService.js';
 
 export const app = express();
@@ -38,7 +38,9 @@ app.use(express.json({ limit: '1mb' }));
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'test' ? 10_000 : 300,
+  // Strict caps apply in production only; dev/test get headroom for
+  // polling, HMR-driven refetching, and e2e bursts.
+  max: process.env.NODE_ENV === 'production' ? 300 : 10_000,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -114,6 +116,7 @@ export async function startServer() {
       console.log(`Server listening on http://localhost:${env.port}`);
       startAutoCheckoutScheduler();
       startLeaveDecisionNotifyScheduler();
+      startMonthEndSettlementScheduler();
       resolve(server);
     });
   });

@@ -87,9 +87,24 @@ export async function sendEmail({ to, subject, html, text, tag }) {
   }
 
   const headers = { 'X-Mailin-tag': tag || 'transactional' };
+  // List-Unsubscribe (even as mailto-only) is a positive inbox signal for
+  // Gmail/Outlook. Only set it when a real sender address is configured.
+  const senderAddress = env.emailFrom.address;
+  if (senderAddress) {
+    headers['List-Unsubscribe'] = `<mailto:${senderAddress}?subject=unsubscribe>`;
+  }
 
   try {
-    const info = await transport.sendMail({ from, to, subject, html, text, headers });
+    const info = await transport.sendMail({
+      from,
+      to,
+      subject,
+      html,
+      text,
+      headers,
+      // Replies go to a monitored mailbox instead of bouncing off the relay.
+      ...(senderAddress ? { replyTo: from } : {}),
+    });
     logInfo('email:sent', { to, subject, messageId: info?.messageId });
     return { delivered: true, messageId: info?.messageId };
   } catch (error) {
@@ -309,15 +324,22 @@ ${wasApproved ? 'The approved leave days have been returned to your leave balanc
 }
 
 /**
- * Reporting-chain notification when an employee cancels a leave request.
- * Neutral wording covers both pending-request and approved-leave cancels
- * (the approver-specific template above stays for the original approver).
+ * Reporting-chain notification when a leave request is cancelled.
+ * Neutral wording covers both pending-request and approved-leave cancels;
+ * when someone other than the applicant cancelled (e.g. an approver), the
+ * actor is named explicitly instead of implying the employee did it.
  */
-export function renderLeaveCancelledForManagerEmail({ applicantName, leaveTypeName, dateText, timeText, wasApproved }) {
+export function renderLeaveCancelledForManagerEmail({ applicantName, leaveTypeName, dateText, timeText, wasApproved, cancelledByName = null }) {
   const subject = wasApproved
     ? `Approved leave cancelled: ${leaveTypeName}`
     : `Leave request cancelled: ${leaveTypeName}`;
   const what = wasApproved ? 'approved' : 'pending';
+  const actionHtml = cancelledByName
+    ? `<strong>${cancelledByName}</strong> has cancelled <strong>${applicantName}</strong>'s ${what} <strong>${leaveTypeName}</strong> leave.`
+    : `<strong>${applicantName}</strong> has cancelled their ${what} <strong>${leaveTypeName}</strong> leave.`;
+  const actionText = cancelledByName
+    ? `${cancelledByName} has cancelled ${applicantName}'s ${what} ${leaveTypeName} leave.`
+    : `${applicantName} cancelled their ${what} ${leaveTypeName} leave.`;
   const html = `<!doctype html>
 <html lang="en">
   <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
@@ -326,7 +348,7 @@ export function renderLeaveCancelledForManagerEmail({ applicantName, leaveTypeNa
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
           <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
           <tr><td style="padding:28px 24px;">
-            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has cancelled their ${what} <strong>${leaveTypeName}</strong> leave.</p>
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">${actionHtml}</p>
             <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
             <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
           </td></tr>
@@ -336,15 +358,21 @@ export function renderLeaveCancelledForManagerEmail({ applicantName, leaveTypeNa
     </table>
   </body>
 </html>`;
-  const text = `${applicantName} cancelled their ${what} ${leaveTypeName} leave.
+  const text = `${actionText}
 Date: ${dateText}
 Time: ${timeText}`;
   return { subject, html, text };
 }
 
-/** Approver notification when an employee cancels an approved leave. */
-export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeName, dateText, timeText }) {
+/** Approver notification when an approved leave is cancelled by the employee (or, with cancelledByName, by another approver). */
+export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeName, dateText, timeText, cancelledByName = null }) {
   const subject = `Approved leave cancelled: ${leaveTypeName}`;
+  const actionHtml = cancelledByName
+    ? `<strong>${cancelledByName}</strong> has cancelled <strong>${applicantName}</strong>'s approved <strong>${leaveTypeName}</strong> leave.`
+    : `<strong>${applicantName}</strong> has cancelled their approved <strong>${leaveTypeName}</strong> leave.`;
+  const actionText = cancelledByName
+    ? `${cancelledByName} has cancelled ${applicantName}'s approved ${leaveTypeName} leave.`
+    : `${applicantName} cancelled their approved ${leaveTypeName} leave.`;
   const html = `<!doctype html>
 <html lang="en">
   <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
@@ -353,7 +381,7 @@ export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeN
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
           <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
           <tr><td style="padding:28px 24px;">
-            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has cancelled their approved <strong>${leaveTypeName}</strong> leave.</p>
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">${actionHtml}</p>
             <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
             <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Time:</strong> ${timeText}</p>
           </td></tr>
@@ -363,8 +391,118 @@ export function renderLeaveCancelledForApproverEmail({ applicantName, leaveTypeN
     </table>
   </body>
 </html>`;
-  const text = `${applicantName} cancelled their approved ${leaveTypeName} leave.
+  const text = `${actionText}
 Date: ${dateText}
 Time: ${timeText}`;
+  return { subject, html, text };
+}
+
+/** Manager notification when an employee submits a comp-off work request. No Take Action button (plain portal link). */
+export function renderCompOffManagerEmail({ applicantName, dateText, days, reason, withActions = false, actionUrl = '' }) {
+  const subject = `Comp off work requested: ${dateText}`;
+  const actions = withActions && actionUrl
+    ? `<p style="margin:0 0 20px;">
+         <a href="${actionUrl}" style="display:inline-block;background:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 24px;border-radius:8px;">Take Action &rarr;</a>
+       </p>`
+    : '';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;"><strong>${applicantName}</strong> has requested approval to work on <strong>${dateText}</strong>.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Days:</strong> ${days} day(s)</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Reason:</strong> ${reason || '—'}</p>
+            ${actions}
+            <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">This link is secure, single-use, and expires automatically. If the button does not work, open the Comp off requests section in the admin portal.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${applicantName} requested approval to work on ${dateText} (${days} day(s)).
+Reason: ${reason || '—'}
+${withActions && actionUrl ? `Take action here: ${actionUrl}` : 'Open Comp off requests in the admin portal to respond.'}`;
+  return { subject, html, text };
+}
+
+/** Applicant notification when a comp-off request is approved or rejected. */
+export function renderCompOffDecisionEmail({ status, dateText, remarks }) {
+  const subject = `Comp off request ${status}: ${dateText}`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your comp off work request for <strong>${dateText}</strong> has been <strong>${status}</strong>.</p>
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Date:</strong> ${dateText}</p>
+            <p style="margin:0 0 0;font-size:14px;line-height:1.5;"><strong>Remarks:</strong> ${remarks || '—'}</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your comp off work request for ${dateText} has been ${status}.
+Date: ${dateText}
+Remarks: ${remarks || '—'}`;
+  return { subject, html, text };
+}
+
+/** Applicant notification when assessed comp-off credit is granted. */
+export function renderCompOffAssessedEmail({ dateText, creditedDays, assessment, breakdown = [] }) {
+  const subject = `Comp off credited: +${creditedDays} day(s)`;
+  const assessmentLabel =
+    assessment === 'completed' ? 'Work completed'
+    : assessment === 'half' ? 'Half work done'
+    : assessment === 'mixed' ? 'Assessed per day'
+    : 'Work not completed';
+  const breakdownLines = (breakdown ?? [])
+    .filter((entry) => entry && entry.dayKey)
+    .map((entry) => {
+      const label = entry.assessment === 'completed' ? 'Work completed'
+        : entry.assessment === 'half' ? 'Half work done'
+        : 'Work not completed';
+      return { dayKey: entry.dayKey, label, credit: entry.credit ?? 0 };
+    });
+  const breakdownHtml = breakdownLines.length > 1
+    ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;font-size:14px;line-height:1.5;">${
+      breakdownLines.map((entry) => `<tr><td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;">${entry.dayKey}</td><td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;">${entry.label}</td><td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;text-align:right;">+${entry.credit}</td></tr>`).join('')
+    }</table>`
+    : '';
+  const breakdownText = breakdownLines.length > 1
+    ? `\n${breakdownLines.map((entry) => `${entry.dayKey}: ${entry.label} (+${entry.credit})`).join('\n')}`
+    : '';
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fb;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+          <tr><td style="background:#1d4ed8;padding:20px 24px;color:#ffffff;font-size:18px;font-weight:700;">Grubpac Attendance</td></tr>
+          <tr><td style="padding:28px 24px;">
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Your comp off work on <strong>${dateText}</strong> was assessed as <strong>${assessmentLabel}</strong>.</p>
+            ${breakdownHtml}
+            <p style="margin:0 0 8px;font-size:14px;line-height:1.5;"><strong>Credit added:</strong> +${creditedDays} day(s) to your Compensatory Off balance</p>
+            <p style="margin:0;font-size:13px;line-height:1.5;color:#6b7280;">The credit is available for comp off leave via Apply Leave &rarr; CO.</p>
+          </td></tr>
+          <tr><td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">&copy; Grubpac Technologies. This is an automated message, please do not reply.</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `Your comp off work on ${dateText} was assessed as ${assessmentLabel}.${breakdownText}
+Credit added: +${creditedDays} day(s) to your Compensatory Off balance.`;
   return { subject, html, text };
 }

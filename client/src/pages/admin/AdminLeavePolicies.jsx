@@ -22,6 +22,7 @@ const currentCalendarYear = getISTYear();
 const emptyTypeForm = {
   code: '',
   name: '',
+  description: '',
   isActive: true,
 };
 
@@ -243,6 +244,7 @@ export default function AdminLeavePolicies() {
     const payload = {
       code: typeForm.code.trim().toUpperCase(),
       name: typeForm.name.trim(),
+      description: (typeForm.description ?? '').trim(),
       isActive: Boolean(typeForm.isActive),
     };
     const validation = validateForm(createLeaveTypeSchema, payload);
@@ -527,6 +529,25 @@ export default function AdminLeavePolicies() {
                         <FieldError message={typeFieldErrors.name} />
                       </label>
                     </div>
+
+                    <label className="modal__field">
+                      <span className="label">Description</span>
+                      <textarea
+                        className="input"
+                        rows={3}
+                        maxLength={500}
+                        placeholder="e.g. Paid sick leave for illness or medical appointments."
+                        value={typeForm.description}
+                        onChange={(event) =>
+                          setTypeForm({ ...typeForm, description: event.target.value })
+                        }
+                        aria-describedby="leave-type-description-counter"
+                      />
+                      <span id="leave-type-description-counter" className="muted small">
+                        {(typeForm.description ?? '').length}/500
+                      </span>
+                      <FieldError message={typeFieldErrors.description} />
+                    </label>
 
                     <div className="leave-policies-modal__flags">
                       <label className="field-checkbox">

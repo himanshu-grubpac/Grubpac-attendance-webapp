@@ -49,10 +49,13 @@ import {
   previewYearEndCarryForward,
   recordEncashment,
 } from '../services/leaveBalanceService.js';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
 import {
   cancelLeaveRequest,
   cancelApprovedLeaveByApprover,
   canGrantLeaveException,
+  canApproveLeave,
   createLeaveRequest,
   decideLeaveRequest,
   decideLeaveRequestByToken,
@@ -65,10 +68,12 @@ import {
   autoLoginByDecisionToken,
   formatLeaveDateText,
   getTeamCalendar,
+  getLeavePendingCounts,
   listLeaveRequests,
   loadLeaveRequest,
   previewLeaveDays,
 } from '../services/leaveService.js';
+import { getCompOffPendingCounts } from '../services/compOffService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -105,6 +110,7 @@ export async function updateLeaveType(req, res) {
   }
 
   if (parsed.name !== undefined) leaveType.name = parsed.name;
+  if (parsed.description !== undefined) leaveType.description = parsed.description;
   if (parsed.isActive !== undefined) leaveType.isActive = parsed.isActive;
   await leaveType.save();
 
@@ -177,6 +183,24 @@ export async function getLeaveBalances(req, res) {
   const parsed = leaveBalanceQuerySchema.parse(req.query);
   const userId = parsed.userId ?? req.user._id.toString();
   const year = parsed.year ?? getISTYear();
+
+  // Read-all / adjust roles see anyone; team roles (RM) see their scope only.
+  const canReadAll =
+    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) ||
+    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES);
+  if (!canReadAll && userId !== req.user._id.toString()) {
+    const inScope = await isUserInTeamScope(
+      req.user,
+      req.userPermissions,
+      userId,
+      PERMISSIONS.LEAVE_READ_ALL,
+      PERMISSIONS.LEAVE_READ_TEAM,
+    );
+    if (!inScope) {
+      return res.status(403).json({ message: "You do not have permission to view this employee's leave balances." });
+    }
+  }
+
   const balances = await getBalancesForUser(userId, year);
   res.json({ userId, year, balances });
 }
@@ -221,6 +245,27 @@ export async function listLeaveRequestsHandler(req, res) {
   res.json(result);
 }
 
+/**
+ * Pending approval-queue counts split by type for nav badges and dashboard
+ * KPIs: non-WFH leave, WFH-only leave, comp-off awaiting decision, comp-off
+ * worked awaiting assessment. Scoped to the caller's approval queue.
+ */
+export async function getApprovalsPendingCountsHandler(req, res) {
+  const [leaveCounts, compOffCounts] = await Promise.all([
+    getLeavePendingCounts(req.user, req.userPermissions),
+    getCompOffPendingCounts(req.user, req.userPermissions),
+  ]);
+  res.json({
+    counts: {
+      leave: leaveCounts.leave,
+      wfh: leaveCounts.wfh,
+      compOff: compOffCounts.pending,
+      compOffAssessment: compOffCounts.assessment,
+      total: leaveCounts.leave + leaveCounts.wfh + compOffCounts.pending + compOffCounts.assessment,
+    },
+  });
+}
+
 export async function getLeaveRequestHandler(req, res) {
   const request = await loadLeaveRequest(req.params.id);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
@@ -235,6 +280,11 @@ export async function getLeaveRequestHandler(req, res) {
   if (canViewTeam || req.userPermissions.includes('leave.approve')) {
     const requester = await User.findById(requesterId);
     if (requester?.reportingManagerId?.toString() === req.user._id.toString()) {
+      return res.json({ request: request.toSafeJSON() });
+    }
+    // Delegates can act on the requests (canApproveLeave) so they must be
+    // able to view them too — same direct-report/delegate boundary.
+    if (requester && canApproveLeave(req.user, requester, req.userPermissions)) {
       return res.json({ request: request.toSafeJSON() });
     }
   }
@@ -328,7 +378,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function decisionLinkHtml(success, message, portalUrl) {
+export function decisionLinkHtml(success, message, portalUrl) {
   const color = success ? '#16a34a' : '#dc2626';
   const title = success ? 'Action complete' : 'Unable to process';
   const safeMessage = escapeHtml(message);
@@ -696,4 +746,36 @@ export async function runLeaveAccrualJobHandler(req, res) {
   });
 
   res.json(result);
+}
+
+export async function getLopRecordsHandler(req, res) {
+  const { userId } = req.params;
+  const year = req.query.year ? Number(req.query.year) : getISTYear();
+
+  if (!userId) {
+    return res.status(400).json({ message: 'userId is required.' });
+  }
+
+  // Scope gate: own rows always allowed; READ_ALL / ADJUST bypass; otherwise
+  // confined to the caller's direct reports (+ delegate chain) so any
+  // LEAVE_READ holder cannot enumerate anyone's LOP rows via :userId.
+  const callerId = req.user._id.toString();
+  if (
+    String(userId) !== callerId &&
+    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) &&
+    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES)
+  ) {
+    const allowedIds = await resolveLeaveTeamUserIds(req.user);
+    if (!allowedIds.map(String).includes(String(userId))) {
+      return res.status(403).json({ message: "You are not authorized to view this user's LOP records." });
+    }
+  }
+
+  const { LopRecord } = await import('../models/LopRecord.js');
+  const records = await LopRecord.find({ userId, year })
+    .sort({ periodKey: -1, createdAt: -1 })
+    .populate('leaveTypeId', 'name code')
+    .populate('leaveRequestId', 'startDate endDate days status');
+
+  res.json({ records });
 }

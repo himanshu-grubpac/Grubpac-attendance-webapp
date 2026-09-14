@@ -11,6 +11,14 @@ const leaveBalanceSchema = new mongoose.Schema(
     // Negative carried stock is allowed as a deduction (reduces available balance).
     carried: { type: Number, default: 0, min: -365 },
     encashed: { type: Number, default: 0, min: 0 },
+    /**
+     * Comp-off credit earned from worked weekend/holiday requests. Additive by
+     * design: NEVER overwritten by accrual refresh (`refreshAccruedEntitlements`
+     * only writes `entitled`) or carry-forward logic, so assessed credit
+     * survives every balance job. CO policy accrual is 0, but keeping the
+     * earned stock in its own field stays robust against future policy edits.
+     */
+    compOffEarned: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true },
 );
@@ -25,7 +33,8 @@ leaveBalanceSchema.methods.toSafeJSON = function toSafeJSON() {
   // Remaining may be negative when overdrawn leave is allowed.
   const available =
     (this.entitled ?? 0) +
-    (this.carried ?? 0) -
+    (this.carried ?? 0) +
+    (this.compOffEarned ?? 0) -
     (this.used ?? 0) -
     (this.pending ?? 0) -
     (this.encashed ?? 0);
@@ -42,6 +51,7 @@ leaveBalanceSchema.methods.toSafeJSON = function toSafeJSON() {
     pending: this.pending,
     carried: this.carried,
     encashed: this.encashed,
+    compOffEarned: this.compOffEarned ?? 0,
     available,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

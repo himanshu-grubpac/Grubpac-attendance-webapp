@@ -400,6 +400,28 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt HelpCleanupScheduleRule.Arn
 
+  MonthEndSettlementScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Settle the previous payroll month daily (idempotent, self-skips settled months)
+      # 19:00 UTC = 00:30 IST next day. The job settles the previous IST
+      # calendar month and no-ops when it is already settled, so a daily
+      # cadence is safe and self-healing (Lambda timeouts simply retry next day).
+      ScheduleExpression: cron(0 19 ? * * *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt JobFunction.Arn
+          Id: MonthEndSettlementTarget
+          Input: '{"jobName":"month-end-settlement"}'
+
+  MonthEndSettlementSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref JobFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MonthEndSettlementScheduleRule.Arn
+
   JobFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:

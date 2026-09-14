@@ -309,6 +309,8 @@ export const leaveApi = {
   },
   previewDays: (params) => api.get('/leave/requests/preview', { params }).then((r) => r.data),
   listRequests: (params = {}) => api.get('/leave/requests', { params }).then((r) => r.data),
+  getApprovalsPendingCounts: () =>
+    api.get('/leave/requests/pending-counts').then((r) => r.data),
   createRequest: (payload, { idempotencyKey } = {}) =>
     api
       .post('/leave/requests', payload, {
@@ -348,6 +350,31 @@ export const leaveApi = {
   updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
   materializeRecurringHolidays: (payload) =>
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
+};
+
+export const compOffApi = {
+  eligibleDays: (params = {}) =>
+    api.get('/leave/comp-off/eligible-days', { params }).then((r) => r.data),
+  list: (params = {}) => api.get('/leave/comp-off', { params }).then((r) => r.data),
+  get: (id) => api.get(`/leave/comp-off/${id}`).then((r) => r.data),
+  create: (payload, { idempotencyKey } = {}) =>
+    api
+      .post('/leave/comp-off', payload, {
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      })
+      .then((r) => r.data),
+  withdraw: (id) => api.post(`/leave/comp-off/${id}/withdraw`).then((r) => r.data),
+  undoWithdraw: (id) => api.post(`/leave/comp-off/${id}/undo-withdraw`).then((r) => r.data),
+  approve: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/approve`, payload).then((r) => r.data),
+  reject: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/reject`, payload).then((r) => r.data),
+  undo: (id) => api.post(`/leave/comp-off/${id}/undo`).then((r) => r.data),
+  assess: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/assess`, payload).then((r) => r.data),
+  undoAssess: (id) => api.post(`/leave/comp-off/${id}/undo-assess`).then((r) => r.data),
+  approvalsCount: (params = {}) =>
+    api.get('/leave/comp-off/approvals/count', { params }).then((r) => r.data),
 };
 
 export const preferencesApi = {
@@ -410,6 +437,19 @@ export const salaryApi = {
     api.post('/salary/transfers/generate', payload).then((r) => r.data),
   updateTransfer: (id, payload) =>
     api.patch(`/salary/transfers/${id}`, payload).then((r) => r.data),
+  settleMonth: (month) =>
+    api.post('/salary/settle', { month }).then((r) => r.data),
+  listSettlements: () => api.get('/salary/settlements').then((r) => r.data),
+  getHistory: (userId, params = {}) =>
+    api.get(`/salary/history/${userId}`, { params }).then((r) => r.data),
+  getAudit: (params = {}) => api.get('/salary/audit', { params }).then((r) => r.data),
+  downloadAudit: (periodKey, { departmentId } = {}) => {
+    const search = new URLSearchParams({ periodKey });
+    if (departmentId) search.set('departmentId', departmentId);
+    return downloadExcelBlob(`/api/salary/audit/export?${search.toString()}`, {
+      errorMessage: 'Failed to download salary audit report.',
+    });
+  },
 };
 
 export const demoFaqApi = {
