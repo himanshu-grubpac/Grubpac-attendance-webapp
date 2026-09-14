@@ -23,6 +23,7 @@ import {
   endOfDayIST,
   formatISTDateTime,
   getISTDateInputValue,
+  getISTYear,
   isWeekendIST,
   listWorkingDaysIST,
   parseDateInputAsISTDay,
@@ -36,6 +37,9 @@ import {
   findWfhRequestForIstDate,
 } from './wfhPolicyService.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
+import { CompOffRequest } from '../models/CompOffRequest.js';
+import { createNotification } from './notificationService.js';
+import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -180,6 +184,21 @@ export function isLeaveDecisionAwaitingFinalization(decisionUndoExpiresAt, now =
   return Number.isFinite(expiresAt) && Number.isFinite(nowMs) && expiresAt > nowMs;
 }
 
+/**
+ * Whether the user holds an approved comp-off request covering the IST day.
+ * Only meaningful on weekends/holidays (the comp-off gate's domain) — on
+ * working days an approved comp-off never changes check-in behavior.
+ */
+async function hasApprovedCompOffForToday(userId, office, istToday, session = null) {
+  const ref = parseDateInputAsISTDay(istToday) ?? new Date();
+  const nonWorkingDay =
+    isWeekendIST(ref, office.weekendDays) ||
+    (await getHolidayMapForYear(getISTYear(ref))).has(istToday);
+  if (!nonWorkingDay) return false;
+  const compOff = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session);
+  return Boolean(compOff);
+}
+
 function buildTodayStatus(
   records,
   office,
@@ -188,6 +207,7 @@ function buildTodayStatus(
   approvedLeaveToday = null,
   wfhPendingToday = false,
   wfhApprovalPendingToday = false,
+  compOffApprovedToday = false,
 ) {
   const checkIn = records.find((record) => record.type === 'check_in') ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
@@ -202,6 +222,7 @@ function buildTodayStatus(
     wfhApprovedToday,
     wfhPendingToday,
     wfhApprovalPendingToday,
+    compOffApprovedToday,
     istDate: getISTDateInputValue(),
     currentIST: formatISTDateTime(new Date()),
     office: {
@@ -252,6 +273,7 @@ export async function getTodayStatus(userId) {
   const wfhPendingToday = wfhRequestToday?.status === 'pending';
   const wfhApprovalPendingToday =
     wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
+  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday);
   const status = buildTodayStatus(
     records,
     office,
@@ -260,6 +282,7 @@ export async function getTodayStatus(userId) {
     approvedLeaveToday,
     wfhPendingToday,
     wfhApprovalPendingToday,
+    compOffApprovedToday,
   );
   status.undo = await getUndoAvailability(userId);
   return status;
@@ -316,26 +339,16 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     const employees = await User.find({ isActive: true }).select('_id').lean();
     userIds = employees.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Team strip scope: the actor's full report subtree (transitive) plus,
-    // when the actor reports to a superior, that superior and the superior's
-    // whole subtree (siblings at any depth). Other branches of the company —
-    // including unrelated reporting managers — are never included.
+    // Team strip scope: the actor's full report subtree (transitive) ONLY.
+    // Peer/sibling teams under the same superior are never included — a
+    // reporting manager sees their own team and nobody else's.
     const actorIdStr = actor._id.toString();
-    const seen = new Set();
-    const downIds = await collectReportSubtreeIds([actor._id], seen);
-    let upIds = [];
-    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
-    const bossId = actorDoc?.reportingManagerId ?? null;
-    if (bossId) {
-      // NOTE: do not pre-add bossId to `seen` — collectReportSubtreeIds
-      // filters roots against it, which would prune the entire traversal.
-      upIds = [bossId, ...(await collectReportSubtreeIds([bossId], seen))];
-    }
+    const downIds = await collectReportSubtreeIds([actor._id], new Set());
     // Dedupe (cycle-safe) and exclude the actor: the strip shows the team,
     // and the actor's own status already lives in the dashboard hero.
-    const combined = new Set([...downIds, ...upIds].map((id) => id.toString()));
+    const combined = new Set(downIds.map((id) => id.toString()));
     combined.delete(actorIdStr);
-    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id));
+    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id.toString()));
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
@@ -538,6 +551,108 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   };
 }
 
+/** Comp-off request covering the IST day for the given status(es). */
+async function findCompOffForIstDate(userId, dateInput, status, session = null) {
+  const istDay = typeof dateInput === 'string'
+    ? parseDateInputAsISTDay(dateInput)
+    : parseDateInputAsISTDay(getISTDateInputValue(dateInput));
+  if (!istDay) return null;
+  const statusFilter = Array.isArray(status) ? { $in: status } : status;
+  const query = CompOffRequest.findOne({
+    userId,
+    status: statusFilter,
+    startDate: { $lte: endOfDayIST(istDay) },
+    endDate: { $gte: startOfDayIST(istDay) },
+  }).select('_id status startDate endDate');
+  if (session) query.session(session);
+  return query.sort({ createdAt: -1 });
+}
+
+/**
+ * Comp-off check-in gate. On weekends (office `weekendDays`) and active
+ * holidays an employee may check in ONLY when an approved (or worked) comp-off
+ * request covers the day — in office AND WFH modes alike.
+ * Returns an error message, or null when check-in is allowed.
+ */
+async function compOffCheckInGateError(userId, office, istToday, session = null) {
+  // Derive every clock from the IST day under check-in: mixing wall-clock
+  // `now` with the IST day key breaks at the IST-midnight / New-Year boundary
+  // (wrong-year holiday map, off-by-one weekend).
+  const ref = parseDateInputAsISTDay(istToday) ?? new Date();
+  if (!isWeekendIST(ref, office.weekendDays)) {
+    const holidayMap = await getHolidayMapForYear(getISTYear(ref));
+    if (!holidayMap.has(istToday)) return null;
+  }
+  // Prefer an actionable (approved/worked) request over a pending one: if both
+  // somehow cover the day, the valid approval wins instead of the pending message.
+  const request = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session)
+    ?? await findCompOffForIstDate(userId, istToday, 'pending', session);
+  if (!request) {
+    return 'Comp off approval is required to mark attendance on weekends/holidays.';
+  }
+  if (request.status === 'pending') {
+    return 'Your comp off request for this day is pending approval.';
+  }
+  return null;
+}
+
+/**
+ * Checkout hook: a successful check-out on an approved comp-off day flips the
+ * request to `worked` and notifies the manager IN-APP ONLY (no email — see
+ * comp-off notification matrix). Runs post-commit (record already persisted).
+ * The 5-minute attendance undo does NOT revert `worked`: assessment requires a
+ * completed checkout record; if attendance is deleted by an undo the manager
+ * can still assess from the record history (kept simple by design).
+ */
+async function handleCompOffCheckout(userId, checkoutRecord) {
+  const istToday = getISTDateInputValue(checkoutRecord.timestamp ?? new Date());
+  const request = await findCompOffForIstDate(userId, istToday, ['approved', 'worked']);
+  if (!request || request.status === 'worked') return;
+  if (!checkoutRecord?._id) return;
+
+  const claimed = await CompOffRequest.findOneAndUpdate(
+    { _id: request._id, status: 'approved' },
+    { $set: { status: 'worked', checkoutRecordId: checkoutRecord._id } },
+  );
+  if (!claimed) return;
+
+  auditLog('comp_off_worked', {
+    userId: userId.toString(),
+    requestId: request._id.toString(),
+    attendanceRecordId: checkoutRecord._id.toString(),
+  });
+
+  try {
+    const requester = await User.findById(userId).select('name reportingManagerId delegateApproverId')
+      .populate('reportingManagerId', 'name delegateApproverId');
+    const managerIds = [];
+    const rm = requester?.reportingManagerId;
+    if (rm) {
+      managerIds.push(String(rm._id ?? rm));
+      if (rm.delegateApproverId) managerIds.push(String(rm.delegateApproverId._id ?? rm.delegateApproverId));
+    }
+    if (requester?.delegateApproverId) managerIds.push(String(requester.delegateApproverId._id ?? requester.delegateApproverId));
+    const uniqueIds = [...new Set(managerIds)].filter(Boolean);
+    if (uniqueIds.length === 0) return;
+    const managers = await User.find({ _id: { $in: uniqueIds }, isActive: true }).select('_id name');
+    const dateText = `${getISTDateInputValue(request.startDate)}${getISTDateInputValue(request.endDate) !== getISTDateInputValue(request.startDate) ? ` to ${getISTDateInputValue(request.endDate)}` : ''}`;
+    await Promise.allSettled(
+      managers.map((manager) =>
+        createNotification({
+          userId: manager._id,
+          type: 'comp_off_assess',
+          title: 'Comp off work ready to assess',
+          body: `${requester?.name ?? 'An employee'} checked out on approved comp off (${dateText}). Assess the work to grant the CO credit.`,
+          link: '/admin/leave/comp-off?queue=assessment',
+          metadata: { requestId: request._id.toString() },
+        }),
+      ),
+    );
+  } catch (err) {
+    console.error('[attendance] comp off checkout notify failed', request._id?.toString(), err?.message);
+  }
+}
+
 export async function markAttendance(userId, type, payload, auditContext = {}) {
   const session = await mongoose.startSession();
 
@@ -552,6 +667,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       let wfhApprovalPendingToday = false;
       let wfhRequestToday = null;
       let approvedLeaveToday = null;
+      let compOffApprovedToday = false;
       if (type === 'check_in') {
         [wfhRequestToday, approvedLeaveToday] = await Promise.all([
           findWfhRequestForIstDate(userId, istToday),
@@ -561,6 +677,13 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         wfhPendingToday = wfhRequestToday?.status === 'pending';
         wfhApprovalPendingToday =
           wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
+        // Approved comp-off days (weekends/holidays) behave like pending WFH
+        // for mode selection: the employee is sanctioned to work, so location
+        // decides OFC vs WFH instead of the office geofence blocking remote
+        // check-ins outright. Weekdays are untouched (office default stands).
+        if (!wfhApprovedToday && !wfhPendingToday) {
+          compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday, session);
+        }
       }
       const today = buildTodayStatus(
         records,
@@ -570,6 +693,7 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         approvedLeaveToday,
         wfhPendingToday,
         wfhApprovalPendingToday,
+        compOffApprovedToday,
       );
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
       let attendanceMode;
@@ -582,6 +706,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         } else if (wfhPendingToday) {
           // Pending WFH → location decides the mode: inside the office radius is
           // OFC* (marked red until approved), anywhere else is WFH*.
+          const geoPreview = evaluateGeoAttendance({
+            ...payload,
+            office,
+            enforceOfficeRadius: false,
+          });
+          const insideOffice =
+            Number.isFinite(geoPreview.distanceMeters) &&
+            geoPreview.distanceMeters <= office.radiusMeters;
+          attendanceMode = payload.attendanceMode ?? (insideOffice ? 'office' : 'wfh');
+        } else if (compOffApprovedToday) {
+          // Approved comp-off day → same location-decides rule: inside the
+          // radius checks in as office, anywhere else as WFH (geofence no
+          // longer blocks remote weekend/holiday work outright).
           const geoPreview = evaluateGeoAttendance({
             ...payload,
             office,
@@ -611,6 +748,11 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           businessReasons.push('You have already checked in today.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
+        } else {
+          // Comp-off gate: weekends/holidays require an approved comp-off
+          // request covering today (office AND WFH modes — no mode exemption).
+          const compOffGateError = await compOffCheckInGateError(userId, office, istToday, session);
+          if (compOffGateError) businessReasons.push(compOffGateError);
         }
       }
       if (type === 'check_out' && !today.canCheckOut) {
@@ -732,6 +874,11 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         used: row.used,
         remaining: row.remaining,
       };
+    }
+
+    if (type === 'check_out' && result?.status === 'allowed' && result?.record?._id) {
+      // Comp-off checkout hook (post-commit, in-app manager notice only).
+      await handleCompOffCheckout(userId, result.record);
     }
 
     result.pendingLeaveToday = await loadPendingLeaveForToday(userId);
@@ -1254,8 +1401,13 @@ function serializeAdminAttendanceListRecord(record) {
   };
 }
 
-/** Synthetic geo fields for admin-created attendance (no live device location). */
-export { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
+/**
+ * Synthetic geo fields for admin-created attendance (no live device
+ * location). Re-exported for tests; imported (not `export ... from`) so the
+ * binding is usable inside this module — a bare re-export leaves the local
+ * name unbound and every admin upsert call throws ReferenceError (500).
+ */
+export { buildAdminSyntheticGeoFields };
 
 /**
  * Returns a block reason when admins must not create attendance for dayKey, else null.

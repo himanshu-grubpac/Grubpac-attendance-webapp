@@ -15,6 +15,7 @@ import { User } from '../models/User.js';
 import {
   cancelLeaveRequest,
   consumeLeaveDecisionToken,
+  createLeaveRequest,
   dispatchSubmitNotifications,
   editLeaveRequest,
   processLeaveDecision,
@@ -280,6 +281,69 @@ test('undo does not cause submit-notification recovery to email the manager agai
   assert.equal(recovered.recovered, 0);
   assert.equal(saved.status, 'pending');
   assert.equal(saved.submitNotificationsSent, true);
+});
+
+test('WFH requests are not gated by the combined CL+EL accumulation cap', async () => {
+  const applicant = await createUser('Wfh Cap Check');
+  const year = getISTYear();
+  const wfhType = await LeaveType.create({ code: 'WFH', name: 'Work From Home', isActive: true });
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  const elType = await LeaveType.create({ code: 'EL', name: 'Earned Leave', isActive: true });
+  for (const [type, quota] of [[wfhType, 60], [clType, 20], [elType, 12]]) {
+    await LeavePolicy.create({
+      leaveTypeId: type._id,
+      year,
+      annualQuota: quota,
+      accrualPerMonth: 0,
+      ...(type.code === 'CL' || type.code === 'EL'
+        ? { combinedCarryGroup: 'CL_EL', maxAccumulation: 45 }
+        : {}),
+      paid: true,
+      isActive: true,
+    });
+  }
+  // CL stock 20 + EL stock 12 = 32 of the 45 cap. A ~22-day WFH request used
+  // to count its own days toward the CL+EL total (32 + 22 = 54 > 45 → 400).
+  const startKey = nextDay(getISTDateInputValue(), 3);
+  const endKey = nextDay(startKey, 21);
+  const created = await createLeaveRequest(applicant._id, {
+    leaveTypeId: wfhType._id.toString(),
+    startDate: startKey,
+    endDate: endKey,
+    reason: 'Working from home for October',
+  });
+  assert.equal(created.status, 'pending');
+  assert.equal(created.leaveTypeCode, 'WFH');
+});
+
+test('CL requests past the combined cap are still rejected', async () => {
+  const applicant = await createUser('Cap Still Enforced');
+  const year = getISTYear();
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  const elType = await LeaveType.create({ code: 'EL', name: 'Earned Leave', isActive: true });
+  for (const type of [clType, elType]) {
+    await LeavePolicy.create({
+      leaveTypeId: type._id,
+      year,
+      annualQuota: 30,
+      accrualPerMonth: 0,
+      combinedCarryGroup: 'CL_EL',
+      maxAccumulation: 45,
+      paid: true,
+      isActive: true,
+    });
+  }
+  // Stock 60 already over the 45 cap: a new CL request must still be blocked.
+  const startKey = nextDay(getISTDateInputValue(), 3);
+  await assert.rejects(
+    createLeaveRequest(applicant._id, {
+      leaveTypeId: clType._id.toString(),
+      startDate: startKey,
+      endDate: startKey,
+      reason: 'CL over the cap',
+    }),
+    /Combined CL\+EL balance cannot exceed/,
+  );
 });
 
 test('decision token consumption is atomic under concurrent use', async () => {

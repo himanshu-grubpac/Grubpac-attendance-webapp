@@ -1,12 +1,10 @@
 /**
  * Team Attendance Today strip scope (integration, real Mongo).
  *
- * A reporting manager (ATTENDANCE_READ_TEAM, no READ_ALL) sees:
- * - their full report subtree, transitively (RMs under them AND their teams)
- * - when they report to a superior: that superior + the superior's whole
- *   subtree (siblings at any depth)
- * ...and nobody else: unrelated branches and other reporting managers stay
- * hidden. Full admins (READ_ALL) still see everyone.
+ * A reporting manager (ATTENDANCE_READ_TEAM, no READ_ALL) sees ONLY their own
+ * report subtree, transitively (RMs under them AND their teams). Sibling
+ * teams under the same superior are never included. Full admins (READ_ALL)
+ * still see everyone.
  */
 process.env.NODE_ENV = 'test';
 
@@ -83,14 +81,14 @@ async function setupTree() {
 
 const idsOf = (rows) => rows.map((m) => String(m.userId));
 
-test('mid-level RM sees own subtree plus boss subtree, nothing else', async () => {
+test('mid-level RM sees own subtree only, siblings and boss hidden', async () => {
   const { mid, boss, emp, subRm, subEmp, sibRm, sibEmp, otherBoss, otherEmp } = await setupTree();
   const rows = await getTeamTodayStatusService(mid, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  for (const u of [boss, emp, subRm, subEmp, sibRm, sibEmp]) {
+  for (const u of [emp, subRm, subEmp]) {
     assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
   }
-  for (const u of [mid, otherBoss, otherEmp]) {
+  for (const u of [mid, boss, sibRm, sibEmp, otherBoss, otherEmp]) {
     assert.ok(!seen.has(String(u._id)), `hidden: ${u.name}`);
   }
 });

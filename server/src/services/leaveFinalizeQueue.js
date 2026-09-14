@@ -47,7 +47,7 @@ export function computeFinalizeDelaySeconds(notifyAfter, now = new Date()) {
  * Schedules one finalize wake-up for a provisional leave action.
  * MUST be awaited on Lambda (frozen event loop drops un-awaited sends).
  *
- * @param {{ requestId: string, kind: 'submit'|'decision'|'cancel', notifyAfter: Date, revision?: number }} args
+ * @param {{ requestId: string, kind: 'submit'|'decision'|'cancel'|'comp-off', notifyAfter: Date, revision?: number }} args
  * @returns {Promise<{ scheduled: boolean, reason?: string, delaySeconds?: number }>}
  */
 export async function scheduleLeaveFinalize({ requestId, kind, notifyAfter, revision = null }) {

@@ -33,7 +33,7 @@ function roundMoney(value) {
   return Math.round(value * 100) / 100;
 }
 
-function salaryAppliesForMonth(user, monthEnd) {
+export function salaryAppliesForMonth(user, monthEnd) {
   if (user.monthlySalary == null || user.monthlySalary <= 0) {
     return false;
   }
@@ -71,7 +71,7 @@ export function unionWfhLeaveTypeId(paidTypeIds, wfhLeaveTypeId) {
   return result;
 }
 
-async function loadPaidLeaveTypeIds(year = getISTYear()) {
+export async function loadPaidLeaveTypeIds(year = getISTYear()) {
   const [policies, wfhType] = await Promise.all([
     LeavePolicy.find({ isActive: true, paid: true, year }).select('leaveTypeId'),
     LeaveType.findOne({ code: 'WFH' }).select('_id'),
@@ -229,7 +229,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
 
   const [attendanceCreditByDay, balances, yearLeaveRequests] = await Promise.all([
     loadAttendanceCreditByDay(user._id, start, end),
-    LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried encashed'),
+    LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried compOffEarned encashed'),
     LeaveRequest.find({
       userId: user._id,
       status: 'approved',
@@ -265,15 +265,27 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     paidLeaveByDay,
   );
   const lopDays = Math.max(0, workingDaysInMonth - payableDays);
+  // Working dates that are (partly) unpaid — shown in salary views so
+  // employees/RMs can see exactly which days became LOP and for how much.
+  const lopDates = workingDayList
+    .map((day) => {
+      const unpaid = roundMoney(
+        1 - (attendanceCreditByDay.get(day) ?? 0) - (paidLeaveByDay.get(day) ?? 0),
+      );
+      return unpaid > 0.001 ? { date: day, unpaidDays: unpaid } : null;
+    })
+    .filter(Boolean);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
   let perDaySalary = null;
   let payableEstimate = null;
+  let lopDeduction = null;
   if (monthlySalary != null && workingDaysInMonth > 0) {
     perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
     payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
+    lopDeduction = roundMoney(lopDays * perDaySalary);
   }
 
   return {
@@ -289,6 +301,8 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     paidLeaveDays,
     payableDays,
     lopDays,
+    lopDates,
+    lopDeduction,
     perDaySalary,
     payableEstimate,
     hasSalaryConfigured: monthlySalary != null,
@@ -495,7 +509,7 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
   };
 }
 
-export async function generatePendingSalaryTransfers(month, actorId) {
+export async function generatePendingSalaryTransfers(month, actorId, session = null) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -510,7 +524,9 @@ export async function generatePendingSalaryTransfers(month, actorId) {
     return { created: 0, skipped: 0, totalEligible: 0 };
   }
 
-  const existing = await SalaryTransfer.find({ periodKey: month }).select('userId');
+  const existingQuery = SalaryTransfer.find({ periodKey: month }).select('userId');
+  if (session) existingQuery.session(session);
+  const existing = await existingQuery;
   const existingIds = new Set(existing.map((row) => row.userId.toString()));
 
   const toCreate = [];
@@ -530,7 +546,7 @@ export async function generatePendingSalaryTransfers(month, actorId) {
   }
 
   if (toCreate.length > 0) {
-    await SalaryTransfer.insertMany(toCreate, { ordered: false });
+    await SalaryTransfer.insertMany(toCreate, { ordered: false, ...(session ? { session } : {}) });
   }
 
   return {
@@ -727,3 +743,5 @@ export async function updateUserSalary(userId, payload, actorId) {
 
   return user;
 }
+
+export { settleMonthPayroll, listRecentSettlements } from './lopSettlementService.js';

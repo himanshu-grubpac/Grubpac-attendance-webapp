@@ -81,6 +81,14 @@ export const NAV_ITEMS = [
     allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
   },
   {
+    to: '/admin/salary/team',
+    label: 'Team Salary Audit',
+    icon: '₹',
+    section: 'Employees',
+    portal: 'admin',
+    permission: PERMISSIONS.SALARY_READ_TEAM,
+  },
+  {
     to: '/admin/attendance',
     label: 'Attendance history',
     icon: '◷',
@@ -127,6 +135,8 @@ export const NAV_ITEMS = [
     section: 'Leaves',
     portal: 'admin',
     permission: PERMISSIONS.LEAVE_APPROVE,
+    matchPrefixes: ['/admin/leave/approvals', '/admin/leave/comp-off'],
+    badge: 'approvals',
   },
   {
     to: '/admin/leave/streaks',
@@ -187,12 +197,28 @@ export const NAV_ITEMS = [
     permission: PERMISSIONS.ATTENDANCE_READ_OWN,
   },
   {
-    to: '/employee/leave/apply',
-    label: 'Apply leave / WFH',
+    to: '/employee/leave/apply-wfh',
+    label: 'Apply WFH',
     icon: '＋',
     section: 'Leave',
     portal: 'employee',
     permission: PERMISSIONS.LEAVE_APPLY,
+  },
+  {
+    to: '/employee/leave/apply',
+    label: 'Apply leave',
+    icon: '＋',
+    section: 'Leave',
+    portal: 'employee',
+    permission: PERMISSIONS.LEAVE_APPLY,
+  },
+  {
+    to: '/employee/leave/comp-off',
+    label: 'Request comp off',
+    icon: '◈',
+    section: 'Leave',
+    portal: 'employee',
+    permission: PERMISSIONS.LEAVE_READ,
   },
   {
     to: '/employee/leave/balances',
@@ -256,6 +282,13 @@ export function resolveNavItemActive(to, { isActive, location }) {
     if (!childSegment || childSegment.includes('/')) return false;
 
     return childSegment !== 'register' && childSegment !== 'bulk-upload';
+  }
+
+  // Unified Requests area: the comp-off queue lives under the Pending
+  // Requests entry, so it stays highlighted there too.
+  if (to === '/admin/leave/approvals') {
+    const { pathname } = location;
+    if (pathname === to || pathname.startsWith('/admin/leave/comp-off')) return true;
   }
 
   return isActive;
@@ -338,8 +371,9 @@ const ADMIN_BOTTOM_NAV = [
     label: 'Pending Requests',
     shortLabel: 'Pending',
     icon: '✓',
-    matchPrefixes: ['/admin/leave/approvals'],
+    matchPrefixes: ['/admin/leave/approvals', '/admin/leave/comp-off'],
     permission: PERMISSIONS.LEAVE_APPROVE,
+    badge: 'approvals',
   },
   {
     key: 'attendance',

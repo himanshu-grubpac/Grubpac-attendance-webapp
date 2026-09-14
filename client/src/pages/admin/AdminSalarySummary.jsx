@@ -14,6 +14,8 @@ import { formatInrInput, parseInrInput } from '../../utils/formatNumber.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { SalaryHistorySection, TeamAuditSection } from './SalaryAuditSections.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 import InrInput from '../../components/InrInput.jsx';
@@ -29,6 +31,8 @@ const STRUCTURE_PAGE_SIZE = 20;
 const SALARY_TABS = [
   { id: 'monthly', label: 'Monthly Payroll' },
   { id: 'transfers', label: 'Transfers' },
+  { id: 'history', label: 'Salary History' },
+  { id: 'audit', label: 'Monthly Audit' },
   { id: 'structure', label: 'Salary Structure' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -959,6 +963,7 @@ function SalaryStructureTab({ canManageSalary }) {
 
 function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMonthPartFilter, canManageSalary }) {
   const { showSuccess } = useToast();
+  const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const [transfers, setTransfers] = useState([]);
   const [stats, setStats] = useState(null);
   const [pagination, setPagination] = useState({
@@ -971,6 +976,8 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [settling, setSettling] = useState(false);
+  const [settlements, setSettlements] = useState([]);
   const [updatingId, setUpdatingId] = useState(null);
   const [error, setError] = useState('');
   const [failModal, setFailModal] = useState(null);
@@ -1009,6 +1016,10 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
 
   useEffect(() => {
     loadTransfers();
+    salaryApi
+      .listSettlements()
+      .then((data) => setSettlements(data.settlements ?? []))
+      .catch(() => setSettlements([]));
   }, [loadTransfers]);
 
   useEffect(() => {
@@ -1058,6 +1069,41 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
     } finally {
       setGenerating(false);
     }
+  }
+
+  async function handleSettle() {
+    await requestConfirm({
+      title: `Settle payroll for ${month}?`,
+      message:
+        'Finalizes LOP deductions, zeroes negative carried balances for the new cycle, and generates pending transfers. Already-settled months are skipped safely.',
+      confirmLabel: 'Settle month',
+      variant: 'danger',
+      onConfirm: async () => {
+        setSettling(true);
+        setError('');
+        try {
+          const data = await salaryApi.settleMonth(month);
+          if (data.alreadySettled) {
+            showSuccess(data.message ?? `Month ${month} was already settled.`);
+          } else {
+            showSuccess(
+              `Settled ${month}: ${data.employeesWithLop ?? 0} employee(s) with LOP, ${data.transfersCreated ?? 0} transfer(s) created.`,
+            );
+          }
+          await loadTransfers();
+          try {
+            const settledData = await salaryApi.listSettlements();
+            setSettlements(settledData.settlements ?? []);
+          } catch {
+            // Settlement list is informational — transfer results already shown.
+          }
+        } catch (err) {
+          setError(getErrorMessage(err));
+        } finally {
+          setSettling(false);
+        }
+      },
+    });
   }
 
   async function handleStatusUpdate(transfer, status, failureReason) {
@@ -1110,6 +1156,41 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
         Manual bank disbursement tracking for the selected month. Generate pending rows from net pay
         estimates, then mark each transfer paid or failed after processing outside this portal.
       </p>
+
+      <section className="salary-panel card" aria-label="Month-end settlement status">
+        <p className="card__section-title">Month-end settlement</p>
+        {settlements.length === 0 ? (
+          <p className="muted small">
+            No payroll settlement has run yet. Settling a month finalizes LOP, zeroes minus carried
+            balances for the new cycle, and generates pending transfers.
+          </p>
+        ) : (
+          <div className="table-wrap table-wrap--responsive salary-table-wrap">
+            <table className="table data-table salary-table">
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Settled at</th>
+                  <th className="salary-table__num">Employees processed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {settlements.map((settlement) => (
+                  <tr key={settlement.periodKey}>
+                    <td data-label="Month">{settlement.periodKey}</td>
+                    <td data-label="Settled at">
+                      {settlement.settledAt ? formatISTDateTime(settlement.settledAt) : '—'}
+                    </td>
+                    <td data-label="Employees processed" className="salary-table__num">
+                      {settlement.employeesProcessed ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <SalaryStatsGrid loading={loading} statValues={statValues} dynamicHints={{}} statCards={TRANSFER_STAT_CARDS} />
 
@@ -1164,9 +1245,17 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
             <div className="salary-toolbar__actions">
               <button
                 type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleSettle}
+                disabled={settling || generating || loading}
+              >
+                {settling ? 'Settling…' : 'Settle month'}
+              </button>
+              <button
+                type="button"
                 className="btn btn-primary btn-sm"
                 onClick={handleGenerate}
-                disabled={generating || loading}
+                disabled={generating || settling || loading}
               >
                 {generating ? 'Generating…' : 'Generate pending transfers'}
               </button>
@@ -1377,6 +1466,8 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
             document.body,
           )
         : null}
+
+      {confirmDialog}
     </>
   );
 }
@@ -1658,6 +1749,10 @@ export default function AdminSalarySummary() {
           setSelectedId={setSelectedId}
         />
       ) : null}
+
+      {activeTab === 'history' ? <SalaryHistorySection /> : null}
+
+      {activeTab === 'audit' ? <TeamAuditSection allowDownload /> : null}
 
       {activeTab === 'structure' ? <SalaryStructureTab canManageSalary={canManageSalary} /> : null}
 

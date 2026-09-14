@@ -13,12 +13,14 @@ export const createLeaveTypeSchema = z.object({
     .toUpperCase()
     .regex(/^[A-Z]{2,5}$/, 'Leave type code must be 2–5 uppercase letters.'),
   name: z.string().trim().min(2).max(100),
+  description: z.string().trim().max(500).default(''),
   isActive: z.boolean().optional(),
 });
 
 export const updateLeaveTypeSchema = z
   .object({
     name: z.string().trim().min(2).max(100).optional(),
+    description: z.string().trim().max(500).optional(),
     isActive: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
@@ -133,6 +135,10 @@ export const leaveRequestQuerySchema = paginationSchema.extend({
     .regex(/^\d{4}-\d{2}$/, 'Month must be YYYY-MM.')
     .optional(),
   scope: z.enum(['mine', 'team', 'all', 'approvals']).default('mine'),
+  // Optional leave-type filter (e.g. 'WFH') for tabbed approval queues.
+  leaveTypeCode: z.string().trim().min(1).max(20).optional(),
+  // Exclusion counterpart: match everything except this leave type.
+  excludeLeaveTypeCode: z.string().trim().min(1).max(20).optional(),
 });
 
 export const teamCalendarQuerySchema = z.object({

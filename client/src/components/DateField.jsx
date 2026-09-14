@@ -117,6 +117,11 @@ export default function DateField({
   disabledDates = [],
   disableWeekends = false,
   disabledDateTitles = {},
+  /**
+   * Optional extra per-date gate (YYYY-MM-DD key → allowed). ANDed with the
+   * range check and the non-working-day rules above; absent = no extra gate.
+   */
+  isDateAllowed,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
   className = '',
@@ -250,7 +255,9 @@ export default function DateField({
   }
 
   function isUnpickable(dateValue) {
-    return isOutOfRange(dateValue) || isNonWorkingDay(dateValue);
+    if (isOutOfRange(dateValue) || isNonWorkingDay(dateValue)) return true;
+    if (isDateAllowed && !isDateAllowed(dateValue)) return true;
+    return false;
   }
 
   function commitDate(dateValue) {

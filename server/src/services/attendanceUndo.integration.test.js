@@ -33,6 +33,10 @@ beforeEach(async () => {
     longitude: 77.20129,
     radiusMeters: 500,
     maxAccuracyMeters: 100,
+    // No weekends: these undo tests check in "today", and the comp-off
+    // weekend gate would otherwise reject check-ins on Saturdays/Sundays,
+    // making the suite fail only on weekends (day-dependent flake).
+    weekendDays: [],
   });
 });
 

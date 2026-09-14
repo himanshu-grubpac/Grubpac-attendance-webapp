@@ -5,12 +5,14 @@ import {
   runLeaveDecisionNotifyJob,
   recoverPendingSubmitNotificationsSafe,
   runHelpAttachmentCleanupJob,
+  runMonthEndSettlementJob,
 } from './leaveJobs.js';
 
 const JOBS = {
   'auto-checkout': runAutoCheckoutJob,
   'leave-decision-notify': runLeaveDecisionNotifyJob,
   'help-attachment-cleanup': runHelpAttachmentCleanupJob,
+  'month-end-settlement': runMonthEndSettlementJob,
 };
 
 export const handler = async (event, context) => {
