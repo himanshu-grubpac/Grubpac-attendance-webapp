@@ -173,6 +173,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
 
   async function handleCommentSubmit(event) {
     event.preventDefault();
+    if (ticket?.status === 'closed') return;
     if (!commentBody.trim() && selectedFiles.length === 0) return;
     setSubmittingComment(true);
     setError('');
@@ -443,78 +444,84 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           </ul>
         )}
 
-        <form className="form-grid" onSubmit={handleCommentSubmit}>
-          <label className="field form-grid__full">
-            <span className="label">Add comment</span>
-            <textarea
-              value={commentBody}
-              onChange={(event) => setCommentBody(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              rows={3}
-              maxLength={5000}
-              placeholder="Write a reply…"
-            />
-          </label>
-
-          <div className="field form-grid__full">
-            <span className="label">Attachments (optional)</span>
-            <div className="comment-upload">
-              <input
-                ref={fileInputRef}
-                className="comment-upload__file-input"
-                type="file"
-                accept={COMMENT_ACCEPT_ATTR}
-                multiple
-                onChange={handleCommentFilesChange}
-                disabled={uploadingFiles || selectedFiles.length >= MAX_COMMENT_ATTACHMENTS}
-                aria-hidden="true"
-                tabIndex={-1}
+        {ticket.status === 'closed' ? (
+          <p className="muted small" style={{ marginTop: 'var(--space-4)' }}>
+            This ticket is closed. New comments cannot be added.
+          </p>
+        ) : (
+          <form className="form-grid" onSubmit={handleCommentSubmit}>
+            <label className="field form-grid__full">
+              <span className="label">Add comment</span>
+              <textarea
+                value={commentBody}
+                onChange={(event) => setCommentBody(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                rows={3}
+                maxLength={5000}
+                placeholder="Write a reply…"
               />
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingFiles || selectedFiles.length >= MAX_COMMENT_ATTACHMENTS}
-              >
-                {selectedFiles.length >= MAX_COMMENT_ATTACHMENTS ? 'Max files added' : 'Add files'}
-              </button>
-              <span className="muted small">
-                PDF, JPEG, PNG, or WebP · Up to {MAX_COMMENT_ATTACHMENTS} files · 5 MB each
-              </span>
+            </label>
 
-              {selectedFiles.length > 0 && (
-                <ul className="comment-upload__list" aria-label="Selected attachments">
-                  {selectedFiles.map((file, index) => (
-                    <li key={`${file.name}-${file.size}-${index}`} className="comment-upload__item">
-                      <span className="comment-upload__name">{file.name}</span>
-                      <span className="muted small">{formatFileSize(file.size)}</span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeCommentFile(index)}
-                        disabled={uploadingFiles}
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <FieldError message={attachmentError} />
+            <div className="field form-grid__full">
+              <span className="label">Attachments (optional)</span>
+              <div className="comment-upload">
+                <input
+                  ref={fileInputRef}
+                  className="comment-upload__file-input"
+                  type="file"
+                  accept={COMMENT_ACCEPT_ATTR}
+                  multiple
+                  onChange={handleCommentFilesChange}
+                  disabled={uploadingFiles || selectedFiles.length >= MAX_COMMENT_ATTACHMENTS}
+                  aria-hidden="true"
+                  tabIndex={-1}
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFiles || selectedFiles.length >= MAX_COMMENT_ATTACHMENTS}
+                >
+                  {selectedFiles.length >= MAX_COMMENT_ATTACHMENTS ? 'Max files added' : 'Add files'}
+                </button>
+                <span className="muted small">
+                  PDF, JPEG, PNG, or WebP · Up to {MAX_COMMENT_ATTACHMENTS} files · 5 MB each
+                </span>
+
+                {selectedFiles.length > 0 && (
+                  <ul className="comment-upload__list" aria-label="Selected attachments">
+                    {selectedFiles.map((file, index) => (
+                      <li key={`${file.name}-${file.size}-${index}`} className="comment-upload__item">
+                        <span className="comment-upload__name">{file.name}</span>
+                        <span className="muted small">{formatFileSize(file.size)}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeCommentFile(index)}
+                          disabled={uploadingFiles}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <FieldError message={attachmentError} />
+              </div>
             </div>
-          </div>
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={submittingComment || uploadingFiles}>
-              {submittingComment ? 'Posting…' : 'Post comment'}
-            </button>
-          </div>
-        </form>
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary" disabled={submittingComment || uploadingFiles}>
+                {submittingComment ? 'Posting…' : 'Post comment'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {confirmDialog}

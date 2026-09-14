@@ -156,15 +156,21 @@ function EmploymentEditFields({
 
       <label className="employee-detail-field-control">
         <DetailLabel required>Mobile</DetailLabel>
-        <input
-          className="input"
-          type="text"
-          inputMode="numeric"
-          value={orgForm.mobile}
-          onChange={(e) => updateField('mobile', e.target.value)}
-          maxLength={15}
-          autoComplete="tel"
-        />
+        <div className="mobile-input-wrap">
+          <span className="mobile-input-prefix" aria-hidden="true">
+            +91
+          </span>
+          <input
+            className="input mobile-input--with-prefix"
+            type="text"
+            inputMode="numeric"
+            value={orgForm.mobile}
+            onChange={(e) => updateField('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))}
+            maxLength={10}
+            autoComplete="tel"
+            placeholder="99999 99999"
+          />
+        </div>
         <FieldError message={fieldErrors.mobile} />
       </label>
 
@@ -451,7 +457,7 @@ export default function AdminEmployeeDetail() {
       firstName: emp.firstName ?? '',
       lastName: emp.lastName ?? '',
       email: emp.email ?? '',
-      mobile: emp.mobile ?? '',
+      mobile: String(emp.mobile ?? '').replace(/\D/g, '').slice(0, 10),
       designation: emp.designation ?? '',
       joiningDate: emp.joiningDate ? String(emp.joiningDate).slice(0, 10) : '',
       dateOfBirth: emp.dateOfBirth ? String(emp.dateOfBirth).slice(0, 10) : '',

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { PERMISSIONS } from '@shared/permissions.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
 
 const KPI_CARDS = [
@@ -64,10 +66,19 @@ function DashboardCardSkeleton() {
 }
 
 export default function AdminDashboard() {
+  const { hasPermission } = useAuth();
   const [reports, setReports] = useState(null);
   const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reportsError, setReportsError] = useState('');
+
+  const canManageHelp = hasPermission(PERMISSIONS.HELP_MANAGE);
+  const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
+  const openTicketsTo = canManageHelp && canWriteUsers ? '/admin/help/tickets' : '/admin/help/team';
+  const visibleCards = KPI_CARDS.filter((card) => {
+    if (card.key !== 'openTickets') return true;
+    return canManageHelp;
+  }).map((card) => (card.key === 'openTickets' ? { ...card, to: openTicketsTo } : card));
 
 
   useEffect(() => {
@@ -108,14 +119,13 @@ export default function AdminDashboard() {
 
       {loading ? (
         <div className="admin-home__grid" aria-busy="true" aria-label="Loading dashboard metrics">
-          <DashboardCardSkeleton />
-          <DashboardCardSkeleton />
-          <DashboardCardSkeleton />
-          <DashboardCardSkeleton />
+          {visibleCards.map((card) => (
+            <DashboardCardSkeleton key={card.key} />
+          ))}
         </div>
       ) : reports ? (
         <div className="admin-home__grid">
-          {KPI_CARDS.map((card) => {
+          {visibleCards.map((card) => {
             const hint = card.getHint?.(reports, counts);
             return (
               <Link key={card.key} to={card.to} className="admin-home__card card">
