@@ -154,7 +154,7 @@ export function applyDateOfBirthRules(data, ctx) {
   if (
     monthDiff < 0 ||
     (monthDiff === 0 &&
-      joiningDate.getDate() < data.dateOfBirth.getDate())
+      joiningDate.getDate() < dobDate.getDate())
   ) {
     age -= 1;
   }

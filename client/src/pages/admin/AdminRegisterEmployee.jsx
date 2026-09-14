@@ -359,17 +359,22 @@ export default function AdminRegisterEmployee() {
 
             <label className="register-field">
               <RegisterLabel required>Mobile</RegisterLabel>
-              <input
-                className="input"
-                type="text"
-                inputMode="numeric"
-                value={form.mobile}
-                onChange={(event) => updateField('mobile', event.target.value)}
-                placeholder="+91 99999 99999"
-                maxLength={15}
-                autoComplete="tel"
-                disabled={formDisabled}
-              />
+              <div className="mobile-input-wrap">
+                <span className="mobile-input-prefix" aria-hidden="true">
+                  +91
+                </span>
+                <input
+                  className="input mobile-input--with-prefix"
+                  type="text"
+                  inputMode="numeric"
+                  value={form.mobile}
+                  onChange={(event) => updateField('mobile', event.target.value.replace(/\D/g, '').slice(0, 10))}
+                  placeholder="99999 99999"
+                  maxLength={10}
+                  autoComplete="tel"
+                  disabled={formDisabled}
+                />
+              </div>
               <FieldError message={fieldErrors.mobile} />
             </label>
 
