@@ -420,7 +420,7 @@ export default function EmployeeCompOff() {
             description="Request approval before working a weekend or holiday."
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive my-comp-off-table-wrap">
             <table className="table data-table">
               <thead>
                 <tr>

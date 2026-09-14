@@ -12875,6 +12875,9 @@ body::-webkit-scrollbar-thumb {
 .table-wrap.help-team-table-wrap,
 .table-wrap.leave-balances-table-wrap,
 .table-wrap.employee-history-table-wrap,
+.table-wrap.my-requests-table-wrap,
+.table-wrap.my-comp-off-table-wrap,
+.table-wrap.my-help-tickets-table-wrap,
 .leave-types-panel .table-wrap {
   scrollbar-gutter: auto;
 }
@@ -12888,6 +12891,29 @@ body::-webkit-scrollbar-thumb {
   .leave-adjustment-table th:last-child,
   .leave-adjustment-table td:last-child {
     padding-right: 1.15rem;
+  }
+
+  /* Employee "mine" tables: flush right edge (last column only, these three tables only) */
+  .my-requests-table-wrap .table th:last-child,
+  .my-requests-table-wrap .table td:last-child,
+  .my-requests-table-wrap .data-table th:last-child,
+  .my-requests-table-wrap .data-table td:last-child,
+  .my-comp-off-table-wrap .table th:last-child,
+  .my-comp-off-table-wrap .table td:last-child,
+  .my-comp-off-table-wrap .data-table th:last-child,
+  .my-comp-off-table-wrap .data-table td:last-child,
+  .my-help-tickets-table-wrap .table th:last-child,
+  .my-help-tickets-table-wrap .table td:last-child,
+  .my-help-tickets-table-wrap .data-table th:last-child,
+  .my-help-tickets-table-wrap .data-table td:last-child {
+    padding-right: 0;
+  }
+
+  /* Help tickets: action button sits exactly under the left-aligned ACTIONS header */
+  .my-help-tickets-table-wrap .table td.cell-actions,
+  .my-help-tickets-table-wrap .data-table td.cell-actions {
+    text-align: left;
+    padding-left: 0.85rem;
   }
 }
 
@@ -14465,12 +14491,40 @@ body::-webkit-scrollbar-thumb {
 }
 
 .salary-detail-modal__body {
-  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .salary-detail__lop-dates {
+  min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.salary-detail__lop-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.salary-detail__lop-tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.35;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: color-mix(in srgb, var(--surface-2) 75%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+@media (min-width: 769px) {
+  .salary-detail-modal .salary-detail__lop-row {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 768px) {
