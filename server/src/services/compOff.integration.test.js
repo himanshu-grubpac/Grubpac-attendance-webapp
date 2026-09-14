@@ -23,6 +23,7 @@ import {
   consumeCompOffDecisionToken,
   createCompOffRequest,
   decideCompOffRequest,
+  getCompOffPendingCounts,
   issueCompOffDecisionToken,
   listCompOffRequests,
   peekCompOffDecisionToken,
@@ -1119,4 +1120,142 @@ test('undoing a per-day assessment clears the staged array with no credit', asyn
   const final = await CompOffRequest.findById(created.id).lean();
   assert.equal(final.status, 'worked', 'undone assessment never finalizes');
   assert.equal(testEmailOutbox.filter((m) => m.tag === 'comp-off-assessed').length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-019: Comp-off approval visibility — submit succeeds → immediately
+// visible for approval (no dependency on notification/finalization jobs).
+// ---------------------------------------------------------------------------
+
+test('BUG-019: pending request is immediately visible to the reporting manager (no sweep)', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await submitCompOff(employee, satKey);
+  assert.equal(created.status, 'pending');
+
+  // Immediately after submission — no sweep, no notification — the manager
+  // should see the request in the approval queue.
+  const approvals = await listCompOffRequests(manager, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(approvals.pagination.total, 1, 'manager sees pending request immediately');
+  assert.equal(approvals.requests[0].id, created.id);
+
+  // The pending-counts badge should also reflect the request.
+  const counts = await getCompOffPendingCounts(manager, MANAGER_PERMS);
+  assert.equal(counts.pending, 1, 'pending count reflects the request');
+});
+
+test('BUG-019: delegate approver sees pending request for the delegated manager\'s reports', async () => {
+  const primaryManager = await createUser('Primary Manager', { isManager: true });
+  const delegate = await createUser('Delegate Approver', { isManager: true });
+  // Set delegate on the primary manager.
+  await User.updateOne(
+    { _id: primaryManager._id },
+    { $set: { delegateApproverId: delegate._id } },
+  );
+
+  const employee = await createUser('Delegated Employee', { reportingManagerId: primaryManager._id });
+  const satKey = nextSaturdayKey(getISTDateInputValue());
+  const created = await submitCompOff(employee, satKey);
+
+  // Primary manager sees it.
+  const primaryApprovals = await listCompOffRequests(primaryManager, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(primaryApprovals.pagination.total, 1, 'primary manager sees the request');
+
+  // Delegate sees it too (same scope as primary for approval purposes).
+  const delegateApprovals = await listCompOffRequests(delegate, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(delegateApprovals.pagination.total, 1, 'delegate sees the request');
+  assert.equal(delegateApprovals.requests[0].id, created.id);
+
+  // Unrelated manager does NOT see it.
+  const unrelated = await createUser('Unrelated Manager', { isManager: true });
+  const outsiderApprovals = await listCompOffRequests(unrelated, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(outsiderApprovals.pagination.total, 0, 'unrelated manager sees nothing');
+});
+
+test('BUG-019: LEAVE_READ_ALL approver sees all pending comp-off requests company-wide', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const otherManager = await createUser('Other Manager', { isManager: true });
+  const otherEmployee = await createUser('Other Employee', { reportingManagerId: otherManager._id });
+  const created = await submitCompOff(employee, satKey);
+  await submitCompOff(otherEmployee, nextWeekendKey(satKey));
+
+  const adminApprovals = await listCompOffRequests(otherManager, ADMIN_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(adminApprovals.pagination.total, 2, 'admin with read_all sees all pending');
+});
+
+test('BUG-019: user without leave.approve cannot access approval queue', async () => {
+  const { employee, satKey } = await createCompOffFixture();
+  await submitCompOff(employee, satKey);
+
+  await assert.rejects(
+    listCompOffRequests(employee, EMPLOYEE_PERMS, {
+      scope: 'approvals',
+      status: 'pending',
+      page: 1,
+      limit: 20,
+    }),
+    (err) => err.statusCode === 403,
+    'employee without approve permission gets 403',
+  );
+});
+
+test('BUG-019: unauthorized user cannot approve/reject outside their scope', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await submitCompOff(employee, satKey);
+
+  const unrelated = await createUser('Unrelated Manager', { isManager: true });
+  await assert.rejects(
+    decideCompOffRequest(created.id, unrelated, MANAGER_PERMS, 'approved', {}),
+    (err) => err.statusCode === 403,
+    'unrelated manager cannot approve',
+  );
+});
+
+test('BUG-019: submit notification does not affect visibility — request visible before and after', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await submitCompOff(employee, satKey);
+
+  // Before sweep: visible.
+  let approvals = await listCompOffRequests(manager, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(approvals.pagination.total, 1, 'visible before sweep');
+
+  // After sweep (submit notification fires): still visible.
+  await runCompOffSweep(FUTURE);
+  approvals = await listCompOffRequests(manager, MANAGER_PERMS, {
+    scope: 'approvals',
+    status: 'pending',
+    page: 1,
+    limit: 20,
+  });
+  assert.equal(approvals.pagination.total, 1, 'visible after sweep');
+  assert.equal(approvals.requests[0].id, created.id);
 });

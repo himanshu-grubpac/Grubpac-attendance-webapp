@@ -40,6 +40,7 @@ import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { createNotification } from './notificationService.js';
+import { materializeRecurringHolidaysForYear } from './recurringHolidayService.js';
 
 export { buildAdminSyntheticGeoFields };
 
@@ -193,6 +194,9 @@ export function isLeaveDecisionAwaitingFinalization(decisionUndoExpiresAt, now =
  */
 async function hasApprovedCompOffForToday(userId, office, istToday, session = null) {
   const ref = parseDateInputAsISTDay(istToday) ?? new Date();
+  if (!isWeekendIST(ref, office.weekendDays)) {
+    await materializeRecurringHolidaysForYear(getISTYear(ref), userId);
+  }
   const nonWorkingDay =
     isWeekendIST(ref, office.weekendDays) ||
     (await getHolidayMapForYear(getISTYear(ref))).has(istToday);
@@ -582,6 +586,11 @@ async function compOffCheckInGateError(userId, office, istToday, session = null)
   // (wrong-year holiday map, off-by-one weekend).
   const ref = parseDateInputAsISTDay(istToday) ?? new Date();
   if (!isWeekendIST(ref, office.weekendDays)) {
+    // Ensure recurring holiday rules are materialized for the current IST year
+    // before checking the holiday map. This prevents check-in on dates that the
+    // admin considers a holiday via recurring rules but that were never
+    // explicitly materialized into Holiday documents.
+    await materializeRecurringHolidaysForYear(getISTYear(ref), userId);
     const holidayMap = await getHolidayMapForYear(getISTYear(ref));
     if (!holidayMap.has(istToday)) return null;
   }
@@ -1156,6 +1165,7 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
   const { year, monthKey, start, end, daysInMonth } = range;
   const office = await getOfficeSettings();
   const weekendDays = office?.weekendDays ?? [0, 6];
+  await materializeRecurringHolidaysForYear(year, userId);
   const [holidayMap, birthdays] = await Promise.all([
     getHolidayMapForYear(year),
     loadMonthBirthdays(monthKey),

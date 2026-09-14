@@ -25,6 +25,7 @@ import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import { canApproveLeave, hashDecisionToken } from './leaveService.js';
 import { ensureBalancesForUser } from './leaveBalanceService.js';
 import { resolveLeaveApprovalUserIds } from './teamScopeService.js';
+import { materializeRecurringHolidaysForYear } from './recurringHolidayService.js';
 import { env } from '../config/env.js';
 import {
   sendEmail,
@@ -317,6 +318,7 @@ export async function autoLoginByCompOffDecisionToken(requestId, action, rawToke
 
 /** Active holidays in a calendar year keyed by YYYY-MM-DD. */
 export async function getCompOffHolidayMapForYear(year) {
+  await materializeRecurringHolidaysForYear(year);
   const start = parseDateInputAsISTDay(`${year}-01-01`);
   const end = parseDateInputAsISTDay(`${year}-12-31`);
   const holidays = await Holiday.find({

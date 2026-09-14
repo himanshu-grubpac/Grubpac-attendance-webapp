@@ -9,6 +9,7 @@ import mongoose from 'mongoose';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { Holiday } from '../models/Holiday.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -23,6 +24,7 @@ import { assessCompOffWork, decideCompOffRequest, createCompOffRequest, runCompO
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
 import { clearTestSmsOutbox, testSmsOutbox } from './smsService.js';
 import { seedLeaveTypesAndPolicies } from './leaveBalanceService.js';
+import { materializeRecurringHolidaysForYear } from './recurringHolidayService.js';
 import {
   endOfDayIST,
   getISTDateInputValue,
@@ -52,6 +54,7 @@ beforeEach(async () => {
   await Promise.all([
     AttendanceRecord.deleteMany({}),
     CompOffRequest.deleteMany({}),
+    Holiday.deleteMany({}),
     LeaveBalance.deleteMany({}),
     LeavePolicy.deleteMany({}),
     LeaveRequest.deleteMany({}),
@@ -380,4 +383,87 @@ test('outside radius without any approval is still rejected', async () => {
     ),
     `reasons: ${result.rejectionReasons.join(' | ')}`,
   );
+});
+
+test('recurring holiday rule auto-materialized on check-in blocks without explicit materialization', async () => {
+  // Set up: make today a working weekday (not a weekend) and create a
+  // recurring holiday rule that covers today. Do NOT manually call
+  // materializeRecurringHolidaysForYear — the check-in gate must do it.
+  const todayDow = getISTWeekday();
+  await makeTodayAWeekend({ ...OFFICE, weekendDays: [(todayDow + 1) % 7] });
+  const todayDate = parseDateInputAsISTDay(todayKey());
+  const todayMonth = todayDate.getMonth() + 1;
+
+  // Create a recurring rule that targets today's weekday in today's month.
+  const settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  settings.recurringHolidayRules = [
+    {
+      name: 'Auto-Materialized Holiday',
+      weekday: todayDow,
+      nth: Math.ceil(todayDate.getDate() / 7),
+      months: [todayMonth],
+      type: 'public',
+    },
+  ];
+  await settings.save();
+
+  // Check-in must be blocked — the gate should auto-materialize the recurring
+  // rule into a Holiday document and then enforce the comp-off requirement.
+  const employee = await createUser('Recurring Holiday Worker');
+  const result = await markAttendance(employee._id, 'check_in', geoPayload({ attendanceMode: 'office' }), {});
+  assert.equal(result.status, 'rejected');
+  assert.ok(
+    result.rejectionReasons.includes('Comp off approval is required to mark attendance on weekends/holidays.'),
+    `expected gate message, got: ${result.rejectionReasons.join(' | ')}`,
+  );
+
+  // Verify the Holiday document was auto-materialized.
+  const materialized = await Holiday.findOne({ date: todayDate });
+  assert.ok(materialized, 'Holiday document auto-materialized by the gate');
+  assert.equal(materialized.isActive, true);
+  assert.equal(materialized.name, 'Auto-Materialized Holiday');
+});
+
+test('weekday without recurring holiday rule still allows check-in', async () => {
+  // Ensure today is a working weekday with no holiday rules at all.
+  const todayDow = getISTWeekday();
+  await makeTodayAWeekend({ ...OFFICE, weekendDays: [(todayDow + 1) % 7] });
+
+  // No recurring rules — the gate should not create any Holiday document.
+  const employee = await createUser('Plain Weekday Worker');
+  const result = await markAttendance(employee._id, 'check_in', geoPayload({ attendanceMode: 'office' }), {});
+  assert.equal(result.status, 'allowed', result.rejectionReasons?.join(' | '));
+});
+
+test('materialized recurring holiday + approved comp-off allows check-in', async () => {
+  // Same as above but with an approved comp-off — should be allowed.
+  const todayDow = getISTWeekday();
+  await makeTodayAWeekend({ ...OFFICE, weekendDays: [(todayDow + 1) % 7] });
+  const todayDate = parseDateInputAsISTDay(todayKey());
+  const todayMonth = todayDate.getMonth() + 1;
+
+  const settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  settings.recurringHolidayRules = [
+    {
+      name: 'Recurring Holiday CO',
+      weekday: todayDow,
+      nth: Math.ceil(todayDate.getDate() / 7),
+      months: [todayMonth],
+      type: 'public',
+    },
+  ];
+  await settings.save();
+
+  const manager = await createUser('Manager');
+  const employee = await createUser('CO Recurring Holiday', { reportingManagerId: manager._id });
+
+  // Materialize first so createCompOffRequest eligibility check passes.
+  await materializeRecurringHolidaysForYear(todayDate.getFullYear(), employee._id);
+  const materializedHoliday = await Holiday.findOne({ date: todayDate });
+  assert.ok(materializedHoliday, 'recurring rule was materialized for today');
+
+  await createApprovedCompOffToday(employee, manager);
+
+  const result = await markAttendance(employee._id, 'check_in', geoPayload({ attendanceMode: 'office' }), {});
+  assert.equal(result.status, 'allowed', result.rejectionReasons?.join(' | '));
 });
