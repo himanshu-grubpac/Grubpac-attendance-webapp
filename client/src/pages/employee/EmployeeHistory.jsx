@@ -83,7 +83,7 @@ export default function EmployeeHistory() {
           />
         ) : (
           <>
-            <div className="table-wrap table-wrap--responsive">
+            <div className="table-wrap table-wrap--responsive employee-history-table-wrap">
               <table className="table">
                 <thead>
                   <tr>

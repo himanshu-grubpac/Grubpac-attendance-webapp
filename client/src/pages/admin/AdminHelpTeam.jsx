@@ -74,7 +74,7 @@ export default function AdminHelpTeam() {
             description="Tickets from your direct reports will appear here."
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive help-team-table-wrap">
             <table className="table data-table">
               <thead>
                 <tr>

@@ -525,8 +525,11 @@ test('lapse: approved request without check-in lapses silently after holiday + 1
   await runCompOffSweep(FUTURE);
   assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'approved');
 
-  // No check-in ever happened. Advance well past the holiday + following day.
-  await runCompOffSweep(new Date(Date.now() + 5 * 24 * 60 * 60 * 1000));
+  // No check-in ever happened. Advance past the comp-off day + the day after
+  // (lapse boundary: endDate < startOfDay(now) − 1d). Use the fixture's
+  // satKey so the test works regardless of which day the suite runs on.
+  const satIST = parseDateInputAsISTDay(satKey);
+  await runCompOffSweep(new Date(satIST.getTime() + 2 * 24 * 60 * 60 * 1000));
   const live = await CompOffRequest.findById(created.id).lean();
   assert.equal(live.status, 'lapsed');
   assert.equal(await countNotifications(), 2, 'only submit + decision notifications exist');

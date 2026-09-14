@@ -12872,6 +12872,9 @@ body::-webkit-scrollbar-thumb {
 .table-wrap.help-tickets-table-wrap,
 .table-wrap.today-present-table-wrap,
 .table-wrap.leave-adjustment-table-wrap,
+.table-wrap.help-team-table-wrap,
+.table-wrap.leave-balances-table-wrap,
+.table-wrap.employee-history-table-wrap,
 .leave-types-panel .table-wrap {
   scrollbar-gutter: auto;
 }
