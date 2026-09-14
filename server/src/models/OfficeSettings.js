@@ -22,8 +22,9 @@ const officeSettingsSchema = new mongoose.Schema(
     weekendDays: { type: [Number], default: [0, 6] },
     /** Recurring holiday rules materialized per calendar year. */
     recurringHolidayRules: [{
-      nth: { type: Number, required: true },
-      weekday: { type: Number, required: true, min: 0, max: 6 },
+      nth: { type: Number },
+      weekday: { type: Number, min: 0, max: 6 },
+      dayOfMonth: { type: Number, min: 1, max: 31 },
       months: { type: mongoose.Schema.Types.Mixed, default: 'all' },
       type: { type: String, default: 'public', trim: true },
       name: { type: String, required: true, trim: true, maxlength: 200 },

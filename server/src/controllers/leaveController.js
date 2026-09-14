@@ -41,6 +41,7 @@ import {
   getRecurringHolidayRules,
   materializeRecurringHolidaysForYear,
   saveRecurringHolidayRules,
+  deleteRecurringHolidaysByRuleName,
 } from '../services/recurringHolidayService.js';
 import { runMonthlyAccrualJob } from '../jobs/leaveJobs.js';
 import {
@@ -111,6 +112,13 @@ export async function updateLeaveType(req, res) {
     return res.status(404).json({ message: 'Leave type not found.' });
   }
 
+  if (parsed.code !== undefined && parsed.code !== leaveType.code) {
+    const existing = await LeaveType.findOne({ code: parsed.code });
+    if (existing) {
+      return res.status(409).json({ message: 'Leave type code already exists.' });
+    }
+    leaveType.code = parsed.code;
+  }
   if (parsed.name !== undefined) leaveType.name = parsed.name;
   if (parsed.description !== undefined) leaveType.description = parsed.description;
   if (parsed.isActive !== undefined) leaveType.isActive = parsed.isActive;
@@ -125,24 +133,23 @@ export async function deleteLeaveType(req, res) {
     return res.status(404).json({ message: 'Leave type not found.' });
   }
 
-  const [policyCount, balanceCount, requestCount] = await Promise.all([
-    LeavePolicy.countDocuments({ leaveTypeId: leaveType._id }),
-    LeaveBalance.countDocuments({ leaveTypeId: leaveType._id }),
-    LeaveRequest.countDocuments({ leaveTypeId: leaveType._id }),
-  ]);
-
-  if (policyCount > 0 || balanceCount > 0 || requestCount > 0) {
-    return res.status(409).json({
-      message: 'Cannot delete leave type: it is referenced by policies, balances, or leave requests. Deactivate it instead.',
-    });
+  const hasRequests = await LeaveRequest.exists({ leaveTypeId: leaveType._id });
+  if (hasRequests) {
+    return res
+      .status(409)
+      .json({ message: 'Cannot delete leave type with existing leave requests. Deactivate it instead.' });
   }
 
+  await LeavePolicy.deleteMany({ leaveTypeId: leaveType._id });
+  await LeaveBalance.deleteMany({ leaveTypeId: leaveType._id });
   await leaveType.deleteOne();
+
   auditLog('leave_type_deleted', {
     adminId: req.user._id.toString(),
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
   });
+
   res.json({ message: 'Leave type deleted successfully.' });
 }
 
@@ -710,6 +717,20 @@ export async function materializeRecurringHolidays(req, res) {
     year: parsed.year,
     created: result.created.length,
     skipped: result.skipped.length,
+  });
+  res.json(result);
+}
+
+export async function deleteRecurringRuleHolidays(req, res) {
+  const { name } = req.body;
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  const result = await deleteRecurringHolidaysByRuleName(name.trim());
+  auditLog('recurring_rule_holidays_deleted', {
+    adminId: req.user._id.toString(),
+    ruleName: name.trim(),
+    deleted: result.deleted,
   });
   res.json(result);
 }

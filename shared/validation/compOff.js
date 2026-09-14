@@ -26,11 +26,11 @@ export const createCompOffRequestSchema = z
 // mirrors it with a current-month-start min.
 
 /**
- * Approve/assess remarks are optional; reject REQUIRES a non-empty remark
- * (enforced in the service, matching the leave decision flow).
+ * Comp-off approve/reject both require a non-empty remark (audit + alignment
+ * with the admin UI). Assessment also requires a remark.
  */
 export const compOffDecisionSchema = z.object({
-  comment: z.string().trim().max(500).optional().nullable(),
+  comment: z.string().trim().min(1, 'A remark is required for this action.').max(500),
 });
 
 export const compOffRejectSchema = z.object({
@@ -45,14 +45,14 @@ export const compOffDayAssessmentSchema = z.object({
 /**
  * Per-day assessment is the canonical form: one rate per eligible day in the
  * request range. The legacy single-rate `assessment` form (applied to every
- * day) is still accepted for backward compatibility. Remark stays optional
- * at the API layer; the admin UI requires it before submitting.
+ * day) is still accepted for backward compatibility. Remark is mandatory
+ * (matches the admin UI and audit requirements).
  */
 export const compOffAssessSchema = z
   .object({
     assessment: z.enum(['completed', 'half', 'none']).optional(),
     assessments: z.array(compOffDayAssessmentSchema).min(1).max(366).optional(),
-    comment: z.string().trim().max(500).optional().nullable(),
+    comment: z.string().trim().min(1, 'A remark is required to record the assessment.').max(500),
   })
   .refine((value) => value.assessment || value.assessments, {
     message: 'Provide an assessment rate or per-day assessments.',

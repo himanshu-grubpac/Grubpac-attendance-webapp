@@ -243,6 +243,68 @@ export default function AdminLeavePolicies() {
     }
   }
 
+  async function handleDeleteType(type) {
+    const snapshot = {
+      code: type.code,
+      name: type.name,
+      description: type.description ?? '',
+      isActive: type.isActive,
+    };
+    const relatedPolicies = policies.filter((p) => p.leaveTypeCode === type.code);
+    const confirmed = await requestConfirm({
+      title: `Delete leave type ${type.code}?`,
+      message: `Delete "${type.code} — ${type.name}"? This will permanently delete the leave type and all its yearly policies.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      await leaveApi.deleteType(type.id);
+      await loadLeaveTypes();
+      await loadPolicies();
+      showSuccess(`Leave type ${snapshot.code} deleted.`, {
+        durationMs: 7000,
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              const created = await leaveApi.createType(snapshot);
+              const restoredTypeId = created?.type?.id;
+              if (restoredTypeId && relatedPolicies.length > 0) {
+                for (const pol of relatedPolicies) {
+                  try {
+                    await leaveApi.createPolicy({
+                      leaveTypeId: restoredTypeId,
+                      year: pol.year,
+                      annualQuota: pol.annualQuota,
+                      accrualPerMonth: pol.accrualPerMonth,
+                      carryForwardMax: pol.carryForwardMax,
+                      maxAccumulation: pol.maxAccumulation,
+                      requireDocAfterConsecutiveDays: pol.requireDocAfterConsecutiveDays,
+                      encashmentMaxPerYear: pol.encashmentMaxPerYear,
+                      paid: pol.paid,
+                      isActive: pol.isActive,
+                      combinedCarryGroup: pol.combinedCarryGroup ?? null,
+                    });
+                  } catch {
+                    // Ignore individual policy restore failures (e.g., duplicate)
+                  }
+                }
+              }
+              await loadLeaveTypes();
+              await loadPolicies();
+              showSuccess(`Leave type ${snapshot.code} restored.`);
+            } catch (err) {
+              setError(getErrorMessage(err));
+            }
+          },
+        },
+      });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   function closeTypeModal() {
     if (typeSubmitting) return;
     setTypeModalOpen(false);
@@ -282,6 +344,7 @@ export default function AdminLeavePolicies() {
 
     if (isEditing) {
       const payload = {
+        code: typeForm.code.trim().toUpperCase(),
         name: typeForm.name.trim(),
         description: (typeForm.description ?? '').trim(),
         isActive: Boolean(typeForm.isActive),
@@ -301,6 +364,7 @@ export default function AdminLeavePolicies() {
         showSuccess(`Leave type ${typeEditing?.code ?? ''} updated.`);
         closeTypeModal();
         await loadLeaveTypes();
+        await loadPolicies();
       } catch (err) {
         setTypeModalError(getErrorMessage(err));
       } finally {
@@ -419,6 +483,11 @@ export default function AdminLeavePolicies() {
         label: type.isActive ? 'Deactivate' : 'Reactivate',
         onClick: () => handleToggleTypeActive(type),
       },
+      {
+        key: 'delete',
+        label: 'Delete',
+        onClick: () => handleDeleteType(type),
+      },
     ];
   }
 
@@ -441,7 +510,7 @@ export default function AdminLeavePolicies() {
             <span className="badge badge-muted">{leaveTypes.length}</span>
           </div>
           <p className="muted small" style={{ padding: '0 var(--space-4) var(--space-3)' }}>
-            Fix typo names or deactivate unused types. Code is the short identifier and cannot be changed after creation.
+            Fix typos in code or name, or deactivate unused types. Codes must be 2–5 uppercase letters and must remain unique.
           </p>
           {leaveTypes.length === 0 ? (
             <div style={{ padding: '0 var(--space-4) var(--space-4)' }}>
@@ -629,11 +698,11 @@ export default function AdminLeavePolicies() {
                   <h2 id={addTypeModalTitleId} className="modal__title">
                     {typeEditingId ? `Edit leave type: ${typeEditing?.code ?? ''}` : 'Add leave type'}
                   </h2>
-                  <p className="modal__lead muted">
-                    {typeEditingId
-                      ? 'Update the name, description, or active status. Code cannot be changed.'
-                      : 'Create a new leave type code and name. Policies are added separately per year.'}
-                  </p>
+                    <p className="modal__lead muted">
+                      {typeEditingId
+                        ? 'Update the code, name, description, or active status. Leave codes must be 2–5 uppercase letters.'
+                        : 'Create a new leave type code and name. Policies are added separately per year.'}
+                    </p>
                 </header>
 
                 <form className="modal__form" onSubmit={handleTypeSubmit}>
@@ -646,7 +715,7 @@ export default function AdminLeavePolicies() {
                       <label className="modal__field">
                         <span className="label">Code</span>
                         <input
-                          autoFocus={!typeEditingId}
+                          autoFocus
                           className="input input--narrow"
                           type="text"
                           maxLength={5}
@@ -655,19 +724,13 @@ export default function AdminLeavePolicies() {
                           onChange={(event) =>
                             setTypeForm({ ...typeForm, code: event.target.value.toUpperCase() })
                           }
-                          disabled={Boolean(typeEditingId)}
-                          readOnly={Boolean(typeEditingId)}
                         />
-                        {typeEditingId ? (
-                          <span className="muted small">Code cannot be changed.</span>
-                        ) : null}
                         <FieldError message={typeFieldErrors.code} />
                       </label>
 
                       <label className="modal__field">
                         <span className="label">Name</span>
                         <input
-                          autoFocus={Boolean(typeEditingId)}
                           className="input"
                           type="text"
                           maxLength={100}

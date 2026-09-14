@@ -23,6 +23,7 @@ import {
   leaveDecisionLinkPageHandler,
   leaveDecisionLoginHandler,
   deleteHolidayCategory,
+  deleteRecurringRuleHolidays,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
   getApprovalsPendingCountsHandler,
@@ -261,6 +262,11 @@ router.post(
   '/holidays/materialize-recurring',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(materializeRecurringHolidays),
+);
+router.post(
+  '/holidays/delete-by-rule',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(deleteRecurringRuleHolidays),
 );
 
 router.get(

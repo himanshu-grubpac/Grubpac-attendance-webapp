@@ -54,6 +54,17 @@ function resolveNthWeekday(year, month, weekday, nth) {
 export function materializeRecurringRuleDates(rule, year) {
   const months = normalizeMonths(rule.months);
   const dates = [];
+
+  if (rule.dayOfMonth != null) {
+    for (const month of months) {
+      const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const day = Math.min(rule.dayOfMonth, daysInMonth);
+      const key = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      dates.push(key);
+    }
+    return dates;
+  }
+
   for (const month of months) {
     const dayKey = resolveNthWeekday(year, month, rule.weekday, rule.nth);
     if (dayKey) {
@@ -92,6 +103,11 @@ export async function materializeRecurringHolidaysForYear(year, actorId) {
   const skipped = [];
 
   for (const rule of rules) {
+    // Backfill legacy generated holidays that lack sourceRuleName.
+    await Holiday.updateMany(
+      { name: rule.name, date: { $gte: new Date(Date.UTC(year, 0, 1)), $lt: new Date(Date.UTC(year + 1, 0, 1)) }, sourceRuleName: { $in: [null, undefined, ''] } },
+      { $set: { sourceRuleName: rule.name } },
+    );
     const dateKeys = materializeRecurringRuleDates(rule, year);
     for (const dateKey of dateKeys) {
       const date = parseDateInputAsISTDay(dateKey);
@@ -106,10 +122,23 @@ export async function materializeRecurringHolidaysForYear(year, actorId) {
         type: rule.type ?? 'public',
         createdBy: actorId,
         isActive: true,
+        sourceRuleName: rule.name,
       });
       created.push(holiday.toSafeJSON());
     }
   }
 
   return { created, skipped, year, ruleCount: rules.length };
+}
+
+export async function deleteRecurringHolidaysByRuleName(ruleName) {
+  const trimmed = String(ruleName ?? '').trim();
+  if (!trimmed) return { deleted: 0 };
+  // Backfill legacy holidays that were generated from this rule but lack sourceRuleName.
+  await Holiday.updateMany(
+    { name: trimmed, sourceRuleName: { $in: [null, undefined, ''] } },
+    { $set: { sourceRuleName: trimmed } },
+  );
+  const result = await Holiday.deleteMany({ sourceRuleName: trimmed });
+  return { deleted: result.deletedCount ?? 0 };
 }

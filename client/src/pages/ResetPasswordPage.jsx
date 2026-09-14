@@ -7,7 +7,14 @@ import { useToast } from '../context/ToastContext.jsx';
 import CompanyLogo from '../components/CompanyLogo.jsx';
 import FieldError from '../components/FieldError.jsx';
 import PasswordInput from '../components/PasswordInput.jsx';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 import { BRANDING } from '../config/branding.js';
+
+const HERO_FEATURES = [
+  'GPS-verified check-in and check-out',
+  'Geofence-based office attendance',
+  'Role-based access for admins and employees',
+];
 
 const REASON_MESSAGES = {
   missing: 'This password reset link is missing a token. Please request a new one.',
@@ -106,9 +113,30 @@ export default function ResetPasswordPage() {
             <p className="login-page__company">{BRANDING.companyName}</p>
           </div>
         </div>
+        <ThemeToggle />
       </div>
 
+      <section className="login-hero" aria-label="Product overview">
+        <div className="login-hero__content">
+          <div className="login-hero__brand">
+            <CompanyLogo size={56} showText={false} />
+            <h1 className="login-hero__title">{BRANDING.appName}</h1>
+            <p className="login-hero__tagline">
+              {BRANDING.tagline} · {BRANDING.companyName}
+            </p>
+          </div>
+          <ul className="login-hero__features">
+            {HERO_FEATURES.map((feature) => (
+              <li key={feature}>{feature}</li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
       <section className="login-panel">
+        <div className="login-panel__topbar login-panel__topbar--desktop">
+          <ThemeToggle />
+        </div>
         <div className="login-card card">
           <div className="login-card__header">
             <h1 className="login-card__title">Set a new password</h1>

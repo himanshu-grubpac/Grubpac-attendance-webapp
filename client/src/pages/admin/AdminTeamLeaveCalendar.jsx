@@ -117,6 +117,52 @@ function formatDayWithYear(value) {
   return `${parsed.day} ${MONTHS[parsed.month - 1].slice(0, 3)} ${parsed.year}`;
 }
 
+function deriveRecurringRuleFromDate(dateKey, everyMonth) {
+  const parsed = parseDateKey(dateKey);
+  if (!parsed) return null;
+  const jsDay = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day)).getUTCDay();
+  let count = 0;
+  for (let d = 1; d <= parsed.day; d += 1) {
+    if (new Date(Date.UTC(parsed.year, parsed.month - 1, d)).getUTCDay() === jsDay) count += 1;
+  }
+  const daysInMonth = new Date(Date.UTC(parsed.year, parsed.month, 0)).getUTCDate();
+  let isLast = true;
+  for (let d = parsed.day + 1; d <= daysInMonth; d += 1) {
+    if (new Date(Date.UTC(parsed.year, parsed.month - 1, d)).getUTCDay() === jsDay) {
+      isLast = false;
+      break;
+    }
+  }
+  const nth = isLast && count >= 4 ? -1 : count;
+  const months = everyMonth ? 'all' : [parsed.month];
+  return { nth, weekday: jsDay, months };
+}
+
+function exampleDateForRule(rule, year) {
+  if (!rule || rule.weekday == null || rule.nth == null) return '';
+  const months = rule.months === 'all' || rule.months == null ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] : rule.months;
+  const targetMonth = Array.isArray(months) ? months[0] : 1;
+  // resolve nth weekday for that month/year
+  if (rule.nth === -1) {
+    const lastDay = new Date(Date.UTC(year, targetMonth, 0)).getUTCDate();
+    for (let day = lastDay; day >= 1; day -= 1) {
+      if (new Date(Date.UTC(year, targetMonth - 1, day)).getUTCDay() === rule.weekday) {
+        return dateKey(year, targetMonth - 1, day);
+      }
+    }
+    return '';
+  }
+  let count = 0;
+  const daysInMonth = new Date(Date.UTC(year, targetMonth, 0)).getUTCDate();
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    if (new Date(Date.UTC(year, targetMonth - 1, day)).getUTCDay() === rule.weekday) {
+      count += 1;
+      if (count === rule.nth) return dateKey(year, targetMonth - 1, day);
+    }
+  }
+  return '';
+}
+
 export default function AdminTeamLeaveCalendar() {
   const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
@@ -141,13 +187,15 @@ export default function AdminTeamLeaveCalendar() {
   const [addingCategory, setAddingCategory] = useState(false);
   const [recurringRules, setRecurringRules] = useState([]);
   const [recurringForm, setRecurringForm] = useState({
+    name: '',
+    type: 'public',
     nth: 2,
     weekday: 6,
-    months: 'all',
-    type: 'public',
-    name: '',
+    date: '',
+    everyMonth: false,
   });
   const [expandedMonth, setExpandedMonth] = useState(null);
+  const [editingRecurringIndex, setEditingRecurringIndex] = useState(null);
   const categoryDialogTitleId = useId();
   const yearsLoadedRef = useRef(new Set());
 
@@ -414,7 +462,12 @@ export default function AdminTeamLeaveCalendar() {
         aria-label={holiday ? `${key}: ${holiday.name}` : `Add calendar entry for ${key}`}
         aria-pressed={form.date === key}
       >
-        {day}
+        <span className="calendar-management__day-number">{day}</span>
+        {holiday ? (
+          <span className="calendar-management__day-label" title={holiday.name}>
+            {holiday.name}
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -571,18 +624,159 @@ export default function AdminTeamLeaveCalendar() {
     }
   }
 
-  async function saveRecurringRules(nextRules) {
+  async function saveRecurringRules(nextRules, { materialize = true } = {}) {
     const data = await leaveApi.updateRecurringHolidayRules({ rules: nextRules });
-    setRecurringRules(data.rules ?? nextRules);
+    const saved = data.rules ?? nextRules;
+    setRecurringRules(saved);
+    if (materialize) {
+      try {
+        const result = await leaveApi.materializeRecurringHolidays({ year });
+        const created = result.created?.length ?? 0;
+        showSuccess(
+          created > 0
+            ? `Recurring rule saved. Generated ${created} dates for ${year}.`
+            : `Recurring rule saved. No new dates for ${year}.`,
+        );
+        yearsLoadedRef.current.delete(year);
+        await loadHolidays();
+      } catch (err) {
+        showSuccess('Recurring rule saved. Run Generate to apply to calendar.');
+      }
+    }
+    return saved;
+  }
+
+  function startEditRecurringRule(index) {
+    const rule = recurringRules[index];
+    if (!rule) return;
+    setEditingRecurringIndex(index);
+    const everyMonth = rule.months === 'all' || rule.months == null;
+    let exampleDate = '';
+
+    if (rule.dayOfMonth != null) {
+      const monthForDisplay = Array.isArray(rule.months) ? rule.months[0] : (focusedMonth + 1);
+      const daysInMonth = new Date(Date.UTC(year, monthForDisplay, 0)).getUTCDate();
+      const day = Math.min(rule.dayOfMonth, daysInMonth);
+      exampleDate = `${year}-${String(monthForDisplay).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    } else if (everyMonth) {
+      const tempRule = { ...rule, months: [focusedMonth + 1] };
+      exampleDate = exampleDateForRule(tempRule, year) || exampleDateForRule(rule, year);
+    } else {
+      exampleDate = exampleDateForRule(rule, year);
+    }
+
+    setRecurringForm({
+      name: rule.name ?? '',
+      type: rule.type ?? 'public',
+      nth: rule.nth ?? 2,
+      weekday: rule.weekday ?? 6,
+      date: exampleDate,
+      everyMonth,
+    });
+  }
+
+  function cancelEditRecurringRule() {
+    setEditingRecurringIndex(null);
+    setRecurringForm({ name: '', type: 'public', nth: 2, weekday: 6, date: '', everyMonth: false });
+  }
+
+  function deriveRuleFromForm() {
+    if (!recurringForm.name.trim()) return null;
+    const everyMonth = recurringForm.everyMonth;
+
+    if (isValidDateKey(recurringForm.date)) {
+      const parsed = parseDateKey(recurringForm.date);
+      if (!parsed) return null;
+      const months = everyMonth ? 'all' : [parsed.month];
+      return {
+        dayOfMonth: parsed.day,
+        months,
+        type: recurringForm.type ?? 'public',
+        name: recurringForm.name.trim(),
+      };
+    }
+
+    const nth = recurringForm.nth;
+    const weekday = recurringForm.weekday;
+    const months = everyMonth ? 'all' : [focusedMonth + 1];
+    return {
+      nth,
+      weekday,
+      months,
+      type: recurringForm.type ?? 'public',
+      name: recurringForm.name.trim(),
+    };
+  }
+
+  async function saveEditedRecurringRule(event) {
+    event.preventDefault();
+    if (editingRecurringIndex == null) return;
+    const updatedRule = deriveRuleFromForm();
+    if (!updatedRule) return;
+    const oldRule = recurringRules[editingRecurringIndex];
+    const nameChanged = oldRule && oldRule.name.trim() !== updatedRule.name;
+    const monthsChanged = JSON.stringify(oldRule?.months) !== JSON.stringify(updatedRule.months);
+    const patternChanged =
+      oldRule?.nth !== updatedRule.nth ||
+      oldRule?.weekday !== updatedRule.weekday ||
+      monthsChanged ||
+      oldRule?.type !== updatedRule.type;
+    if ((nameChanged || patternChanged) && oldRule?.name) {
+      try {
+        await leaveApi.deleteRecurringRuleHolidays(oldRule.name);
+        yearsLoadedRef.current.delete(year);
+        setHolidays((current) => current.filter((h) => h.name !== oldRule.name && h.sourceRuleName !== oldRule.name));
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+    const nextRules = recurringRules.map((rule, idx) => (idx === editingRecurringIndex ? updatedRule : rule));
+    await saveRecurringRules(nextRules);
+    cancelEditRecurringRule();
+  }
+
+  async function deleteRecurringRule(index) {
+    const rule = recurringRules[index];
+    if (!rule) return;
+    await requestConfirm({
+      title: 'Delete recurring rule?',
+      message: `Delete "${rule.name}"? This removes the rule and deletes the ${year} holidays it generated.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      onConfirm: async () => {
+        const nextRules = recurringRules.filter((_, idx) => idx !== index);
+        await saveRecurringRules(nextRules, { materialize: false });
+        try {
+          const res = await leaveApi.deleteRecurringRuleHolidays(rule.name);
+          const deleted = res.deleted ?? 0;
+          if (deleted > 0) {
+            showSuccess(`Rule deleted. Removed ${deleted} generated holiday${deleted === 1 ? '' : 's'}.`);
+          } else {
+            showSuccess('Rule deleted.');
+          }
+        } catch {
+          showSuccess('Rule deleted. Holidays may need manual cleanup.');
+        }
+        yearsLoadedRef.current.delete(year);
+        await loadHolidays();
+        if (editingRecurringIndex === index) cancelEditRecurringRule();
+        else if (editingRecurringIndex != null && editingRecurringIndex > index) {
+          setEditingRecurringIndex((prev) => (prev != null ? prev - 1 : null));
+        }
+      },
+    });
   }
 
   async function addRecurringRule(event) {
     event.preventDefault();
-    if (!recurringForm.name.trim()) return;
-    const nextRules = [...recurringRules, { ...recurringForm, name: recurringForm.name.trim() }];
+    if (editingRecurringIndex != null) {
+      return saveEditedRecurringRule(event);
+    }
+    const newRule = deriveRuleFromForm();
+    if (!newRule) return;
+    const nextRules = [...recurringRules, newRule];
     await saveRecurringRules(nextRules);
-    setRecurringForm({ nth: 2, weekday: 6, months: 'all', type: 'public', name: '' });
-    showSuccess('Recurring rule added.');
+    setRecurringForm({ name: '', type: 'public', nth: 2, weekday: 6, date: '', everyMonth: false });
   }
 
   return (
@@ -781,23 +975,152 @@ export default function AdminTeamLeaveCalendar() {
 
           <div className="calendar-management__recurring">
             <h3 className="card__section-title">Recurring rules</h3>
-            <p className="muted small">Rules materialize dates for a year (e.g. 2nd Saturday every month).</p>
+            <p className="muted small">
+              Use Occurrence+Weekday for pattern-based rules (e.g. 2nd Saturday). Use Date for exact day rules (e.g. 1st of every month). Check Every month to apply to all 12 months.
+            </p>
             <ul className="calendar-management__recurring-list">
-              {recurringRules.map((rule, index) => (
-                <li key={`${rule.name}-${index}`}>
-                  {rule.name} — {rule.nth === -1 ? 'Last' : `${rule.nth}${rule.nth === 1 ? 'st' : rule.nth === 2 ? 'nd' : rule.nth === 3 ? 'rd' : 'th'}`}{' '}
-                  {WEEKDAYS[rule.weekday === 0 ? 6 : rule.weekday - 1]}
-                </li>
-              ))}
+              {recurringRules.length === 0 ? (
+                <li className="muted small">No recurring rules. Add one below.</li>
+              ) : (
+                recurringRules.map((rule, index) => {
+                  const cat = categoriesByValue.get(rule.type) ?? BUILT_IN_CATEGORIES[0];
+                  const monthsLabel =
+                    rule.months === 'all' || rule.months == null
+                      ? 'Every month'
+                      : Array.isArray(rule.months)
+                        ? rule.months.map((m) => MONTHS[m - 1].slice(0, 3)).join(', ')
+                        : String(rule.months);
+                  return (
+                    <li
+                      key={`${rule.name}-${rule.dayOfMonth ?? ''}-${rule.weekday ?? ''}-${rule.nth ?? ''}-${index}`}
+                      className={`calendar-management__recurring-item${
+                        editingRecurringIndex === index ? ' calendar-management__recurring-item--editing' : ''
+                      }`}
+                    >
+                      <span className="calendar-management__recurring-label">
+                        <i
+                          className="calendar-management__legend-dot"
+                          style={{ background: cat.color }}
+                          aria-hidden="true"
+                        />{' '}
+                        {rule.name} — {rule.dayOfMonth != null
+                          ? `Day ${rule.dayOfMonth}`
+                          : `${rule.nth === -1 ? 'Last' : `${rule.nth}${rule.nth === 1 ? 'st' : rule.nth === 2 ? 'nd' : rule.nth === 3 ? 'rd' : 'th'}`} ${WEEKDAYS[rule.weekday === 0 ? 6 : rule.weekday - 1]}`
+                        } · {monthsLabel} · {cat.label}
+                      </span>
+                      <span className="calendar-management__recurring-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => startEditRecurringRule(index)}
+                          disabled={saving}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => deleteRecurringRule(index)}
+                          disabled={saving}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    </li>
+                  );
+                })
+              )}
             </ul>
             <form className="calendar-management__recurring-form" onSubmit={addRecurringRule}>
-              <input
-                type="text"
-                placeholder="Holiday name"
-                value={recurringForm.name}
-                onChange={(event) => setRecurringForm({ ...recurringForm, name: event.target.value })}
-              />
-              <button type="submit" className="btn btn-ghost btn-sm">Add rule</button>
+              <label className="field" style={{ flex: '1 1 100%' }}>
+                <span className="label">Holiday name</span>
+                <input
+                  className="input"
+                  type="text"
+                  placeholder="e.g. Second Saturday"
+                  value={recurringForm.name}
+                  onChange={(event) => setRecurringForm({ ...recurringForm, name: event.target.value })}
+                />
+              </label>
+              <label className="field" style={{ flex: '1 1 100%' }}>
+                <span className="label">Category</span>
+                <SelectField
+                  value={recurringForm.type}
+                  onChange={(value) => setRecurringForm({ ...recurringForm, type: value })}
+                  options={categoryOptions.map((c) => ({ value: c.value, label: c.label }))}
+                  aria-label="Holiday type"
+                />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', flex: '1 1 100%' }}>
+                <label className="field">
+                  <span className="label">Occurrence</span>
+                  <SelectField
+                    value={String(recurringForm.nth)}
+                    onChange={(value) => setRecurringForm({ ...recurringForm, nth: Number(value), date: '' })}
+                    options={[
+                      { value: '1', label: '1st' },
+                      { value: '2', label: '2nd' },
+                      { value: '3', label: '3rd' },
+                      { value: '4', label: '4th' },
+                      { value: '5', label: '5th' },
+                      { value: '-1', label: 'Last' },
+                    ]}
+                    aria-label="Occurrence"
+                  />
+                </label>
+                <label className="field">
+                  <span className="label">Weekday</span>
+                  <SelectField
+                    value={String(recurringForm.weekday)}
+                    onChange={(value) => setRecurringForm({ ...recurringForm, weekday: Number(value), date: '' })}
+                    options={[
+                      { value: '1', label: 'Monday' },
+                      { value: '2', label: 'Tuesday' },
+                      { value: '3', label: 'Wednesday' },
+                      { value: '4', label: 'Thursday' },
+                      { value: '5', label: 'Friday' },
+                      { value: '6', label: 'Saturday' },
+                      { value: '0', label: 'Sunday' },
+                    ]}
+                    aria-label="Weekday"
+                  />
+                </label>
+              </div>
+              <p className="muted small" style={{ flex: '1 1 100%', marginTop: '-0.25rem' }}>
+                — or pick a date instead —
+              </p>
+              <label className="field" style={{ flex: '1 1 100%' }}>
+                <span className="label">Date (overrides occurrence/weekday above)</span>
+                <DateField
+                  value={recurringForm.date}
+                  onChange={(value) => setRecurringForm((prev) => ({ ...prev, date: value }))}
+                  aria-label="Recurring rule date"
+                />
+              </label>
+              <label className="field" style={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flexDirection: 'row' }}>
+                <input
+                  type="checkbox"
+                  checked={recurringForm.everyMonth}
+                  onChange={(event) => setRecurringForm((prev) => ({ ...prev, everyMonth: event.target.checked }))}
+                />
+                <span className="label" style={{ margin: 0 }}>Every month</span>
+              </label>
+              <div className="calendar-management__recurring-form-actions" style={{ display: 'flex', gap: '0.5rem', flex: '1 1 100%' }}>
+                {editingRecurringIndex != null ? (
+                  <>
+                    <button type="submit" className="btn btn-primary btn-sm">
+                      Save
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={cancelEditRecurringRule}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button type="submit" className="btn btn-ghost btn-sm">
+                    Add rule
+                  </button>
+                )}
+              </div>
             </form>
             <button type="button" className="btn btn-primary btn-sm" onClick={handleMaterializeRecurring} disabled={saving}>
               Generate {year} dates
