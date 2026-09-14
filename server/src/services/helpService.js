@@ -51,7 +51,9 @@ export async function findUsersWithPermission(permission) {
   const roles = await Role.find({ permissions: permission }).select('_id');
   if (!roles.length) return [];
   const roleIds = roles.map((role) => role._id);
-  return User.find({ isActive: true, roleId: { $in: roleIds } }).select('_id name');
+  return User.find({ isActive: true, roleId: { $in: roleIds } })
+    .select('_id name roleId')
+    .populate({ path: 'roleId', select: 'permissions' });
 }
 
 export function canViewTicket(actor, ticket, permissions) {
@@ -140,16 +142,22 @@ async function notifyOnTicketCreated(creator, ticket) {
   await Promise.all(
     managers
       .filter((user) => !notifiedIds.has(user._id.toString()))
-      .map((user) =>
-        createNotification({
+      .map(async (user) => {
+        const userRole = user.roleId && typeof user.roleId === 'object'
+          ? user.roleId
+          : await Role.findById(user.roleId).select('permissions');
+        const hasUsersWrite = userRole?.permissions?.includes(PERMISSIONS.USERS_WRITE);
+        return createNotification({
           userId: user._id,
           type: 'help.new',
           title,
           body,
-          link: `/admin/help/tickets/${ticket._id.toString()}`,
+          link: hasUsersWrite
+            ? `/admin/help/tickets/${ticket._id.toString()}`
+            : `/admin/help/team/${ticket._id.toString()}`,
           metadata: { ticketId: ticket._id.toString() },
-        }),
-      ),
+        });
+      }),
   );
 
   await createNotification({
@@ -332,6 +340,9 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
   if (!canViewTicket(actor, ticket, permissions)) {
     throwError('You do not have permission to comment on this ticket.', 403);
   }
+  if (ticket.status === 'closed' || ticket.status === 'resolved') {
+    throwError('This ticket is closed and cannot accept comments.', 400);
+  }
 
   const comment = await HelpComment.create({
     ticketId: ticket._id,
@@ -384,12 +395,17 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
       .filter((user) => !notifiedIds.has(user._id.toString()))
       .map((user) => {
         notifiedIds.add(user._id.toString());
+        const hasUsersWrite =
+          user.roleId && typeof user.roleId === 'object' &&
+          user.roleId.permissions?.includes(PERMISSIONS.USERS_WRITE);
         return createNotification({
           userId: user._id,
           type: 'help.comment',
           title: 'New comment on help ticket',
           body: `${actor.name} commented on "${ticket.title}".`,
-          link: `/admin/help/tickets/${ticket._id.toString()}`,
+          link: hasUsersWrite
+            ? `/admin/help/tickets/${ticket._id.toString()}`
+            : `/admin/help/team/${ticket._id.toString()}`,
           metadata: commentMetadata,
         });
       }),

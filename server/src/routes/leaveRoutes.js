@@ -18,6 +18,7 @@ import {
   createLeaveRequestHandler,
   createLeaveType,
   deleteHoliday,
+  deleteLeaveType,
   leaveDecisionLinkHandler,
   leaveDecisionLinkPageHandler,
   leaveDecisionLoginHandler,
@@ -82,6 +83,11 @@ router.patch(
   '/types/:id',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(updateLeaveType),
+);
+router.delete(
+  '/types/:id',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(deleteLeaveType),
 );
 
 router.get(

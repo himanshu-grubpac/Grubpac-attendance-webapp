@@ -131,10 +131,12 @@ export function applyDateOfBirthRules(data, ctx) {
     });
   }
 
-  const joiningDate = new Date(data.joiningDate);
-  const dobDate = new Date(data.dateOfBirth);
+  const joinParts = data.joiningDate.split('-');
+  const joinYear = Number(joinParts[0]);
+  const joinMonth = Number(joinParts[1]);
+  const joinDay = Number(joinParts[2]);
 
-  if (Number.isNaN(joiningDate.getTime())) {
+  if (Number.isNaN(joinYear) || Number.isNaN(joinMonth) || Number.isNaN(joinDay)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['joiningDate'],
@@ -143,19 +145,14 @@ export function applyDateOfBirthRules(data, ctx) {
     return;
   }
 
-  let age =
-    joiningDate.getFullYear() -
-    dobDate.getFullYear();
+  const dobParts = data.dateOfBirth.split('-');
+  const dobYear = Number(dobParts[0]);
+  const dobMonth = Number(dobParts[1]);
+  const dobDay = Number(dobParts[2]);
 
-  const monthDiff =
-    joiningDate.getMonth() -
-    dobDate.getMonth();
-
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 &&
-      joiningDate.getDate() < dobDate.getDate())
-  ) {
+  let age = joinYear - dobYear;
+  const monthDiff = joinMonth - dobMonth;
+  if (monthDiff < 0 || (monthDiff === 0 && joinDay < dobDay)) {
     age -= 1;
   }
 
