@@ -339,31 +339,54 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     const employees = await User.find({ isActive: true }).select('_id').lean();
     userIds = employees.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Team strip scope: the actor's full report subtree (transitive) ONLY.
-    // Peer/sibling teams under the same superior are never included — a
-    // reporting manager sees their own team and nobody else's.
-    const actorIdStr = actor._id.toString();
-    const downIds = await collectReportSubtreeIds([actor._id], new Set());
-    // Dedupe (cycle-safe) and exclude the actor: the strip shows the team,
-    // and the actor's own status already lives in the dashboard hero.
-    const combined = new Set(downIds.map((id) => id.toString()));
-    combined.delete(actorIdStr);
-    userIds = [...combined].map((id) => new mongoose.Types.ObjectId(id.toString()));
+    // Team strip scope: direct reports + other RMs in the same department.
+    const actorDoc = await User.findById(actor._id).select('departmentId').lean();
+    const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
+
+    const query = { reportingManagerId: actor._id, isActive: true };
+    if (actorDeptId) {
+      query.departmentId = new mongoose.Types.ObjectId(actorDeptId);
+    }
+
+    const directReports = await User.find(query).select('_id').lean();
+    userIds = directReports.map((u) => u._id);
+
+    // Also include all other RMs across the organization.
+    const { Role } = await import('../models/Role.js');
+    const rmRole = await Role.findOne({ slug: 'reporting-manager' }).select('_id').lean();
+    if (rmRole) {
+      const siblingRms = await User.find({
+        _id: { $ne: actor._id },
+        roleId: rmRole._id,
+        isActive: true,
+      }).select('_id').lean();
+      for (const rm of siblingRms) {
+        if (!userIds.some((id) => String(id) === String(rm._id))) {
+          userIds.push(rm._id);
+        }
+      }
+    }
   } else {
-    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
+    const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
+    const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
     let teamIds = [];
     if (managerId) {
-      const teamMembers = await User.find({
-        reportingManagerId: managerId,
-        isActive: true,
-      })
-        .select('_id')
-        .lean();
+      const q = { reportingManagerId: managerId, isActive: true };
+      if (actorDeptId) q.departmentId = new mongoose.Types.ObjectId(actorDeptId);
+      const teamMembers = await User.find(q).select('_id').lean();
       teamIds = teamMembers.map((member) => member._id);
     }
     if (managerId && !teamIds.some((id) => id.toString() === String(managerId))) {
-      teamIds.push(managerId);
+      // Show the manager only if they are in the same department (or actor has no dept).
+      if (!actorDeptId) {
+        teamIds.push(managerId);
+      } else {
+        const mgr = await User.findById(managerId).select('departmentId').lean();
+        if (String(mgr?.departmentId ?? '') === actorDeptId) {
+          teamIds.push(managerId);
+        }
+      }
     }
     if (!teamIds.some((id) => id.toString() === String(actor._id))) {
       teamIds.push(actor._id);

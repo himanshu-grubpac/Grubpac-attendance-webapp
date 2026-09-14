@@ -37,16 +37,22 @@ export const holidayQuerySchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100).optional(),
 });
 
-export const recurringHolidayRuleSchema = z.object({
-  nth: z.number().int().min(-1).max(5),
-  weekday: z.number().int().min(0).max(6),
-  months: z.union([
-    z.literal('all'),
-    z.array(z.number().int().min(1).max(12)).min(1),
-  ]),
-  type: holidayTypeSchema.optional(),
-  name: z.string().trim().min(2).max(200),
-});
+export const recurringHolidayRuleSchema = z
+  .object({
+    nth: z.number().int().min(-1).max(5).optional(),
+    weekday: z.number().int().min(0).max(6).optional(),
+    dayOfMonth: z.number().int().min(1).max(31).optional(),
+    months: z.union([
+      z.literal('all'),
+      z.array(z.number().int().min(1).max(12)).min(1),
+    ]),
+    type: holidayTypeSchema.optional(),
+    name: z.string().trim().min(2).max(200),
+  })
+  .refine(
+    (value) => (value.dayOfMonth != null) || (value.nth != null && value.weekday != null),
+    { message: 'Provide either dayOfMonth or both nth and weekday.' },
+  );
 
 export const recurringHolidayRulesSchema = z.object({
   rules: z.array(recurringHolidayRuleSchema),

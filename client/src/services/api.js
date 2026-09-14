@@ -260,6 +260,7 @@ export const leaveApi = {
   listTypes: () => api.get('/leave/types').then((r) => r.data),
   createType: (payload) => api.post('/leave/types', payload).then((r) => r.data),
   updateType: (id, payload) => api.patch(`/leave/types/${id}`, payload).then((r) => r.data),
+  deleteType: (id) => api.delete(`/leave/types/${id}`).then((r) => r.data),
   listPolicies: (params = {}) => api.get('/leave/policies', { params }).then((r) => r.data),
   createPolicy: (payload) => api.post('/leave/policies', payload).then((r) => r.data),
   updatePolicy: (id, payload) => api.patch(`/leave/policies/${id}`, payload).then((r) => r.data),
@@ -351,6 +352,8 @@ export const leaveApi = {
   updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
   materializeRecurringHolidays: (payload) =>
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
+  deleteRecurringRuleHolidays: (name) =>
+    api.post('/leave/holidays/delete-by-rule', { name }).then((r) => r.data),
 };
 
 export const compOffApi = {

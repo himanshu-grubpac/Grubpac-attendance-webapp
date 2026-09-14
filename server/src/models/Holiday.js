@@ -9,6 +9,7 @@ const holidaySchema = new mongoose.Schema(
     type: { type: String, default: 'public', trim: true, maxlength: 50 },
     isActive: { type: Boolean, default: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    sourceRuleName: { type: String, default: null, trim: true, maxlength: 200 },
   },
   { timestamps: true },
 );

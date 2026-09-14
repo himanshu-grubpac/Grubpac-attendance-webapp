@@ -823,8 +823,8 @@ export async function decideCompOffRequest(requestId, actor, permissions, decisi
     throwError('Invalid comp off decision.', 400);
   }
   const comment = (payload.comment ?? '').trim() || null;
-  if (!isApproved && !comment) {
-    throwError('A remark is required for rejection.');
+  if (!comment) {
+    throwError('A remark is required for this action.');
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
@@ -1077,6 +1077,9 @@ export async function assessCompOffWork(requestId, actor, permissions, assessmen
     : null;
 
   const comment = (payload.comment ?? '').trim() || null;
+  if (!comment) {
+    throwError('A remark is required to record the assessment.');
+  }
   const stagedAt = new Date();
   const stageTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS, stagedAt.getTime());
   const setUpdate = {
