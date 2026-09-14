@@ -84,7 +84,7 @@ router.post(
   }),
 );
 
-// Employee self-service PIN setup/change (employee only — enforced in controller).
+// Self-service PIN setup/change (all roles).
 router.post(
   '/set-pin',
   authenticate,
@@ -95,7 +95,7 @@ router.post(
   }),
 );
 
-// Employee self-service PIN removal (employee only — enforced in controller).
+// Self-service PIN removal (all roles).
 router.post(
   '/delete-pin',
   authenticate,

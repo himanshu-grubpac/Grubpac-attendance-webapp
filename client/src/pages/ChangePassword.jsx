@@ -37,10 +37,8 @@ export default function ChangePassword() {
   const [removeAuth, setRemoveAuth] = useState('');
   const [removeError, setRemoveError] = useState('');
 
-  // PIN setup is employee-only (admins manage PINs via the admin panel).
-  const isEmployee = user?.role === 'employee';
   const hasPin = Boolean(user?.hasPin);
-  const canSetPin = isEmployee && Boolean(user?.hasPassword);
+  const canSetPin = Boolean(user?.hasPassword);
 
   async function handlePasswordSubmit(event) {
     event.preventDefault();
@@ -183,8 +181,7 @@ export default function ChangePassword() {
         )}
       </div>
 
-      {isEmployee && (
-        <div className="card card--form">
+      <div className="card card--form">
           <p className="card__section-title">
             {hasPin ? 'Change security PIN' : 'Set security PIN'}
           </p>
@@ -290,7 +287,6 @@ export default function ChangePassword() {
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }

@@ -292,12 +292,6 @@ export async function setPin(userId, body, auditContext = {}) {
     throw error;
   }
 
-  if (user.role !== 'employee') {
-    const error = new Error('PIN setup is available for employees only.');
-    error.statusCode = 403;
-    throw error;
-  }
-
   const hasPin = Boolean(user.pin4Hash);
   if (hasPin) {
     // Changing an existing PIN requires the current PIN.
@@ -348,8 +342,7 @@ export async function setPin(userId, body, auditContext = {}) {
 }
 
 /**
- * Employee self-service PIN removal.
- * - Only employees may remove their own PIN.
+ * Self-service PIN removal.
  * - Requires the current account password (when no PIN is set this is moot) or
  *   the current PIN to re-verify identity before clearing the credential.
  */
@@ -359,12 +352,6 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
   if (!user || !user.isActive) {
     const error = new Error('User not found.');
     error.statusCode = 404;
-    throw error;
-  }
-
-  if (user.role !== 'employee') {
-    const error = new Error('PIN removal is available for employees only.');
-    error.statusCode = 403;
     throw error;
   }
 

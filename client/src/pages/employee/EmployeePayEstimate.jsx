@@ -116,9 +116,17 @@ function MonthBreakdown({ summary, loading, error }) {
               <tr>
                 <th>LOP dates</th>
                 <td data-label="LOP dates">
-                  {(summary.lopDates ?? []).length === 0
-                    ? 'None — no loss of pay this month.'
-                    : (summary.lopDates ?? []).map(formatLopDate).join(', ')}
+                  {(summary.lopDates ?? []).length === 0 ? (
+                    'None — no loss of pay this month.'
+                  ) : (
+                    <span className="salary-detail__lop-tags">
+                      {(summary.lopDates ?? []).map((entry, i) => (
+                        <span key={i} className="salary-detail__lop-tag">
+                          {formatLopDate(entry)}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </td>
               </tr>
               <tr>

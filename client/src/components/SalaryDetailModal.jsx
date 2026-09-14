@@ -96,18 +96,24 @@ export default function SalaryDetailModal({
                   <dt>LOP days</dt>
                   <dd>{summary.lopDays}</dd>
                 </div>
-                <div>
+                <div className="salary-detail__lop-row">
                   <dt>LOP dates</dt>
                   <dd className="salary-detail__lop-dates">
-                    {(summary.lopDates ?? []).length === 0
-                      ? 'None'
-                      : (summary.lopDates ?? [])
-                          .map((entry) =>
+                    {(summary.lopDates ?? []).length === 0 ? (
+                      'None'
+                    ) : (
+                      <span className="salary-detail__lop-tags">
+                        {(summary.lopDates ?? []).map((entry, i) => {
+                          const label =
                             entry?.unpaidDays != null && Number(entry.unpaidDays) !== 1
                               ? `${entry.date} (${entry.unpaidDays})`
-                              : String(entry.date ?? entry),
-                          )
-                          .join(', ')}
+                              : String(entry.date ?? entry);
+                          return (
+                            <span key={i} className="salary-detail__lop-tag">{label}</span>
+                          );
+                        })}
+                      </span>
+                    )}
                   </dd>
                 </div>
                 <div>
@@ -157,10 +163,7 @@ export default function SalaryDetailModal({
                               {balance.carried ?? '—'}
                             </td>
                             <td data-label="Available" className="salary-table__num">
-                              {available}{' '}
-                              {available < 0 ? (
-                                <span className="badge badge-warning salary-status">Minus</span>
-                              ) : null}
+                              {available}
                             </td>
                           </tr>
                         );

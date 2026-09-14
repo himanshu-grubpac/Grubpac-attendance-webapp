@@ -661,7 +661,7 @@ export default function EmployeeHelp() {
                 </button>
               </div>
             )}
-            <div className="table-wrap table-wrap--responsive">
+            <div className="table-wrap table-wrap--responsive my-help-tickets-table-wrap">
             <table className="table data-table">
                 <thead>
                   <tr>
