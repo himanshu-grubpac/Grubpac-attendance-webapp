@@ -44,6 +44,17 @@ export default function ProtectedRoute({
     return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
 
+  // First-login password gate: users with a temporary password must change it
+  // before accessing anything else (except the change-password page itself).
+  const changePasswordPaths = ['/admin/change-password', '/employee/change-password'];
+  if (user.mustChangePassword && !changePasswordPaths.includes(location.pathname)) {
+    const target =
+      portal === 'admin' || loginPortal === 'admin'
+        ? '/admin/change-password'
+        : '/employee/change-password';
+    return <Navigate to={target} replace />;
+  }
+
   if (role && user.role !== role) {
     return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
   }

@@ -6,7 +6,7 @@ import {
   roleListQuerySchema,
   updateRoleSchema,
 } from '../../../shared/validation/roles.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditRequest } from '../utils/auditLog.js';
 
 export async function listPermissions(req, res) {
   res.json({ groups: PERMISSION_GROUPS });
@@ -32,7 +32,7 @@ export async function createRole(req, res) {
     createdBy: req.user._id,
   });
 
-  auditLog('role_created', {
+  auditRequest(req, 'role_created', {
     adminId: req.user._id.toString(),
     roleId: role._id.toString(),
     slug: role.slug,
@@ -85,7 +85,7 @@ export async function updateRole(req, res) {
 
   await role.save();
 
-  auditLog('role_updated', {
+  auditRequest(req, 'role_updated', {
     adminId: req.user._id.toString(),
     roleId: role._id.toString(),
     slug: role.slug,
@@ -120,7 +120,7 @@ export async function deleteRole(req, res) {
 
   await role.deleteOne();
 
-  auditLog('role_deleted', {
+  auditRequest(req, 'role_deleted', {
     adminId: req.user._id.toString(),
     roleId: role._id.toString(),
     slug: role.slug,

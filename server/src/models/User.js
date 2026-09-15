@@ -56,6 +56,8 @@ const userSchema = new mongoose.Schema(
     /** Null while employed; set when the employee separates. */
     endingDate: { type: Date, default: null },
     passwordHash: { type: String, required: true },
+    /** True when the current password is a temporary/auto-generated one the user must replace. */
+    mustChangePassword: { type: Boolean, default: false },
     /** 4-digit PIN hash (bcrypt). 6-digit PINs were retired — see unset-pin6 migration. */
     pin4Hash: { type: String, default: null },
     /** Monthly gross salary in INR — admin/HR only. */
@@ -141,6 +143,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
       : {}),
     hasPassword: Boolean(this.passwordHash),
     hasPin: Boolean(this.pin4Hash),
+    mustChangePassword: Boolean(this.mustChangePassword),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

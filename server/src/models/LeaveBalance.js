@@ -6,6 +6,12 @@ const leaveBalanceSchema = new mongoose.Schema(
     leaveTypeId: { type: mongoose.Schema.Types.ObjectId, ref: 'LeaveType', required: true },
     year: { type: Number, required: true, min: 2000, max: 2100 },
     entitled: { type: Number, default: 0, min: 0 },
+    /**
+     * Set when an admin hand-tunes `entitled` via the manual adjustment API.
+     * Locked rows are skipped by joining-date proration and policy-change
+     * recompute so deliberate tweaks are never overwritten by automation.
+     */
+    entitledLocked: { type: Boolean, default: false },
     used: { type: Number, default: 0, min: 0 },
     pending: { type: Number, default: 0, min: 0 },
     // Negative carried stock is allowed as a deduction (reduces available balance).
@@ -47,6 +53,7 @@ leaveBalanceSchema.methods.toSafeJSON = function toSafeJSON() {
     leaveTypeName: typeDoc?.name ?? null,
     year: this.year,
     entitled: this.entitled,
+    entitledLocked: this.entitledLocked ?? false,
     used: this.used,
     pending: this.pending,
     carried: this.carried,

@@ -4,7 +4,7 @@ import {
   createDepartmentSchema,
   updateDepartmentSchema,
 } from '../../../shared/validation/departments.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditEntityChange, auditRequest } from '../utils/auditLog.js';
 
 export async function listDepartments(req, res) {
   const departments = await Department.find()
@@ -41,14 +41,19 @@ export async function createDepartment(req, res) {
     createdBy: req.user._id,
   });
 
-  auditLog('department_created', {
+  auditRequest(req, 'department_created', auditEntityChange({
     adminId: req.user._id.toString(),
-    departmentId: department._id.toString(),
-    code: department.code,
-    name: department.name,
-    leadUserId: department.leadUserId?.toString() || null, 
-    deputyUserId: department.deputyUserId?.toString() || null,
-  });
+    module: 'organization',
+    entity: 'Department',
+    entityId: department._id.toString(),
+    action: 'Create',
+    next: {
+      code: department.code,
+      name: department.name,
+      leadUserId: department.leadUserId?.toString() || null,
+      deputyUserId: department.deputyUserId?.toString() || null,
+    },
+  }));
 
   res.status(201).json({ department: department.toSafeJSON() });
 }
@@ -95,16 +100,19 @@ export async function updateDepartment(req, res) {
 
   await department.save();
 
-  auditLog('department_updated', {
+  auditRequest(req, 'department_updated', auditEntityChange({
     adminId: req.user._id.toString(),
-    departmentId: department._id.toString(),
+    module: 'organization',
+    entity: 'Department',
+    entityId: department._id.toString(),
+    action: 'Update',
     previous,
     next: {
       name: department.name,
       code: department.code,
       isActive: department.isActive,
     },
-  });
+  }));
 
   res.json({ department: department.toSafeJSON() });
 }
@@ -125,11 +133,14 @@ export async function deleteDepartment(req, res) {
 
   await department.deleteOne();
 
-  auditLog('department_deleted', {
+  auditRequest(req, 'department_deleted', auditEntityChange({
     adminId: req.user._id.toString(),
-    departmentId: department._id.toString(),
-    code: department.code,
-  });
+    module: 'organization',
+    entity: 'Department',
+    entityId: department._id.toString(),
+    action: 'Delete',
+    previous: { code: department.code, name: department.name },
+  }));
 
   res.json({ message: 'Department deleted successfully.' });
 }

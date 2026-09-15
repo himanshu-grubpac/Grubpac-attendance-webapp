@@ -394,7 +394,7 @@ async function testBulkUpload(env) {
       'lastName',
       'email',
       'mobile',
-      'password',
+      'role',
       'department',
       'designation',
       'reportingManagerEmail',
@@ -405,7 +405,7 @@ async function testBulkUpload(env) {
       'BulkTest',
       unique,
       mobile,
-      'Employee@12345',
+      'Employee',
       'Development',
       'QA Engineer',
       'admin@grubpac.com',
@@ -414,7 +414,7 @@ async function testBulkUpload(env) {
   ]);
   const upload = await bulkUpload(buf, csrfToken);
   const row = upload.json?.results?.[0];
-  const pass = (upload.status === 200 || upload.status === 201) && row?.status === 'success';
+  const pass = (upload.status === 200 || upload.status === 201) && row?.status === 'created';
   report.bulkUpload = {
     result: pass ? 'PASS' : upload.status === 200 && row?.status === 'validation_error' ? 'FAIL' : 'FAIL',
     status: upload.status,

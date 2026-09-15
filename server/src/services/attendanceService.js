@@ -996,7 +996,8 @@ export async function getAdminAttendance({
   const skip = (page - 1) * limit;
   const [allRecords, total] = await Promise.all([
     AttendanceRecord.find(query)
-      .populate('userId', 'name email mobile employeeCode department')
+      .populate('userId', 'name email mobile employeeCode department departmentId')
+      .populate({ path: 'userId.departmentId', select: 'name code' })
       // _id tiebreaker keeps offset pagination stable when timestamps tie.
       .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
@@ -1399,6 +1400,8 @@ function appendAttendanceEditHistory(record, { actor, changes }) {
 
 function serializeAdminAttendanceListRecord(record) {
   const populatedUser = record.userId?._id != null ? record.userId : null;
+  // Live department name from the Department master; legacy text fallback.
+  const liveDeptName = populatedUser?.departmentId?.name ?? populatedUser?.department ?? null;
   return {
     id: record._id.toString(),
     _id: record._id.toString(),
@@ -1406,6 +1409,8 @@ function serializeAdminAttendanceListRecord(record) {
       ? {
         ...(populatedUser.toObject?.() ?? populatedUser),
         id: populatedUser._id.toString(),
+        department: liveDeptName,
+        departmentName: liveDeptName,
       }
       : record.userId?.toString?.() ?? record.userId,
     type: record.type,

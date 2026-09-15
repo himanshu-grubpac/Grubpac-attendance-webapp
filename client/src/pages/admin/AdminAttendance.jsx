@@ -2065,6 +2065,15 @@ export default function AdminAttendance() {
             }}
           >
             <table className="attendance-grid">
+              <colgroup>
+                <col style={{ width: 'var(--attendance-row-num-width)' }} />
+                <col style={{ width: 'var(--attendance-employee-width)' }} />
+                {weekDays.map((_, ci) => (
+                  <col key={ci} style={{ width: 'var(--attendance-day-width)' }} />
+                ))}
+                <col style={{ width: 'var(--attendance-actions-width)' }} />
+                <col />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col" className="attendance-grid__col-row-num">

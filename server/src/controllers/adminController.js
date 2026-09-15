@@ -27,13 +27,15 @@ import {
   adminAttendanceUpsertSchema,
   resetQuarterWarningsSchema,
 } from '../../../shared/validation/attendance.js';
-import { auditLogQuerySchema } from '../../../shared/validation/audit.js';
+import { AUDIT_LOG_EXPORT_MAX_ROWS, auditLogExportSchema, auditLogQuerySchema } from '../../../shared/validation/audit.js';
 import {
   buildEmployeeProfileUpdateSchema,
   isProfileOrgUpdate,
   updateEmployeeOrgSchema,
 } from '../../../shared/validation/employee.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
+import { generatePassword } from '../../../shared/utils/generatePassword.js';
+import { sendWelcomeEmail } from '../services/emailService.js';
 import {
   endOfDayIST,
   getISTDateInputValue,
@@ -77,7 +79,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
     field: 'endingDate',
   };
 }
-import { auditLog, auditLogSync, getRequestAuditContext } from '../utils/auditLog.js';
+import { auditRequest, auditRequestSync } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 
@@ -171,16 +173,49 @@ async function assertEmployeeInTeamScope(req, employeeId) {
 }
 
 export async function registerEmployee(req, res) {
-  const employee = await createEmployee(req.body, req.user._id);
-  auditLog('employee_registered', {
+  // Auto-generate a temporary password and email it to the new employee.
+  // The plaintext exists only in this request scope — never persisted/logged.
+  const sendCredentialsEmail = req.body?.sendCredentialsEmail === true;
+  const body = { ...req.body };
+  let tempPassword = null;
+  if (sendCredentialsEmail) {
+    tempPassword = generatePassword();
+    body.password = tempPassword;
+  }
+
+  const employee = await createEmployee(body, req.user._id);
+
+  let credentialsEmail = null;
+  if (sendCredentialsEmail && tempPassword) {
+    await User.updateOne({ _id: employee.id }, { $set: { mustChangePassword: true } });
+    const emailResult = await sendWelcomeEmail({
+      to: employee.email,
+      name: employee.name,
+      tempPassword,
+    }).catch(() => ({ delivered: false }));
+    credentialsEmail = { sent: Boolean(emailResult?.delivered) };
+    // If delivery failed (e.g. SMTP unconfigured), hand the temp password to
+    // the admin once so it can be shared manually — otherwise it is lost.
+    if (!credentialsEmail.sent) {
+      credentialsEmail.tempPassword = tempPassword;
+    }
+    tempPassword = null;
+  }
+
+  auditRequest(req, 'employee_registered', {
     adminId: req.user._id.toString(),
     employeeId: employee.id,
     email: employee.email,
     roleId: employee.roleId,
     departmentId: employee.departmentId,
     reportingManagerId: employee.reportingManagerId,
+    mustChangePassword: sendCredentialsEmail,
+    credentialsEmailSent: credentialsEmail?.sent ?? null,
   });
-  res.status(201).json({ employee });
+  res.status(201).json({
+    employee: { ...employee, mustChangePassword: sendCredentialsEmail },
+    ...(credentialsEmail ? { credentialsEmail } : {}),
+  });
 }
 
 export async function listEmployees(req, res) {
@@ -463,6 +498,7 @@ export async function updateEmployee(req, res) {
   if (parsed.departmentId !== undefined) {
     if (parsed.departmentId === null) {
       employee.departmentId = null;
+      // Legacy text field is no longer written; the name resolves from the master.
       employee.department = undefined;
     } else {
       const department = await Department.findById(parsed.departmentId);
@@ -470,7 +506,7 @@ export async function updateEmployee(req, res) {
         return res.status(400).json({ message: 'Department not found.' });
       }
       employee.departmentId = department._id;
-      employee.department = department.name;
+      employee.department = undefined;
     }
   }
 
@@ -529,7 +565,7 @@ export async function updateEmployee(req, res) {
   await employee.save();
   await employee.populate(USER_POPULATE_FIELDS);
 
-  auditLog('employee_org_updated', {
+  auditRequest(req, 'employee_org_updated', {
     adminId: req.user._id.toString(),
     employeeId: employee._id.toString(),
     previous,
@@ -586,7 +622,7 @@ export async function resetEmployeePassword(req, res) {
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
-  auditLog('password_reset_by_admin', {
+  auditRequest(req, 'password_reset_by_admin', {
     adminId: req.user._id.toString(),
     employeeId: employee._id.toString(),
     email: employee.email,
@@ -612,7 +648,7 @@ export async function resetEmployeePin(req, res) {
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
   await employee.save();
 
-  auditLog('pin_reset_by_admin', {
+  auditRequest(req, 'pin_reset_by_admin', {
     adminId: req.user._id.toString(),
     employeeId: employee._id.toString(),
     email: employee.email,
@@ -645,7 +681,11 @@ export async function bulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
+  const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id);
+  if (fileWarnings.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
 
   const changes = result.results
     .filter((item) => item.status === 'updated' || item.status === 'created')
@@ -658,16 +698,39 @@ export async function bulkUploadEmployees(req, res) {
       ignoredFields: item.ignoredFields ?? [],
     }));
 
-  auditLogSync('employee_bulk_upsert', {
+  auditRequestSync(req, 'employee_bulk_upsert', {
     adminId: req.user._id.toString(),
     email: req.user.email,
     summary: result.summary,
     fileName: req.file.originalname,
     changes,
-    ...getRequestAuditContext(req),
   });
 
   res.status(201).json(result);
+}
+
+/**
+ * Dry-run preview for bulk sync: parses the file and computes the exact
+ * per-row diff/validation the sync would produce, without writing anything,
+ * sending any email, or emitting audit logs.
+ */
+export async function previewBulkUploadEmployees(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Excel file is required.' });
+  }
+
+  const rows = parseEmployeeWorkbook(req.file.buffer);
+  if (rows.length === 0) {
+    return res.status(400).json({ message: 'No employee rows found in file.' });
+  }
+
+  const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
+  const result = await importEmployeesFromRowsUpsert(rows, req.user._id, { dryRun: true });
+  if (fileWarnings.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
+
+  res.json(result);
 }
 
 export async function getOfficeSettingsHandler(req, res) {
@@ -702,7 +765,7 @@ export async function updateOfficeSettings(req, res) {
     settings = await OfficeSettings.findById(settings._id);
   }
 
-  auditLog('office_settings_updated', {
+  auditRequest(req, 'office_settings_updated', {
     adminId: req.user._id.toString(),
     officeName: settings.name,
   });
@@ -725,7 +788,6 @@ export async function editAttendanceRecord(req, res) {
   const recordId = objectIdSchema.parse(req.params.id);
   const payload = adminAttendanceEditSchema.parse(req.body);
   const auditContext = {
-    ...getRequestAuditContext(req),
     email: req.user?.email,
   };
   const result = await adminEditAttendanceRecord({
@@ -763,7 +825,6 @@ export async function upsertAttendanceRecord(req, res) {
   const parsed = adminAttendanceUpsertSchema.parse(req.body);
   const { userId, dayKey, ...payload } = parsed;
   const auditContext = {
-    ...getRequestAuditContext(req),
     email: req.user?.email,
   };
   const result = await adminUpsertAttendanceForDay({
@@ -847,13 +908,12 @@ export async function resetQuarterWarnings(req, res) {
   const result = await resetQuarterWarningsForUsers(userIds);
   const summary = await getQuarterWarningSummaryForUsers(result.userIds);
 
-  auditLog('quarter_warnings_reset', {
+  auditRequest(req, 'quarter_warnings_reset', {
     adminId: req.user._id.toString(),
     userIds: result.userIds,
     quarter: result.quarter?.label ?? null,
     clearedWarnings: result.clearedWarnings,
     reclassifiedLv: result.reclassifiedLv,
-    ...getRequestAuditContext(req),
   });
 
   res.json({
@@ -937,7 +997,7 @@ export async function confirmWeekAttendance(req, res) {
     { upsert: true, new: true, setDefaultsOnInsert: true },
   ).populate('confirmedBy', 'name email');
 
-  auditLog('week_attendance_confirmed', {
+  auditRequest(req, 'week_attendance_confirmed', {
     adminId: req.user._id.toString(),
     userId: parsed.userId,
     weekStart: parsed.weekStart,
@@ -976,7 +1036,7 @@ export async function unconfirmWeekAttendance(req, res) {
     return res.status(404).json({ message: 'Week confirmation not found.' });
   }
 
-  auditLog('week_attendance_unconfirmed', {
+  auditRequest(req, 'week_attendance_unconfirmed', {
     adminId: req.user._id.toString(),
     userId: parsed.userId,
     weekStart: parsed.weekStart,
@@ -1009,8 +1069,7 @@ function mapAuditLogResponse(log, conflict) {
   };
 }
 
-export async function listAuditLogs(req, res) {
-  const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
+function buildAuditLogQuery({ action, search, date } = {}) {
   const query = {};
   if (action) {
     query.action = action;
@@ -1029,6 +1088,106 @@ export async function listAuditLogs(req, res) {
       };
     }
   }
+
+  return query;
+}
+
+function flattenAuditMetadata(metadata) {
+  if (metadata == null) return '';
+  if (typeof metadata !== 'object') return String(metadata);
+  try {
+    return JSON.stringify(metadata);
+  } catch {
+    return '';
+  }
+}
+
+function auditLogExportRows(logs) {
+  return logs.map((log) => ({
+    Timestamp: log.timestamp ? new Date(log.timestamp).toISOString() : '',
+    Action: log.action ?? '',
+    Email: log.email ?? '',
+    Role: log.role ?? '',
+    Status: log.status ?? log.metadata?.status ?? '',
+    Reason: log.reason ?? '',
+    Module: log.metadata?.module ?? '',
+    Entity: log.metadata?.entity ?? '',
+    EntityId:
+      log.metadata?.entityId ??
+      log.metadata?.employeeId ??
+      log.metadata?.policyId ??
+      log.metadata?.departmentId ??
+      '',
+    EntityAction: log.metadata?.entityAction ?? '',
+    Previous: flattenAuditMetadata(log.metadata?.previous),
+    Next: flattenAuditMetadata(
+      log.metadata?.next ?? log.metadata?.changes ?? log.metadata?.after,
+    ),
+    IP: log.ip ?? '',
+    DeviceId: log.deviceId ?? '',
+  }));
+}
+
+export async function exportAuditLogs(req, res) {
+  const parsed = auditLogExportSchema.parse(req.query);
+  const query = buildAuditLogQuery(parsed);
+  const logs = await AuditLog.find(query)
+    .sort({ timestamp: -1, _id: -1 })
+    .limit(AUDIT_LOG_EXPORT_MAX_ROWS)
+    .lean();
+  const rows = auditLogExportRows(logs);
+  const stamp = getISTDateInputValue().slice(0, 10);
+
+  auditRequest(req, 'audit_logs_exported', {
+    adminId: req.user._id.toString(),
+    format: parsed.format,
+    rows: rows.length,
+    filters: { action: parsed.action ?? null, search: parsed.search ?? null, date: parsed.date ?? null },
+  });
+
+  if (parsed.format === 'csv') {
+    const headers = Object.keys(rows[0] ?? { Timestamp: '' });
+    const escapeCell = (value) => {
+      const text = String(value ?? '');
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const csv = [
+      headers.map(escapeCell).join(','),
+      ...rows.map((row) => headers.map((key) => escapeCell(row[key])).join(',')),
+    ].join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="audit-logs-${stamp}.csv"`,
+    );
+    return res.end(`\uFEFF${csv}`);
+  }
+
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Audit logs');
+  const headers = Object.keys(rows[0] ?? { Timestamp: '' });
+  sheet.columns = headers.map((header) => ({ header, key: header, width: 24 }));
+  sheet.getRow(1).font = { bold: true };
+  for (const row of rows) {
+    sheet.addRow(row);
+  }
+  const buffer = await workbook.xlsx.writeBuffer();
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="audit-logs-${stamp}.xlsx"`,
+  );
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}
+
+export async function listAuditLogs(req, res) {
+  const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
+  const query = buildAuditLogQuery({ action, search, date });
 
   const skip = (page - 1) * limit;
   let logs;

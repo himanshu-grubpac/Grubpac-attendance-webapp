@@ -848,7 +848,7 @@ function SalaryStructureTab({ canManageSalary }) {
                       <td data-label="Code" className="salary-table__code">
                         {employee.employeeCode || '—'}
                       </td>
-                      <td data-label="Department">{employee.department || '—'}</td>
+                      <td data-label="Department">{employee.departmentName || employee.department?.name || employee.department || '—'}</td>
                       <td data-label="Monthly salary" className="salary-table__num">
                         {formatINRCurrency(employee.monthlySalary)}
                       </td>

@@ -58,6 +58,7 @@ import { compOffDecisionLoginHandler } from '../controllers/compOffController.js
 import {
   batchAdjustLeaveCarriedHandler,
   getLeaveAdjustmentGridHandler,
+  getLeaveAdjustmentHistoryHandler,
 } from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
@@ -273,6 +274,11 @@ router.get(
   '/adjustments/grid',
   requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
   asyncHandler(getLeaveAdjustmentGridHandler),
+);
+router.get(
+  '/adjustments/history/:userId',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  asyncHandler(getLeaveAdjustmentHistoryHandler),
 );
 router.post(
   '/adjustments/batch',
