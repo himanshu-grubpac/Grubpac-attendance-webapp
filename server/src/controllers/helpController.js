@@ -21,10 +21,16 @@ import {
   listHelpTickets,
   updateHelpTicketStatus,
 } from '../services/helpService.js';
+import { getRequestAuditContext } from '../utils/auditLog.js';
 
 export async function createTicketHandler(req, res) {
   const parsed = createHelpTicketSchema.parse(req.body);
-  const ticket = await createHelpTicket(req.user, parsed, req.userPermissions);
+  const ticket = await createHelpTicket(
+    req.user,
+    parsed,
+    req.userPermissions,
+    getRequestAuditContext(req),
+  );
   res.status(201).json({ ticket });
 }
 
@@ -46,6 +52,7 @@ export async function updateTicketStatusHandler(req, res) {
     req.user,
     req.userPermissions,
     parsed,
+    getRequestAuditContext(req),
   );
   res.json({ ticket });
 }
@@ -57,6 +64,7 @@ export async function addCommentHandler(req, res) {
     req.user,
     req.userPermissions,
     parsed,
+    getRequestAuditContext(req),
   );
   res.status(201).json({ comment });
 }
@@ -116,11 +124,17 @@ export async function confirmCommentAttachmentHandler(req, res) {
 }
 
 export async function deleteTicketHandler(req, res) {
-  await deleteHelpTicket(req.params.id, req.user, req.userPermissions);
+  await deleteHelpTicket(req.params.id, req.user, req.userPermissions, getRequestAuditContext(req));
   res.status(204).end();
 }
 
 export async function deleteCommentHandler(req, res) {
-  await deleteHelpComment(req.params.id, req.params.commentId, req.user, req.userPermissions);
+  await deleteHelpComment(
+    req.params.id,
+    req.params.commentId,
+    req.user,
+    req.userPermissions,
+    getRequestAuditContext(req),
+  );
   res.status(204).end();
 }

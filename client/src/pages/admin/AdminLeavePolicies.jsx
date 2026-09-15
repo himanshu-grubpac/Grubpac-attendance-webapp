@@ -128,6 +128,8 @@ export default function AdminLeavePolicies() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [modalError, setModalError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [historyPolicy, setHistoryPolicy] = useState(null);
+  const historyModalTitleId = useId();
 
   const [leaveTypes, setLeaveTypes] = useState([]);
 
@@ -460,8 +462,15 @@ export default function AdminLeavePolicies() {
     setFieldErrors({});
 
     try {
-      await leaveApi.updatePolicy(modalPolicy.id, validation.data);
-      showSuccess(`Policy for ${modalPolicy.leaveTypeCode} (${policyYear}) updated.`);
+      const result = await leaveApi.updatePolicy(modalPolicy.id, validation.data);
+      const recompute = result?.entitledRecompute;
+      const recomputeNote =
+        recompute && typeof recompute.recomputed === 'number'
+          ? ` Entitlements recomputed for ${recompute.recomputed} balance(s)` +
+            (recompute.skippedLocked > 0 ? `, ${recompute.skippedLocked} locked skipped` : '') +
+            '.'
+          : '';
+      showSuccess(`Policy for ${modalPolicy.leaveTypeCode} (${policyYear}) updated.${recomputeNote}`);
       closeModal();
       await loadPolicies();
     } catch (err) {
@@ -498,8 +507,21 @@ export default function AdminLeavePolicies() {
         label: 'Edit policy',
         onClick: () => openEditModal(policy),
       },
+      {
+        key: 'history',
+        label: 'Revision history',
+        onClick: () => setHistoryPolicy(policy),
+      },
     ];
   }
+
+  // Resolve the history modal against the live list so it never shows a
+  // stale snapshot after the policies reload underneath it.
+  const liveHistoryPolicy = historyPolicy
+    ? (policies.find((item) => item.id === historyPolicy.id) ?? historyPolicy)
+    : null;
+
+  useEscapeKey(Boolean(historyPolicy), () => setHistoryPolicy(null));
 
   return (
     <div className="page page--leave-policies">
@@ -1187,6 +1209,80 @@ export default function AdminLeavePolicies() {
                 </button>
               </footer>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {liveHistoryPolicy ? (
+        <div className="modal__backdrop" role="presentation" onClick={() => setHistoryPolicy(null)}>
+          <div
+            className="modal modal--wide leave-policies-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={historyModalTitleId}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal__header">
+              <h2 id={historyModalTitleId} className="modal__title">
+                Revision history: {liveHistoryPolicy.leaveTypeCode} ({liveHistoryPolicy.year})
+              </h2>
+              <p className="modal__lead muted">
+                Previous policy values with the date each revision took effect. Newest first.
+              </p>
+            </header>
+            <div className="modal__body">
+              {(liveHistoryPolicy.history ?? []).length === 0 ? (
+                <p className="muted small">No revisions recorded yet.</p>
+              ) : (
+                <div className="table-wrap table-wrap--responsive">
+                  <table className="table data-table">
+                    <thead>
+                      <tr>
+                        <th>Effective</th>
+                        <th>Action</th>
+                        <th>Quota</th>
+                        <th>Accrual/mo</th>
+                        <th>CF max</th>
+                        <th>Max stock</th>
+                        <th>Encash/yr</th>
+                        <th>Paid</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...(liveHistoryPolicy.history ?? [])].reverse().map((entry, index) => (
+                        <tr key={`${entry.effectiveDate}-${index}`}>
+                          <td data-label="Effective">
+                            {entry.effectiveDate ? new Date(entry.effectiveDate).toLocaleString() : '—'}
+                          </td>
+                          <td data-label="Action">{entry.action ?? 'updated'}</td>
+                          <td data-label="Quota" className="leave-policies-table__num">
+                            {formatDays(entry.annualQuota)}
+                          </td>
+                          <td data-label="Accrual/mo" className="leave-policies-table__num">
+                            {formatDays(entry.accrualPerMonth)}
+                          </td>
+                          <td data-label="CF max" className="leave-policies-table__num">
+                            {formatDays(entry.carryForwardMax)}
+                          </td>
+                          <td data-label="Max stock" className="leave-policies-table__num">
+                            {formatDays(entry.maxAccumulation)}
+                          </td>
+                          <td data-label="Encash/yr" className="leave-policies-table__num">
+                            {formatDays(entry.encashmentMaxPerYear)}
+                          </td>
+                          <td data-label="Paid">{entry.paid ? 'Paid' : 'Unpaid'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <footer className="modal__footer">
+              <button type="button" className="btn btn-ghost" onClick={() => setHistoryPolicy(null)}>
+                Close
+              </button>
+            </footer>
           </div>
         </div>
       ) : null}

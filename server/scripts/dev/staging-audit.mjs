@@ -177,8 +177,8 @@ async function main() {
   const unique = `audit.serial.${Date.now()}@grubpac.com`;
   const serial = 45658;
   const serialBuf = buildWorkbookBuffer([
-    ['firstName', 'lastName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'department'],
-    ['Audit', 'Serial', unique, '9876509999', 'Employee@12345', 'QA Engineer', serial, 'Development'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'department', 'reportingManagerEmail'],
+    ['Audit', 'Serial', unique, '9876509999', 'Employee', 'QA Engineer', serial, 'Development', 'admin@grubpac.com'],
   ]);
   const serialUpload = await bulkUpload(serialBuf, csrfToken);
   const serialRow = serialUpload.json?.results?.[0];
@@ -191,8 +191,8 @@ async function main() {
 
   // Bulk upload: intentionally invalid (missing designation) — no DB mutation expected
   const invalidBuf = buildWorkbookBuffer([
-    ['firstName', 'lastName', 'email', 'mobile', 'password', 'joiningDate'],
-    ['Bad', 'Row', `audit.invalid.${Date.now()}@grubpac.com`, '9876509998', 'Employee@12345', '2025-01-15'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'joiningDate', 'department', 'reportingManagerEmail'],
+    ['Bad', 'Row', `audit.invalid.${Date.now()}@grubpac.com`, '9876509998', 'Employee', '2025-01-15', 'Development', 'admin@grubpac.com'],
   ]);
   const invalidUpload = await bulkUpload(invalidBuf, csrfToken);
   const invalidRow = invalidUpload.json?.results?.[0];
@@ -205,8 +205,8 @@ async function main() {
   // Bulk upload: ISO text date — tests non-serial path on staging
   const isoUnique = `audit.iso.${Date.now()}@grubpac.com`;
   const isoBuf = buildWorkbookBuffer([
-    ['firstName', 'lastName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'department'],
-    ['Audit', 'IsoDate', isoUnique, '9876509997', 'Employee@12345', 'QA Engineer', '2025-06-01', 'Development'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'department', 'reportingManagerEmail'],
+    ['Audit', 'IsoDate', isoUnique, '9876509997', 'Employee', 'QA Engineer', '2025-06-01', 'Development', 'admin@grubpac.com'],
   ]);
   const isoUpload = await bulkUpload(isoBuf, csrfToken);
   const isoRow = isoUpload.json?.results?.[0];
@@ -220,8 +220,8 @@ async function main() {
   // Bulk upload: DD-MM-YYYY text date (common Excel export format)
   const ddmmUnique = `audit.ddmm.${Date.now()}@grubpac.com`;
   const ddmmBuf = buildWorkbookBuffer([
-    ['firstName', 'lastName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'department'],
-    ['Audit', 'DdMm', ddmmUnique, '9876509996', 'Employee@12345', 'QA Engineer', '01-06-2025', 'Development'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'department', 'reportingManagerEmail'],
+    ['Audit', 'DdMm', ddmmUnique, '9876509996', 'Employee', 'QA Engineer', '01-06-2025', 'Development', 'admin@grubpac.com'],
   ]);
   const ddmmUpload = await bulkUpload(ddmmBuf, csrfToken);
   const ddmmRow = ddmmUpload.json?.results?.[0];

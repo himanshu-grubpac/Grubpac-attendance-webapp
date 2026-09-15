@@ -94,7 +94,7 @@ export function canManageTicket(actor, ticket, permissions) {
   return managerId === actorId;
 }
 
-export async function createHelpTicket(actor, payload, permissions = []) {
+export async function createHelpTicket(actor, payload, permissions = [], auditContext = {}) {
   const canSetPriority = hasPermission(permissions, PERMISSIONS.HELP_MANAGE);
   const ticket = await HelpTicket.create({
     title: payload.title,
@@ -112,6 +112,7 @@ export async function createHelpTicket(actor, payload, permissions = []) {
     ticketId: ticket._id.toString(),
     category: ticket.category,
     priority: ticket.priority,
+    ...auditContext,
   });
 
   return (await HelpTicket.findById(ticket._id).populate(HELP_TICKET_POPULATE)).toSafeJSON();
@@ -267,7 +268,7 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
   };
 }
 
-export async function updateHelpTicketStatus(ticketId, actor, permissions, payload) {
+export async function updateHelpTicketStatus(ticketId, actor, permissions, payload, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
   if (!canManageTicket(actor, ticket, permissions)) {
     throwError('You are not authorized to update this ticket.', 403);
@@ -330,12 +331,13 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
     status: payload.status ?? ticket.status,
     previousPriority,
     priority: ticket.priority,
+    ...auditContext,
   });
 
   return ticket.toSafeJSON();
 }
 
-export async function addHelpComment(ticketId, actor, permissions, payload) {
+export async function addHelpComment(ticketId, actor, permissions, payload, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
   if (!canViewTicket(actor, ticket, permissions)) {
     throwError('You do not have permission to comment on this ticket.', 403);
@@ -415,12 +417,13 @@ export async function addHelpComment(ticketId, actor, permissions, payload) {
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
     commentId: comment._id.toString(),
+    ...auditContext,
   });
 
   return comment.toSafeJSON();
 }
 
-export async function deleteHelpTicket(ticketId, actor, permissions) {
+export async function deleteHelpTicket(ticketId, actor, permissions, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
   // Managers/admins via canManageTicket; plus the creator may roll back
   // their own still-open ticket (e.g. EmployeeHelp deletes the ticket when
@@ -442,10 +445,11 @@ export async function deleteHelpTicket(ticketId, actor, permissions) {
   auditLog('help_ticket_deleted', {
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
+    ...auditContext,
   });
 }
 
-export async function deleteHelpComment(ticketId, commentId, actor, permissions) {
+export async function deleteHelpComment(ticketId, commentId, actor, permissions, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
   if (!canViewTicket(actor, ticket, permissions)) {
     throwError('You do not have permission to delete this comment.', 403);
@@ -475,5 +479,6 @@ export async function deleteHelpComment(ticketId, commentId, actor, permissions)
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
     commentId: comment._id.toString(),
+    ...auditContext,
   });
 }

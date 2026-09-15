@@ -166,6 +166,7 @@ export default function AdminRegisterEmployee() {
   const [managers, setManagers] = useState([]);
   const [referenceLoading, setReferenceLoading] = useState(true);
   const [referenceError, setReferenceError] = useState('');
+  const [emailCredentials, setEmailCredentials] = useState(true);
 
   useEffect(() => {
     setReferenceLoading(true);
@@ -208,9 +209,14 @@ export default function AdminRegisterEmployee() {
     setError('');
 
     const roleSlug = roles.find((role) => role.id === form.roleId)?.slug ?? null;
+    // When emailing credentials the server generates the temporary password,
+    // so validate with a placeholder and omit it from the payload.
+    const formForValidation = emailCredentials
+      ? { ...form, password: 'Temp@1234' }
+      : form;
     const validation = validateForm(
       buildEmployeeInputSchema({ roleSlug, hasDepartments: departmentOptions.length > 0 }),
-      form,
+      formForValidation,
     );
     if (!validation.data) {
       setFieldErrors(validation.errors);
@@ -235,8 +241,19 @@ export default function AdminRegisterEmployee() {
         managedDepartmentIds: validation.data.managedDepartmentIds ?? [],
       };
       delete payload.department;
+      if (emailCredentials) {
+        delete payload.password;
+        payload.sendCredentialsEmail = true;
+      }
 
-      const { employee } = await adminApi.registerEmployee(payload);
+      const result = await adminApi.registerEmployee(payload);
+      const { employee } = result;
+      if (result.credentialsEmail && !result.credentialsEmail.sent) {
+        showError(
+          'Employee created, but the credentials email could not be delivered. ' +
+            `Temporary password (share manually): ${result.credentialsEmail.tempPassword ?? '—'}`,
+        );
+      }
 
       // Salary is saved in a second API call because register creates the user first.
       if (canManageSalary && parsedSalary !== undefined) {
@@ -573,13 +590,22 @@ export default function AdminRegisterEmployee() {
             ) : null}
 
             <div className="register-field register-field--password">
-              <RegisterLabel required>Password</RegisterLabel>
+              <RegisterLabel required={!emailCredentials}>Password</RegisterLabel>
               <RegisterPasswordField
                 value={form.password}
                 onChange={(value) => updateField('password', value)}
                 error={fieldErrors.password}
-                disabled={formDisabled}
+                disabled={formDisabled || emailCredentials}
               />
+              <label className="field-checkbox" style={{ marginTop: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={emailCredentials}
+                  onChange={(event) => setEmailCredentials(event.target.checked)}
+                  disabled={formDisabled}
+                />
+                <span>Auto-generate temporary password &amp; email login credentials</span>
+              </label>
             </div>
           </div>
 

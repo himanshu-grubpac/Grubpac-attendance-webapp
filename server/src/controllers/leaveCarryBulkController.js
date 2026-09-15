@@ -5,7 +5,7 @@ import {
   buildCarryBulkTemplate,
   parseCarryBulkWorkbook,
 } from '../services/leaveCarryBulkService.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditRequest } from '../utils/auditLog.js';
 
 export async function downloadCarryBulkTemplate(req, res) {
   const parsed = leaveCarryBulkTemplateQuerySchema.parse(req.query);
@@ -51,7 +51,7 @@ export async function uploadCarryBulk(req, res) {
 
   const result = await applyCarryBulkRows(rows, req.user._id);
 
-  auditLog('leave_carry_bulk_upload', {
+  auditRequest(req, 'leave_carry_bulk_upload', {
     adminId: req.user._id.toString(),
     summary: result.summary,
   });

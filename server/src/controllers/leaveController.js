@@ -32,7 +32,7 @@ import {
   updateHolidaySchema,
 } from '../../../shared/validation/holidays.js';
 import { parseDateInputAsISTDay, getISTYear } from '../utils/istDate.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditEntityChange, auditRequest } from '../utils/auditLog.js';
 import { signToken } from '../middleware/auth.js';
 import { generateCsrfToken, setCsrfCookie } from '../middleware/csrf.js';
 import { setAuthCookie } from './authController.js';
@@ -50,6 +50,7 @@ import {
   getBalancesForUser,
   ensureBalancesForUser,
   previewYearEndCarryForward,
+  recomputeEntitledForPolicy,
   recordEncashment,
 } from '../services/leaveBalanceService.js';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
@@ -97,7 +98,7 @@ export async function createLeaveType(req, res) {
   }
 
   const leaveType = await LeaveType.create(parsed);
-  auditLog('leave_type_created', {
+  auditRequest(req, 'leave_type_created', {
     adminId: req.user._id.toString(),
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
@@ -144,7 +145,7 @@ export async function deleteLeaveType(req, res) {
   await LeaveBalance.deleteMany({ leaveTypeId: leaveType._id });
   await leaveType.deleteOne();
 
-  auditLog('leave_type_deleted', {
+  auditRequest(req, 'leave_type_deleted', {
     adminId: req.user._id.toString(),
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
@@ -180,13 +181,28 @@ export async function createLeavePolicy(req, res) {
     return res.status(409).json({ message: 'Policy already exists for this leave type and year.' });
   }
 
-  const policy = await LeavePolicy.create({ ...parsed, year });
-  await policy.populate(LEAVE_POLICY_POPULATE);
-  auditLog('leave_policy_created', {
-    adminId: req.user._id.toString(),
-    policyId: policy._id.toString(),
+  const policy = await LeavePolicy.create({
+    ...parsed,
     year,
+    history: [
+      {
+        ...parsed,
+        year,
+        changedBy: req.user._id,
+        effectiveDate: new Date(),
+        action: 'created',
+      },
+    ],
   });
+  await policy.populate(LEAVE_POLICY_POPULATE);
+  auditRequest(req, 'leave_policy_created', auditEntityChange({
+    adminId: req.user._id.toString(),
+    module: 'leave',
+    entity: 'LeavePolicy',
+    entityId: policy._id.toString(),
+    action: 'Create',
+    next: { ...parsed, year },
+  }));
   res.status(201).json({ policy: policy.toSafeJSON() });
 }
 
@@ -197,16 +213,49 @@ export async function updateLeavePolicy(req, res) {
     return res.status(404).json({ message: 'Leave policy not found.' });
   }
 
+  const previous = {
+    annualQuota: policy.annualQuota,
+    accrualPerMonth: policy.accrualPerMonth,
+    carryForwardMax: policy.carryForwardMax,
+    maxAccumulation: policy.maxAccumulation,
+    requireDocAfterConsecutiveDays: policy.requireDocAfterConsecutiveDays ?? null,
+    paid: policy.paid,
+    encashmentMaxPerYear: policy.encashmentMaxPerYear,
+    combinedCarryGroup: policy.combinedCarryGroup ?? null,
+    isActive: policy.isActive,
+  };
   Object.assign(policy, parsed);
+  policy.history = [
+    ...(policy.history ?? []),
+    {
+      ...previous,
+      changedBy: req.user._id,
+      effectiveDate: new Date(),
+      action: 'updated',
+    },
+  ];
   await policy.save();
   await policy.populate(LEAVE_POLICY_POPULATE);
 
-  auditLog('leave_policy_updated', {
+  auditRequest(req, 'leave_policy_updated', auditEntityChange({
     adminId: req.user._id.toString(),
-    policyId: policy._id.toString(),
+    module: 'leave',
+    entity: 'LeavePolicy',
+    entityId: policy._id.toString(),
+    action: 'Update',
+    previous,
+    next: parsed,
+  }));
+
+  // Mid-year policy edits propagate to every unlocked balance row of that
+  // year's policy (joining-date prorated). Hand-locked rows are skipped.
+  const entitledRecompute = await recomputeEntitledForPolicy(policy._id);
+  auditRequest(req, 'leave_policy_entitled_recomputed', {
+    adminId: req.user._id.toString(),
+    ...entitledRecompute,
   });
 
-  res.json({ policy: policy.toSafeJSON() });
+  res.json({ policy: policy.toSafeJSON(), entitledRecompute });
 }
 
 export async function getMyLeaveBalances(req, res) {
@@ -245,7 +294,7 @@ export async function adjustLeaveBalances(req, res) {
   const parsed = adjustLeaveBalanceSchema.parse(req.body);
   const result = await adjustBalance(req.params.userId, parsed, req.user._id);
 
-  auditLog('leave_balance_adjusted', {
+  auditRequest(req, 'leave_balance_adjusted', {
     adminId: req.user._id.toString(),
     userId: req.params.userId,
     leaveTypeId: parsed.leaveTypeId,
@@ -262,12 +311,12 @@ export async function createLeaveRequestHandler(req, res) {
     // B-011: the exception flag skips apply-deadline and lead/deputy checks.
     // Only HR/admin may set it; everyone else fails closed with an audit trail.
     if (!canGrantLeaveException(req.user)) {
-      auditLog('leave_admin_exception_denied', {
+      auditRequest(req, 'leave_admin_exception_denied', {
         applicantId: req.user._id.toString(),
       });
       throwError('Only HR or admin can request an admin exception.', 403);
     }
-    auditLog('leave_admin_exception_granted', {
+    auditRequest(req, 'leave_admin_exception_granted', {
       applicantId: req.user._id.toString(),
     });
   }
@@ -647,7 +696,7 @@ export async function createHoliday(req, res) {
     createdBy: req.user._id,
   });
 
-  auditLog('holiday_created', {
+  auditRequest(req, 'holiday_created', {
     adminId: req.user._id.toString(),
     holidayId: holiday._id.toString(),
     date: parsed.date,
@@ -687,7 +736,7 @@ export async function deleteHoliday(req, res) {
   }
 
   await holiday.deleteOne();
-  auditLog('holiday_deleted', {
+  auditRequest(req, 'holiday_deleted', {
     adminId: req.user._id.toString(),
     holidayId: holiday._id.toString(),
   });
@@ -702,7 +751,7 @@ export async function listRecurringHolidayRules(req, res) {
 export async function updateRecurringHolidayRules(req, res) {
   const parsed = recurringHolidayRulesSchema.parse(req.body);
   const rules = await saveRecurringHolidayRules(parsed.rules, req.user._id);
-  auditLog('recurring_holiday_rules_updated', {
+  auditRequest(req, 'recurring_holiday_rules_updated', {
     adminId: req.user._id.toString(),
     count: rules.length,
   });
@@ -712,7 +761,7 @@ export async function updateRecurringHolidayRules(req, res) {
 export async function materializeRecurringHolidays(req, res) {
   const parsed = materializeRecurringSchema.parse(req.body);
   const result = await materializeRecurringHolidaysForYear(parsed.year, req.user._id);
-  auditLog('recurring_holidays_materialized', {
+  auditRequest(req, 'recurring_holidays_materialized', {
     adminId: req.user._id.toString(),
     year: parsed.year,
     created: result.created.length,
@@ -727,7 +776,7 @@ export async function deleteRecurringRuleHolidays(req, res) {
     return res.status(400).json({ error: 'name is required' });
   }
   const result = await deleteRecurringHolidaysByRuleName(name.trim());
-  auditLog('recurring_rule_holidays_deleted', {
+  auditRequest(req, 'recurring_rule_holidays_deleted', {
     adminId: req.user._id.toString(),
     ruleName: name.trim(),
     deleted: result.deleted,
@@ -745,7 +794,7 @@ export async function encashLeaveBalanceHandler(req, res) {
   const parsed = encashLeaveSchema.parse(req.body);
   const result = await recordEncashment(req.params.userId, parsed, req.user._id);
 
-  auditLog('leave_encashment_recorded', {
+  auditRequest(req, 'leave_encashment_recorded', {
     adminId: req.user._id.toString(),
     userId: req.params.userId,
     leaveTypeId: parsed.leaveTypeId,
@@ -773,7 +822,7 @@ export async function carryForwardHandler(req, res) {
     appliedBy: req.user._id,
   });
 
-  auditLog('leave_carry_forward_applied', {
+  auditRequest(req, 'leave_carry_forward_applied', {
     adminId: req.user._id.toString(),
     fromYear: parsed.fromYear,
     toYear: result.toYear,
@@ -790,7 +839,7 @@ export async function carryForwardHandler(req, res) {
 export async function runLeaveAccrualJobHandler(req, res) {
   const result = await runMonthlyAccrualJob();
 
-  auditLog('leave_accrual_job_run', {
+  auditRequest(req, 'leave_accrual_job_run', {
     adminId: req.user._id.toString(),
     year: result.year,
   });

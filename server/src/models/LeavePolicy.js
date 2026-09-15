@@ -17,6 +17,27 @@ const leavePolicySchema = new mongoose.Schema(
     encashmentMaxPerYear: { type: Number, default: 0, min: 0 },
     combinedCarryGroup: { type: String, default: null, trim: true },
     isActive: { type: Boolean, default: true },
+    // Revision history: snapshot of the previous values before every update,
+    // plus the creation baseline. Effective date = when the change was saved.
+    history: {
+      type: [
+        {
+          annualQuota: { type: Number },
+          accrualPerMonth: { type: Number },
+          carryForwardMax: { type: Number },
+          maxAccumulation: { type: Number },
+          requireDocAfterConsecutiveDays: { type: Number, default: null },
+          paid: { type: Boolean },
+          encashmentMaxPerYear: { type: Number },
+          combinedCarryGroup: { type: String, default: null },
+          isActive: { type: Boolean },
+          changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          effectiveDate: { type: Date, default: Date.now },
+          action: { type: String, default: 'updated', trim: true },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true },
 );
@@ -43,6 +64,20 @@ leavePolicySchema.methods.toSafeJSON = function toSafeJSON() {
     encashmentMaxPerYear: this.encashmentMaxPerYear,
     combinedCarryGroup: this.combinedCarryGroup,
     isActive: this.isActive,
+    history: (this.history ?? []).map((entry) => ({
+      annualQuota: entry.annualQuota,
+      accrualPerMonth: entry.accrualPerMonth,
+      carryForwardMax: entry.carryForwardMax,
+      maxAccumulation: entry.maxAccumulation,
+      requireDocAfterConsecutiveDays: entry.requireDocAfterConsecutiveDays ?? null,
+      paid: entry.paid,
+      encashmentMaxPerYear: entry.encashmentMaxPerYear,
+      combinedCarryGroup: entry.combinedCarryGroup ?? null,
+      isActive: entry.isActive,
+      changedBy: entry.changedBy?.toString?.() ?? entry.changedBy ?? null,
+      effectiveDate: entry.effectiveDate,
+      action: entry.action,
+    })),
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

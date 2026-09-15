@@ -13,3 +13,15 @@ export const auditLogQuerySchema = paginationSchema.extend({
     .optional()
     .transform((value) => value === 'true'),
 });
+
+export const auditLogExportSchema = z.object({
+  action: z.string().trim().max(100).optional(),
+  search: z.string().trim().max(100).optional(),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD.')
+    .optional(),
+  format: z.enum(['xlsx', 'csv']).optional().default('xlsx'),
+});
+
+export const AUDIT_LOG_EXPORT_MAX_ROWS = 10000;

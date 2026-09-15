@@ -257,6 +257,7 @@ export async function changePassword(userId, body) {
   }
 
   user.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  user.mustChangePassword = false;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
@@ -276,9 +277,8 @@ export async function changePassword(userId, body) {
 }
 
 /**
- * Employee self-service PIN setup and change.
- * - Only employees may set a PIN (admins use the admin reset endpoint).
- * - Setting a PIN for the first time requires no current PIN.
+ * Self-service PIN setup and change (all roles).
+ * - Setting a PIN for the first time requires the current password.
  * - Changing an existing PIN requires the current PIN to be supplied and correct.
  * - PINs are strictly 4-digit (pin4Hash).
  */

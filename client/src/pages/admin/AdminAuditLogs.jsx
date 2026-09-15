@@ -17,6 +17,17 @@ const ACTION_OPTIONS = [
   { value: 'employee_org_updated', label: 'Employee updated' },
   { value: 'password_reset_by_admin', label: 'Password reset' },
   { value: 'pin_reset_by_admin', label: 'PIN reset' },
+  { value: 'audit_logs_exported', label: 'Audit logs exported' },
+  { value: 'leave_policy_created', label: 'Leave policy created' },
+  { value: 'leave_policy_updated', label: 'Leave policy updated' },
+  { value: 'leave_policy_entitled_recomputed', label: 'Entitlements recomputed' },
+  { value: 'department_created', label: 'Department created' },
+  { value: 'department_updated', label: 'Department updated' },
+  { value: 'department_deleted', label: 'Department deleted' },
+  { value: 'attendance_admin_edit', label: 'Attendance edited' },
+  { value: 'attendance_admin_create', label: 'Attendance created' },
+  { value: 'attendance_undo', label: 'Attendance undone' },
+  { value: 'office_settings_updated', label: 'Office settings updated' },
 ];
 
 function statusBadgeClass(status) {
@@ -31,6 +42,14 @@ function formatAuditStatus(status) {
   return status?.toUpperCase() || '—';
 }
 
+function humanizeAction(action) {
+  return String(action ?? '')
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 function formatActionLabel(action) {
   if (action === 'login_success') return 'Login success';
   if (action === 'login_failed') return 'Login failed';
@@ -40,7 +59,8 @@ function formatActionLabel(action) {
   if (action === 'employee_org_updated') return 'Updated';
   if (action === 'password_reset_by_admin') return 'Password reset';
   if (action === 'pin_reset_by_admin') return 'PIN reset';
-  return action || '—';
+  if (!action) return '—';
+  return humanizeAction(action);
 }
 
 function formatActionTitle(action) {
@@ -52,7 +72,8 @@ function formatActionTitle(action) {
   if (action === 'employee_org_updated') return 'Employee org updated';
   if (action === 'password_reset_by_admin') return 'Password reset by admin';
   if (action === 'pin_reset_by_admin') return 'PIN reset by admin';
-  return action || undefined;
+  if (!action) return undefined;
+  return humanizeAction(action);
 }
 
 function formatRoleLabel(role) {
@@ -61,7 +82,6 @@ function formatRoleLabel(role) {
 }
 
 function formatReason(log) {
-  if (log.status === 'success' || log.action === 'login_success') return '—';
   return log.reason || '—';
 }
 
@@ -95,7 +115,7 @@ function formatConflictTooltip(log) {
 
 function ConflictBadge({ log }) {
   const level = resolveConflictLevel(log);
-  if (!level) return '—';
+  if (!level) return <span className="badge badge-muted">None</span>;
 
   const label = level === 'device' ? 'Device' : 'Network';
   const badgeClass =
@@ -137,6 +157,7 @@ export default function AdminAuditLogs() {
   const [appliedDate, setAppliedDate] = useState('');
   const [appliedAction, setAppliedAction] = useState('');
   const [appliedConflictsOnly, setAppliedConflictsOnly] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const requestKeyRef = useRef('');
 
@@ -198,6 +219,36 @@ export default function AdminAuditLogs() {
       nextAction: draftAction,
       nextConflictsOnly: draftConflictsOnly,
     });
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function handleExport(format) {
+    setExporting(true);
+    setError('');
+    try {
+      const blob = await adminApi.exportAuditLogs({
+        search: appliedSearch || undefined,
+        date: appliedDate || undefined,
+        action: appliedAction || undefined,
+        format,
+      });
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadBlob(blob, `audit-logs-${stamp}.${format}`);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
   function clearFilters() {
@@ -282,6 +333,24 @@ export default function AdminAuditLogs() {
               <button type="button" className="btn btn-primary btn-sm" onClick={applyFilters}>
                 Apply Filters
               </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => handleExport('xlsx')}
+                disabled={exporting}
+                title="Download filtered logs as Excel (max 10,000 rows)"
+              >
+                {exporting ? 'Exporting…' : 'Excel'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => handleExport('csv')}
+                disabled={exporting}
+                title="Download filtered logs as CSV (max 10,000 rows)"
+              >
+                {exporting ? 'Exporting…' : 'CSV'}
+              </button>
             </div>
           </div>
         </div>
@@ -337,6 +406,8 @@ export default function AdminAuditLogs() {
                   {logs.map((log) => {
                     const reason = formatReason(log);
                     const shortDeviceId = formatShortDeviceId(log.deviceId);
+                    const deviceLabel = shortDeviceId !== '—' ? shortDeviceId : log.userAgent ? 'Browser' : '—';
+                    const deviceTitle = log.deviceId || log.userAgent || undefined;
                     return (
                       <tr key={log.id}>
                         <td
@@ -374,9 +445,9 @@ export default function AdminAuditLogs() {
                         <td
                           data-label="Device"
                           className="audit-logs-table__device"
-                          title={log.deviceId || undefined}
+                          title={deviceTitle}
                         >
-                          {shortDeviceId}
+                          {deviceLabel}
                         </td>
                         <td
                           data-label="IP"

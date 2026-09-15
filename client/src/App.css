@@ -7904,6 +7904,15 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.45;
 }
 
+.modal__year-field {
+  margin-top: 0.75rem;
+  max-width: 12rem;
+}
+
+.leave-history-table__no-record {
+  color: var(--muted);
+}
+
 .modal__form {
   display: flex;
   flex-direction: column;
@@ -8983,7 +8992,7 @@ body::-webkit-scrollbar-thumb {
 
 .attendance-grid-panel {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   border-radius: var(--radius-lg, var(--radius));
 }
 
@@ -9333,10 +9342,20 @@ body::-webkit-scrollbar-thumb {
   border-bottom: none;
 }
 
-.attendance-grid thead th {
+.attendance-grid thead {
+  display: flex;
+  flex-direction: column;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 4;
+}
+
+.attendance-grid thead tr {
+  display: flex;
+  width: 100%;
+}
+
+.attendance-grid thead th {
   height: 3.1rem;
   padding: var(--attendance-cell-padding);
   background: var(--surface-2);
@@ -9626,6 +9645,8 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-grid__day {
+  width: var(--attendance-day-width);
+  min-width: var(--attendance-day-width);
   text-align: center;
   vertical-align: top;
 }
@@ -14936,6 +14957,21 @@ body::-webkit-scrollbar-thumb {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   font-size: 0.8rem;
+}
+
+.leave-adjustment-table__available {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.leave-adjustment-table__available--negative {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .leave-adjustment-table__row-actions {
