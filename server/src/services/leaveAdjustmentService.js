@@ -8,6 +8,7 @@ import {
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
+import { Department } from '../models/Department.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LeaveBalance, LEAVE_BALANCE_POPULATE } from '../models/LeaveBalance.js';
 import { adjustBalance, resolvePolicyForLeaveType } from './leaveBalanceService.js';
@@ -27,7 +28,7 @@ async function buildEmployeeDirectoryQuery() {
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-function applyEmployeeFilters(query, { search, departmentId }) {
+async function applyEmployeeFilters(query, { search, departmentId }) {
   query.isActive = true;
 
   if (departmentId) {
@@ -36,11 +37,13 @@ function applyEmployeeFilters(query, { search, departmentId }) {
 
   if (search) {
     const regex = new RegExp(escapeRegex(search), 'i');
+    const matchingDepts = await Department.find({ name: regex }).select('_id').lean();
+    const deptIds = matchingDepts.map((d) => d._id);
     query.$or = [
       { name: regex },
       { email: regex },
       { employeeCode: regex },
-      { department: regex },
+      ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
     ];
   }
 
@@ -48,7 +51,7 @@ function applyEmployeeFilters(query, { search, departmentId }) {
 }
 
 async function buildScopedEmployeeQuery(actor, permissions, filters) {
-  let query = applyEmployeeFilters(await buildEmployeeDirectoryQuery(), filters);
+  let query = await applyEmployeeFilters(await buildEmployeeDirectoryQuery(), filters);
   query = await applyTeamScopeToEmployeeQuery(
     query,
     actor,
@@ -131,7 +134,7 @@ export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
       name: employee.name,
       employeeCode: employee.employeeCode ?? null,
       departmentId: employee.departmentId?._id?.toString() ?? employee.departmentId?.toString() ?? null,
-      departmentName: employee.departmentId?.name ?? employee.department ?? null,
+      departmentName: employee.departmentId?.name ?? null,
       carriedByLeaveType,
     };
   });

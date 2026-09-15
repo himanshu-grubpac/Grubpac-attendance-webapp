@@ -169,6 +169,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     user: {
       ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
       loginPortal: portal,
+      mustChangePassword: Boolean(user.forcePasswordChange),
     },
   };
 }
@@ -258,6 +259,7 @@ export async function changePassword(userId, body) {
 
   user.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+  user.forcePasswordChange = false;
   await user.save();
 
   auditLog('password_changed', {

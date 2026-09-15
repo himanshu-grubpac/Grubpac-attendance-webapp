@@ -95,6 +95,13 @@ export async function updateDepartment(req, res) {
 
   await department.save();
 
+  if (parsed.name && parsed.name !== previous.name) {
+    await User.updateMany(
+      { departmentId: department._id },
+      { $set: { department: department.name } },
+    );
+  }
+
   auditLog('department_updated', {
     adminId: req.user._id.toString(),
     departmentId: department._id.toString(),

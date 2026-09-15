@@ -56,6 +56,7 @@ export const updateLeavePolicySchema = z
     encashmentMaxPerYear: z.number().min(0).max(365).optional(),
     combinedCarryGroup: z.string().trim().max(20).nullable().optional(),
     isActive: z.boolean().optional(),
+    changeReason: z.string().trim().max(500).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'At least one field is required.',

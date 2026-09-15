@@ -7,6 +7,7 @@ import { singleFileUpload } from '../middleware/upload.js';
 import {
   bulkUploadEmployees,
   downloadEmployeeTemplate,
+  exportAuditLogs,
   getOfficeSettingsHandler,
   getTeamTodayStatusAdmin,
   listAttendance,
@@ -185,6 +186,7 @@ router.delete(
   asyncHandler(unconfirmWeekAttendance),
 );
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(listAuditLogs));
+router.get('/audit-logs/export', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(exportAuditLogs));
 router.get(
   '/reports/summary',
   requirePermission(PERMISSIONS.USERS_READ),

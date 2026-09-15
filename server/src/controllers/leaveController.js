@@ -5,6 +5,7 @@ import { LeaveRequest } from '../models/LeaveRequest.js';
 import { Holiday } from '../models/Holiday.js';
 import { HolidayCategory } from '../models/HolidayCategory.js';
 import { User } from '../models/User.js';
+import { LeavePolicyHistory } from '../models/LeavePolicyHistory.js';
 import {
   createLeavePolicySchema,
   createLeaveRequestSchema,
@@ -50,6 +51,7 @@ import {
   ensureBalancesForUser,
   previewYearEndCarryForward,
   recordEncashment,
+  recalculateAllBalancesForPolicy,
 } from '../services/leaveBalanceService.js';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
@@ -160,6 +162,36 @@ export async function listLeavePolicies(req, res) {
   res.json({ year, policies: policies.map((item) => item.toSafeJSON()) });
 }
 
+export async function getLeavePolicyHistory(req, res) {
+  const policy = await LeavePolicy.findById(req.params.id).populate(LEAVE_POLICY_POPULATE);
+  if (!policy) {
+    return res.status(404).json({ message: 'Leave policy not found.' });
+  }
+
+  const history = await LeavePolicyHistory.find({ policyId: policy._id })
+    .populate('changedBy', 'name email')
+    .sort({ changedAt: -1 })
+    .limit(100);
+
+  res.json({
+    policy: policy.toSafeJSON(),
+    history: history.map((entry) => ({
+      id: entry._id.toString(),
+      annualQuota: entry.annualQuota,
+      accrualPerMonth: entry.accrualPerMonth,
+      carryForwardMax: entry.carryForwardMax,
+      maxAccumulation: entry.maxAccumulation,
+      paid: entry.paid,
+      encashmentMaxPerYear: entry.encashmentMaxPerYear,
+      combinedCarryGroup: entry.combinedCarryGroup,
+      changedBy: entry.changedBy ? { name: entry.changedBy.name, email: entry.changedBy.email } : null,
+      changedAt: entry.changedAt,
+      changeReason: entry.changeReason || null,
+      snapshot: entry.snapshot,
+    })),
+  });
+}
+
 export async function createLeavePolicy(req, res) {
   const parsed = createLeavePolicySchema.parse(req.body);
   const year = parsed.year ?? getISTYear();
@@ -179,6 +211,9 @@ export async function createLeavePolicy(req, res) {
     adminId: req.user._id.toString(),
     policyId: policy._id.toString(),
     year,
+    entityType: 'leave_policy',
+    entityId: policy._id.toString(),
+    actionType: 'create',
   });
   res.status(201).json({ policy: policy.toSafeJSON() });
 }
@@ -190,16 +225,55 @@ export async function updateLeavePolicy(req, res) {
     return res.status(404).json({ message: 'Leave policy not found.' });
   }
 
+  const previousSnapshot = {
+    annualQuota: policy.annualQuota,
+    accrualPerMonth: policy.accrualPerMonth,
+    carryForwardMax: policy.carryForwardMax,
+    maxAccumulation: policy.maxAccumulation,
+    requireDocAfterConsecutiveDays: policy.requireDocAfterConsecutiveDays,
+    paid: policy.paid,
+    encashmentMaxPerYear: policy.encashmentMaxPerYear,
+    combinedCarryGroup: policy.combinedCarryGroup,
+  };
+
+  await LeavePolicyHistory.create({
+    policyId: policy._id,
+    leaveTypeId: policy.leaveTypeId,
+    year: policy.year,
+    ...previousSnapshot,
+    changedBy: req.user._id,
+    changeReason: parsed.changeReason || undefined,
+    snapshot: previousSnapshot,
+  });
+
   Object.assign(policy, parsed);
   await policy.save();
   await policy.populate(LEAVE_POLICY_POPULATE);
 
+  const recalculatedCount = await recalculateAllBalancesForPolicy(policy);
+
   auditLog('leave_policy_updated', {
     adminId: req.user._id.toString(),
     policyId: policy._id.toString(),
+    recalculatedBalances: recalculatedCount,
+    entityType: 'leave_policy',
+    entityId: policy._id.toString(),
+    actionType: 'update',
+    fieldChanged: Object.keys(previousSnapshot).join(','),
+    oldValue: previousSnapshot,
+    newValue: {
+      annualQuota: policy.annualQuota,
+      accrualPerMonth: policy.accrualPerMonth,
+      carryForwardMax: policy.carryForwardMax,
+      maxAccumulation: policy.maxAccumulation,
+      requireDocAfterConsecutiveDays: policy.requireDocAfterConsecutiveDays,
+      paid: policy.paid,
+      encashmentMaxPerYear: policy.encashmentMaxPerYear,
+      combinedCarryGroup: policy.combinedCarryGroup,
+    },
   });
 
-  res.json({ policy: policy.toSafeJSON() });
+  res.json({ policy: policy.toSafeJSON(), recalculatedBalances: recalculatedCount });
 }
 
 export async function getMyLeaveBalances(req, res) {
@@ -244,6 +318,12 @@ export async function adjustLeaveBalances(req, res) {
     leaveTypeId: parsed.leaveTypeId,
     year: parsed.year,
     reason: parsed.reason,
+    entityType: 'leave_balance',
+    entityId: req.params.userId,
+    actionType: 'update',
+    fieldChanged: Object.keys(result.balance).filter((k) => ['entitled', 'used', 'pending', 'carried', 'encashed'].includes(k)).join(','),
+    oldValue: { entitled: result.balance.entitled, used: result.balance.used, pending: result.balance.pending },
+    newValue: parsed,
   });
 
   res.json(result);

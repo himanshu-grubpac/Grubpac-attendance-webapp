@@ -155,6 +155,7 @@ export async function resetPassword(body, auditContext = {}) {
   // stand-in for the password, so it must not outlive a reset.
   user.pin4Hash = null;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+  user.forcePasswordChange = true;
   await user.save();
 
   auditLog('password_reset_completed', {

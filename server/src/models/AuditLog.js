@@ -13,6 +13,12 @@ const auditLogSchema = new mongoose.Schema(
     status: { type: String, enum: ['success', 'failed'] },
     reason: { type: String, trim: true },
     timestamp: { type: Date, default: Date.now },
+    entityType: { type: String, trim: true },
+    entityId: { type: mongoose.Schema.Types.ObjectId },
+    fieldChanged: { type: String, trim: true },
+    oldValue: { type: mongoose.Schema.Types.Mixed },
+    newValue: { type: mongoose.Schema.Types.Mixed },
+    actionType: { type: String, enum: ['create', 'update', 'delete', 'approve', 'reject', null] },
   },
   { versionKey: false },
 );
@@ -22,5 +28,7 @@ auditLogSchema.index({ userId: 1, timestamp: -1 });
 auditLogSchema.index({ action: 1, timestamp: -1 });
 auditLogSchema.index({ deviceId: 1, timestamp: -1 });
 auditLogSchema.index({ ip: 1, timestamp: -1 });
+auditLogSchema.index({ entityType: 1, entityId: 1, timestamp: -1 });
+auditLogSchema.index({ actionType: 1, timestamp: -1 });
 
 export const AuditLog = mongoose.model('AuditLog', auditLogSchema);

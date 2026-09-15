@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import ExcelJS from 'exceljs';
 import { SYSTEM_ROLE_SLUGS, PERMISSIONS, canViewSalaryFields, hasPermission } from '../../../shared/permissions.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
@@ -80,6 +81,8 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
 import { auditLog, auditLogSync, getRequestAuditContext } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
+import { sendEmail, isEmailConfigured, renderWelcomeEmployeeEmail } from '../services/emailService.js';
+import { generatePassword } from '../../../shared/utils/generatePassword.js';
 
 const attendanceQuerySchema = paginationSchema
   .extend({
@@ -116,7 +119,7 @@ async function buildEmployeeDirectoryQuery() {
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter }) {
+async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter }) {
   if (typeof isActive === 'boolean') {
     query.isActive = isActive;
   }
@@ -138,12 +141,14 @@ function applyEmployeeListFilters(query, { search, isActive, departmentId, roleI
 
   if (search) {
     const regex = new RegExp(escapeRegex(search), 'i');
+    const matchingDepts = await Department.find({ name: regex }).select('_id').lean();
+    const deptIds = matchingDepts.map((d) => d._id);
     query.$or = [
       { name: regex },
       { email: regex },
       { mobile: regex },
       { employeeCode: regex },
-      { department: regex },
+      ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
     ];
   }
 
@@ -171,7 +176,23 @@ async function assertEmployeeInTeamScope(req, employeeId) {
 }
 
 export async function registerEmployee(req, res) {
-  const employee = await createEmployee(req.body, req.user._id);
+  const tempPassword = generatePassword();
+  const employee = await createEmployee({ ...req.body, password: tempPassword }, req.user._id);
+
+  let emailSent = false;
+  if (isEmailConfigured()) {
+    const loginUrl = `${env.clientOrigin}/login`;
+    const { subject, html, text } = renderWelcomeEmployeeEmail({
+      name: employee.firstName || employee.name,
+      email: employee.email,
+      loginId: employee.email,
+      temporaryPassword: tempPassword,
+      loginUrl,
+    });
+    const result = await sendEmail({ to: employee.email, subject, html, text, tag: 'welcome_employee' });
+    emailSent = result.delivered;
+  }
+
   auditLog('employee_registered', {
     adminId: req.user._id.toString(),
     employeeId: employee.id,
@@ -179,15 +200,19 @@ export async function registerEmployee(req, res) {
     roleId: employee.roleId,
     departmentId: employee.departmentId,
     reportingManagerId: employee.reportingManagerId,
+    emailSent,
+    entityType: 'employee',
+    entityId: employee.id,
+    actionType: 'create',
   });
-  res.status(201).json({ employee });
+  res.status(201).json({ employee, emailSent });
 }
 
 export async function listEmployees(req, res) {
   const { page, limit, search, isActive, departmentId, roleId, createdAfter } =
     employeeListQuerySchema.parse(req.query);
   const query = await applyTeamScopeToEmployeeQuery(
-    applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
+    await applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
       search,
       isActive,
       departmentId,
@@ -549,6 +574,9 @@ export async function updateEmployee(req, res) {
       dateOfBirth: employee.dateOfBirth,
       endingDate: employee.endingDate,
     },
+    entityType: 'employee',
+    entityId: employee._id.toString(),
+    actionType: 'update',
   });
 
   res.json({
@@ -584,6 +612,7 @@ export async function resetEmployeePassword(req, res) {
   // Resetting the password also revokes the employee's PIN credential.
   employee.pin4Hash = null;
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
+  employee.forcePasswordChange = true;
   await employee.save();
 
   auditLog('password_reset_by_admin', {
@@ -647,6 +676,33 @@ export async function bulkUploadEmployees(req, res) {
 
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id);
 
+  const emailResults = [];
+  if (result.createdEmployees && result.createdEmployees.length > 0) {
+    const loginUrl = `${env.clientOrigin}/login`;
+    const emailAvailable = isEmailConfigured();
+    for (const emp of result.createdEmployees) {
+      if (emailAvailable) {
+        try {
+          const { subject, html, text } = renderWelcomeEmployeeEmail({
+            name: emp.name,
+            email: emp.email,
+            loginId: emp.email,
+            temporaryPassword: emp.tempPassword,
+            loginUrl,
+          });
+          const emailResult = await sendEmail({ to: emp.email, subject, html, text, tag: 'welcome_employee_bulk' });
+          emailResults.push({ rowNumber: emp.rowNumber, email: emp.email, emailSent: emailResult.delivered });
+        } catch {
+          emailResults.push({ rowNumber: emp.rowNumber, email: emp.email, emailSent: false, emailError: 'Failed to send email' });
+        }
+      } else {
+        emailResults.push({ rowNumber: emp.rowNumber, email: emp.email, emailSent: false, emailError: 'SMTP not configured' });
+      }
+    }
+  }
+
+  const emailStatusMap = new Map(emailResults.map((e) => [e.email, e]));
+
   const changes = result.results
     .filter((item) => item.status === 'updated' || item.status === 'created')
     .map((item) => ({
@@ -654,6 +710,8 @@ export async function bulkUploadEmployees(req, res) {
       id: item.id || null,
       email: item.email || null,
       status: item.status,
+      emailSent: emailStatusMap.get(item.email)?.emailSent ?? undefined,
+      emailError: emailStatusMap.get(item.email)?.emailError ?? undefined,
       changedFields: item.changedFields ?? [],
       ignoredFields: item.ignoredFields ?? [],
     }));
@@ -663,11 +721,12 @@ export async function bulkUploadEmployees(req, res) {
     email: req.user.email,
     summary: result.summary,
     fileName: req.file.originalname,
-    changes,
+    emailsSent: emailResults.filter((e) => e.emailSent).length,
     ...getRequestAuditContext(req),
   });
 
-  res.status(201).json(result);
+  delete result.createdEmployees;
+  res.status(201).json({ summary: result.summary, results: changes, emailResults });
 }
 
 export async function getOfficeSettingsHandler(req, res) {
@@ -868,29 +927,91 @@ export async function resetQuarterWarnings(req, res) {
   }
 
   const result = await resetQuarterWarningsForUsers(userIds);
-  const summary = await getQuarterWarningSummaryForUsers(result.userIds);
 
   auditLog('quarter_warnings_reset', {
     adminId: req.user._id.toString(),
-    userIds: result.userIds,
-    quarter: result.quarter?.label ?? null,
-    clearedWarnings: result.clearedWarnings,
-    reclassifiedLv: result.reclassifiedLv,
+    userIds,
     ...getRequestAuditContext(req),
   });
 
-  res.json({
-    success: true,
-    quarter: {
-      year: result.quarter.year,
-      quarter: result.quarter.quarter,
-      label: result.quarter.label,
-    },
-    userIds: result.userIds,
-    clearedWarnings: result.clearedWarnings,
-    reclassifiedLv: result.reclassifiedLv,
-    summary,
+  res.json(result);
+}
+
+export async function exportAuditLogs(req, res) {
+  const { action, search, date, entityType, actionType, userId, fieldChanged } = req.query;
+  const query = {};
+  if (action) query.action = action;
+  if (entityType) query.entityType = entityType;
+  if (actionType) query.actionType = actionType;
+  if (userId) query.userId = userId;
+  if (fieldChanged) query.fieldChanged = fieldChanged;
+  if (search) query.email = { $regex: escapeRegex(search), $options: 'i' };
+  if (date) {
+    const istDay = parseDateInputAsISTDay(date);
+    if (istDay) {
+      query.timestamp = {
+        $gte: startOfDayIST(istDay),
+        $lte: endOfDayIST(istDay),
+      };
+    }
+  }
+
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="audit-logs-export.xlsx"',
+  );
+
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+    stream: res,
+    useStyles: false,
+    useSharedStrings: false,
   });
+  workbook.creator = 'Grubpac Attendance';
+  const sheet = workbook.addWorksheet('Audit Logs');
+
+  sheet.columns = [
+    { header: 'Timestamp', key: 'timestamp', width: 22 },
+    { header: 'Action', key: 'action', width: 28 },
+    { header: 'Action Type', key: 'actionType', width: 14 },
+    { header: 'Actor Email', key: 'email', width: 28 },
+    { header: 'Actor Role', key: 'role', width: 16 },
+    { header: 'Entity Type', key: 'entityType', width: 18 },
+    { header: 'Entity ID', key: 'entityId', width: 24 },
+    { header: 'Field Changed', key: 'fieldChanged', width: 20 },
+    { header: 'Old Value', key: 'oldValue', width: 30 },
+    { header: 'New Value', key: 'newValue', width: 30 },
+    { header: 'Status', key: 'status', width: 10 },
+    { header: 'IP', key: 'ip', width: 16 },
+    { header: 'Device ID', key: 'deviceId', width: 20 },
+    { header: 'User Agent', key: 'userAgent', width: 40 },
+  ];
+
+  const logs = await AuditLog.find(query).sort({ timestamp: -1 }).cursor();
+
+  for await (const log of logs) {
+    sheet.addRow({
+      timestamp: log.timestamp?.toISOString() ?? '',
+      action: log.action ?? '',
+      actionType: log.actionType ?? '',
+      email: log.email ?? '',
+      role: log.role ?? '',
+      entityType: log.entityType ?? '',
+      entityId: log.entityId?.toString() ?? '',
+      fieldChanged: log.fieldChanged ?? '',
+      oldValue: log.oldValue != null ? JSON.stringify(log.oldValue) : '',
+      newValue: log.newValue != null ? JSON.stringify(log.newValue) : '',
+      status: log.status ?? '',
+      ip: log.ip ?? '',
+      deviceId: log.deviceId ?? '',
+      userAgent: log.userAgent ?? '',
+    }).commit();
+  }
+
+  await workbook.commit();
 }
 
 const weekConfirmationSchema = z.object({
@@ -1027,6 +1148,12 @@ function mapAuditLogResponse(log, conflict) {
     status: log.status ?? null,
     reason: log.reason ?? null,
     timestamp: log.timestamp,
+    entityType: log.entityType ?? null,
+    entityId: log.entityId?.toString() ?? null,
+    fieldChanged: log.fieldChanged ?? null,
+    oldValue: log.oldValue ?? null,
+    newValue: log.newValue ?? null,
+    actionType: log.actionType ?? null,
     ipConflict: conflict.ipConflict,
     conflictWithUsers: conflict.conflictWithUsers,
   };
@@ -1034,9 +1161,22 @@ function mapAuditLogResponse(log, conflict) {
 
 export async function listAuditLogs(req, res) {
   const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
+  const { entityType, actionType, userId, fieldChanged } = req.query;
   const query = {};
   if (action) {
     query.action = action;
+  }
+  if (entityType) {
+    query.entityType = entityType;
+  }
+  if (actionType) {
+    query.actionType = actionType;
+  }
+  if (userId) {
+    query.userId = userId;
+  }
+  if (fieldChanged) {
+    query.fieldChanged = fieldChanged;
   }
 
   if (search) {

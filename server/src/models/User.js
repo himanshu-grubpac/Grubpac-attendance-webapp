@@ -62,6 +62,8 @@ const userSchema = new mongoose.Schema(
     monthlySalary: { type: Number, default: null, min: 0 },
     salaryEffectiveFrom: { type: Date, default: null },
     isActive: { type: Boolean, default: true },
+    /** When true the employee must change their password before accessing the portal. Set on creation; cleared on first password change. */
+    forcePasswordChange: { type: Boolean, default: true },
     /** Incremented to invalidate outstanding JWT sessions (logout / password change). */
     tokenVersion: { type: Number, default: 0, min: 0 },
     lastLoginAt: { type: Date, default: null },
@@ -120,7 +122,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
     joiningDate: this.joiningDate ?? null,
     dateOfBirth: this.dateOfBirth ?? null,
     endingDate: this.endingDate ?? null,
-    department: departmentDoc?.name ?? this.department ?? null,
+    department: departmentDoc?.name ?? null,
     departmentId: departmentDoc?._id?.toString() ?? this.departmentId?.toString?.() ?? null,
     departmentName: departmentDoc?.name ?? null,
     managedDepartmentIds: (this.managedDepartmentIds ?? []).map((id) =>
@@ -141,6 +143,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
       : {}),
     hasPassword: Boolean(this.passwordHash),
     hasPin: Boolean(this.pin4Hash),
+    forcePasswordChange: Boolean(this.forcePasswordChange),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

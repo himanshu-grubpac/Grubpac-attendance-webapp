@@ -404,6 +404,12 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
     requestId: request._id.toString(),
     comment: decisionComment,
     revision: request.revision,
+    entityType: 'leave_request',
+    entityId: request._id.toString(),
+    actionType: isApproved ? 'approve' : 'reject',
+    fieldChanged: 'status',
+    oldValue: { status: 'pending' },
+    newValue: { status: isApproved ? 'approved' : 'rejected', decisionComment },
   });
 
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();

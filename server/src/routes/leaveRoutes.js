@@ -27,6 +27,7 @@ import {
   encashLeaveBalanceHandler,
   getApprovalsPendingCountsHandler,
   getLeaveBalances,
+  getLeavePolicyHistory,
   getLeaveRequestHandler,
   getMyLeaveBalances,
   getLopRecordsHandler,
@@ -104,6 +105,11 @@ router.patch(
   '/policies/:id',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(updateLeavePolicy),
+);
+router.get(
+  '/policies/:id/history',
+  requirePermission(PERMISSIONS.LEAVE_READ, PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(getLeavePolicyHistory),
 );
 
 router.get('/balances/me', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(getMyLeaveBalances));

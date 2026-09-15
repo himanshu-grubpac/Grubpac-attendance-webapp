@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { SEED_LEAVE_POLICIES, SEED_LEAVE_TYPES } from '../../../shared/permissions.js';
 import {
-  getISTDateInputValue,
   getISTMonth,
   getISTYear,
   parseDateInputAsISTDay,
@@ -18,11 +17,36 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
-export function computeEntitledForPolicy(policy, year, asOfDate = new Date()) {
-  if (policy.accrualPerMonth > 0 && year === getISTYear(asOfDate)) {
-    const monthsElapsed = getISTMonth(asOfDate);
-    return Math.min(policy.annualQuota, monthsElapsed * policy.accrualPerMonth);
+export function computeEntitledForPolicy(policy, year, asOfDate = new Date(), joiningDate = null) {
+  const currentYear = getISTYear(asOfDate);
+
+  if (policy.accrualPerMonth > 0 && year === currentYear) {
+    const asOfMonth = getISTMonth(asOfDate);
+    let accrualMonths = asOfMonth;
+    if (joiningDate) {
+      const joinYear = getISTYear(joiningDate);
+      if (joinYear === year) {
+        accrualMonths = asOfMonth - getISTMonth(joiningDate) + 1;
+      } else if (joinYear > year) {
+        accrualMonths = 0;
+      }
+    }
+    accrualMonths = Math.max(0, accrualMonths);
+    return Math.min(policy.annualQuota, accrualMonths * policy.accrualPerMonth);
   }
+
+  if (joiningDate) {
+    const joinYear = getISTYear(joiningDate);
+    if (joinYear === year) {
+      const joinMonth = getISTMonth(joiningDate);
+      const remainingMonths = 12 - joinMonth + 1;
+      return Math.min(policy.annualQuota, Math.ceil((policy.annualQuota * remainingMonths) / 12));
+    }
+    if (joinYear > year) {
+      return 0;
+    }
+  }
+
   return policy.annualQuota;
 }
 
@@ -154,11 +178,13 @@ export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDat
     throwError('Invalid user.');
   }
 
+  const user = await User.findById(userId).select('joiningDate').lean();
+  const joiningDate = user?.joiningDate || null;
   const policies = await resolvePoliciesForYear(year);
   const balances = [];
 
   for (const policy of policies) {
-    const entitled = computeEntitledForPolicy(policy, year, asOfDate);
+    const entitled = computeEntitledForPolicy(policy, year, asOfDate, joiningDate);
     let balance = await LeaveBalance.findOne({
       userId,
       leaveTypeId: policy.leaveTypeId._id ?? policy.leaveTypeId,
@@ -196,6 +222,73 @@ export async function initBalancesForAllUsers(year = getISTYear()) {
 }
 
 /**
+ * Recalculate entitled for all active users when a policy is updated.
+ * Uses each user's DOJ for pro-rata computation.
+ * Returns the count of updated balances.
+ */
+export async function recalculateAllBalancesForPolicy(policy) {
+  const year = policy.year || getISTYear();
+  const leaveTypeId = policy.leaveTypeId?._id ?? policy.leaveTypeId;
+
+  const activeUsers = await User.find({ isActive: true }).select('_id joiningDate').lean();
+  const userIds = activeUsers.map((u) => u._id);
+  const userJoiningDateMap = new Map(activeUsers.map((u) => [u._id.toString(), u.joiningDate]));
+
+  const existingBalances = await LeaveBalance.find({
+    userId: { $in: userIds },
+    leaveTypeId,
+    year,
+  }).lean();
+
+  const existingByUser = new Map(
+    existingBalances.map((b) => [b.userId.toString(), b]),
+  );
+
+  const updates = [];
+  const inserts = [];
+
+  for (const userId of userIds) {
+    const entitled = computeEntitledForPolicy(
+      policy,
+      year,
+      new Date(),
+      userJoiningDateMap.get(userId.toString()),
+    );
+    const existing = existingByUser.get(userId.toString());
+    if (existing) {
+      updates.push({
+        updateOne: {
+          filter: { _id: existing._id },
+          update: { $set: { entitled } },
+        },
+      });
+    } else {
+      inserts.push({
+        userId,
+        leaveTypeId,
+        year,
+        entitled,
+        used: 0,
+        pending: 0,
+        carried: 0,
+        encashed: 0,
+        compOffEarned: 0,
+      });
+    }
+  }
+
+  const bulkResults = updates.length > 0
+    ? await LeaveBalance.bulkWrite(updates, { ordered: false })
+    : { modifiedCount: 0 };
+
+  if (inserts.length > 0) {
+    await LeaveBalance.insertMany(inserts, { ordered: false });
+  }
+
+  return bulkResults.modifiedCount + inserts.length;
+}
+
+/**
  * Remaining leave stock. May be negative when overdrawn leave is allowed
  * (used/pending can exceed entitled + carried − encashed).
  */
@@ -219,6 +312,8 @@ export function getPaidLeaveQuota(balance) {
 }
 
 export async function refreshAccruedEntitlements(userId, year = getISTYear(), asOfDate = new Date()) {
+  const user = await User.findById(userId).select('joiningDate').lean();
+  const joiningDate = user?.joiningDate || null;
   const policies = await resolvePoliciesForYear(year);
   for (const policy of policies) {
     if (policy.accrualPerMonth <= 0) continue;
@@ -228,7 +323,7 @@ export async function refreshAccruedEntitlements(userId, year = getISTYear(), as
       year,
     });
     if (balance) {
-      balance.entitled = computeEntitledForPolicy(policy, year, asOfDate);
+      balance.entitled = computeEntitledForPolicy(policy, year, asOfDate, joiningDate);
       await balance.save();
     }
   }

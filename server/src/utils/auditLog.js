@@ -2,7 +2,18 @@ import { AuditLog } from '../models/AuditLog.js';
 import { logError } from './logger.js';
 
 const LOGIN_ACTIONS = new Set(['login_success', 'login_failed']);
-const SENSITIVE_KEYS = new Set(['password', 'passwordHash']);
+const SENSITIVE_KEYS = new Set([
+  'password',
+  'passwordHash',
+  'tempPassword',
+  'temporaryPassword',
+  'pin4',
+  'pin4Hash',
+  'currentPassword',
+  'newPassword',
+  'currentPin',
+  'newPin',
+]);
 
 function buildPersistPayload(action, meta = {}) {
   const safeMeta = { ...meta };
@@ -20,6 +31,12 @@ function buildPersistPayload(action, meta = {}) {
     userAgent,
     reason,
     status,
+    entityType,
+    entityId,
+    fieldChanged,
+    oldValue,
+    newValue,
+    actionType,
     ...rest
   } = safeMeta;
 
@@ -48,6 +65,12 @@ function buildPersistPayload(action, meta = {}) {
     metadata,
     status: resolvedStatus,
     reason,
+    entityType: entityType || undefined,
+    entityId: entityId || undefined,
+    fieldChanged: fieldChanged || undefined,
+    oldValue: oldValue !== undefined ? oldValue : undefined,
+    newValue: newValue !== undefined ? newValue : undefined,
+    actionType: actionType || undefined,
   };
 }
 
@@ -78,14 +101,23 @@ export function getRequestAuditContext(req) {
  */
 const pendingAuditPersists = new Set();
 
+function stripSensitiveKeys(meta) {
+  const safe = { ...meta };
+  for (const key of SENSITIVE_KEYS) {
+    delete safe[key];
+  }
+  return safe;
+}
+
 export function auditLog(action, meta = {}) {
   const timestamp = new Date();
+  const safeForLog = stripSensitiveKeys(meta);
   console.log(
     JSON.stringify({
       type: 'audit',
       action,
       timestamp: timestamp.toISOString(),
-      ...meta,
+      ...safeForLog,
     }),
   );
 
@@ -116,12 +148,13 @@ export async function flushAuditLogs() {
 /** Awaited audit persist for critical mutations when callers need durability. */
 export async function auditLogSync(action, meta = {}) {
   const timestamp = new Date();
+  const safeForLog = stripSensitiveKeys(meta);
   console.log(
     JSON.stringify({
       type: 'audit',
       action,
       timestamp: timestamp.toISOString(),
-      ...meta,
+      ...safeForLog,
     }),
   );
 

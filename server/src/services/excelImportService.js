@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
 import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
@@ -25,7 +26,6 @@ import {
   allocateNextEmployeeCode,
   duplicateFieldMessage,
   enrichDuplicateKeyError,
-  isValidEmployeeCodeFormat,
   MAX_CREATE_ATTEMPTS,
   normalizeEmployeeCode,
   resolveEmployeeCodeForCreate,
@@ -36,13 +36,10 @@ import { COMPANY_START_DATE } from '../config/company.js';
 export { normalizeMobile };
 
 const BULK_EXPORT_HEADERS = [
-  'id',
   'firstName',
   'lastName',
   'email',
   'mobile',
-  'password',
-  'pin4Digite',
   'employeeCode',
   'department',
   'designation',
@@ -63,7 +60,6 @@ const ROW_ODD = 'FFFFFFFF';
 const BORDER_COLOR = 'FFE5E7EB';
 const INSTRUCTION_FILL = 'FFFFF7ED';
 const INSTRUCTION_TEXT = 'FF9A3412';
-const ID_COLUMN_FILL = 'FFFEF3C7';
 
 const TEMPLATE_COMPANY_ROW = 1;
 const TEMPLATE_SUBTITLE_ROW = 2;
@@ -88,14 +84,10 @@ function thinBorder() {
 export function buildDirectoryExportRow(user) {
   const manager = user.reportingManagerId;
   return [
-    user._id.toString(),
     user.firstName || '',
     user.lastName || '',
     user.email || '',
     user.mobile || '',
-    // Two blanks: password + pin4Digite (leave blank — never export secrets).
-    '',
-    '',
     user.employeeCode || '',
     user.departmentId?.name || user.department || '',
     user.designation || '',
@@ -134,16 +126,12 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['Employee Directory Export — Bulk Import Template'],
     [''],
     ['IMPORTANT RULES:'],
-    ['• The "id" column (column A) is the unique employee identifier. Do NOT edit or delete id values.'],
-    ['• Rows with an "id" value will UPDATE the existing employee record.'],
-    ['• Rows with a BLANK "id" will CREATE a new employee.'],
-    ['• The "email" and "mobile" columns are IMMUTABLE via bulk import. Any changes to these fields will be IGNORED.'],
-    ['• To change email or mobile, use the individual employee edit form.'],
-    ['• The "password" and "pin" columns: leave BLANK to keep the existing password/pin.'],
-    ['  Fill them in ONLY if you want to set a new password/pin for that employee.'],
-    ['• NEW employees (blank "id") REQUIRE a typed password: 8+ characters with uppercase, lowercase, and a number.'],
-    ['• NEW employees also require: firstName, email, mobile, designation, joiningDate, department, and reportingManagerEmail.'],
-    ['• "pin4Digite" sets the 4-digit login PIN (new and existing employees).'],
+    ['• Rows with this template will CREATE new employees.'],
+    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE via bulk import.'],
+    ['• Any attempted changes to these fields will be rejected with a validation error.'],
+    ['• To change email, mobile, or employeeCode, use the individual employee edit form.'],
+    ['• NEW employees REQUIRE a typed password: 8+ characters with uppercase, lowercase, and a number.'],
+    ['• Also require: firstName, email, mobile, designation, joiningDate, department, and reportingManagerEmail.'],
     ['• "isActive" must be TRUE or FALSE.'],
     ['• Dates must use YYYY-MM-DD format.'],
     ['• "reportingManagerEmail" or "reportingManagerCode" must match an active admin, HR, or reporting manager.'],
@@ -182,7 +170,7 @@ export async function buildEmployeeDirectoryWorkbook() {
 
   worksheet.mergeCells(TEMPLATE_INSTRUCTION_ROW, 1, TEMPLATE_INSTRUCTION_ROW, colCount);
   const instructionCell = worksheet.getCell(TEMPLATE_INSTRUCTION_ROW, 1);
-  instructionCell.value = 'Rows with an id will UPDATE existing records. Blank id rows will CREATE new employees. Email and mobile are immutable via bulk import.';
+  instructionCell.value = 'Rows will CREATE new employees. Email, mobile, and employeeCode are immutable via bulk import.';
   instructionCell.font = { italic: true, size: 10, name: 'Calibri', color: { argb: INSTRUCTION_TEXT } };
   instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INSTRUCTION_FILL } };
   instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
@@ -226,21 +214,13 @@ export async function buildEmployeeDirectoryWorkbook() {
       cell.border = thinBorder();
       cell.alignment = { vertical: 'middle' };
       cell.font = { size: 10, name: 'Calibri' };
-      if (colNumber === 1) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ID_COLUMN_FILL } };
-        cell.font = { color: { argb: 'FF92400E' }, size: 10, name: 'Calibri' };
-        cell.alignment = { vertical: 'middle', horizontal: 'left' };
-      }
     });
   }
 
   worksheet.columns = [
-    { width: 28 },
     { width: 16 },
     { width: 16 },
     { width: 28 },
-    { width: 14 },
-    { width: 16 },
     { width: 14 },
     { width: 16 },
     { width: 20 },
@@ -320,6 +300,7 @@ async function persistEmployee(
         pin4Hash,
         createdBy,
         isActive: true,
+        forcePasswordChange: true,
       });
 
       await user.populate([
@@ -412,9 +393,6 @@ const headerMap = {
   lastname: 'lastName',
   email: 'email',
   mobile: 'mobile',
-  password: 'password',
-  // NOTE: keys must be lowercase — normalizeHeader() lowercases + strips spaces.
-  pin4digite: 'pin4',
   employeecode: 'employeeCode',
   employeeid: 'employeeCode',
   department: 'department',
@@ -752,12 +730,24 @@ async function upsertExistingEmployee(row, createdBy) {
 
   const newEmail = String(row.data.email ?? '').trim().toLowerCase();
   if (newEmail && newEmail !== user.email) {
-    ignoredFields.push({ field: 'email', from: user.email, to: newEmail });
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Email cannot be changed via bulk upload. Current: ${user.email}. Attempted: ${newEmail}.`,
+    };
   }
 
   const newMobile = normalizeMobile(row.data.mobile);
   if (newMobile && newMobile !== user.mobile) {
-    ignoredFields.push({ field: 'mobile', from: user.mobile, to: newMobile });
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Mobile cannot be changed via bulk upload. Current: ${user.mobile}. Attempted: ${newMobile}.`,
+    };
   }
 
   const newFirstName = String(row.data.firstName ?? '').trim();
@@ -901,35 +891,13 @@ async function upsertExistingEmployee(row, createdBy) {
 
   const newEmployeeCode = normalizeEmployeeCode(row.data.employeeCode);
   if (newEmployeeCode && newEmployeeCode !== (user.employeeCode || '')) {
-    if (!isValidEmployeeCodeFormat(newEmployeeCode)) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'validation_error',
-        message:
-          'Employee code format is invalid. Must be 2–5 letters followed by 3–6 digits (e.g. EMP001).',
-      };
-    }
-    const existing = await User.findOne({
-      employeeCode: newEmployeeCode,
-      _id: { $ne: user._id },
-    }).lean();
-    if (existing) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'duplicate',
-        message: `Employee code "${newEmployeeCode}" is already in use by another employee.`,
-      };
-    }
-    changedFields.push({
-      field: 'employeeCode',
-      from: user.employeeCode || '',
-      to: newEmployeeCode,
-    });
-    user.employeeCode = newEmployeeCode;
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Employee code cannot be changed via bulk upload. Current: ${user.employeeCode || 'none'}. Attempted: ${newEmployeeCode}.`,
+    };
   }
 
   const rawDepartment = String(row.data.department ?? '').trim();
@@ -1106,6 +1074,7 @@ function handleCreateError(row, error) {
 export async function importEmployeesFromRowsUpsert(rows, createdBy) {
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);
   const results = [...fileDuplicates];
+  const createdEmployees = [];
 
   for (const row of uniqueRows) {
     const rawId = String(row.data.id ?? '').trim();
@@ -1125,13 +1094,24 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy) {
       }
     } else {
       try {
-        const employee = await createEmployee(row.data, createdBy, { bulkImport: true });
+        const tempPassword = generatePassword();
+        const employee = await createEmployee(
+          { ...row.data, password: tempPassword },
+          createdBy,
+          { bulkImport: true },
+        );
         results.push({
           rowNumber: row.rowNumber,
           id: employee.id,
           status: 'created',
           email: employee.email,
           message: 'Employee created successfully.',
+        });
+        createdEmployees.push({
+          rowNumber: row.rowNumber,
+          name: employee.firstName || employee.name,
+          email: employee.email,
+          tempPassword,
         });
       } catch (error) {
         results.push(handleCreateError(row, error));
@@ -1151,7 +1131,7 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy) {
     error: results.filter((item) => item.status === 'error').length,
   };
 
-  return { summary, results };
+  return { summary, results, createdEmployees };
 }
 
 export async function importEmployeesFromRows(rows, createdBy) {
@@ -1199,14 +1179,34 @@ export async function importEmployeesFromRows(rows, createdBy) {
 }
 
 export function buildEmployeeTemplateWorkbook() {
+  const workbook = XLSX.utils.book_new();
+
+  const instructionsData = [
+    ['New Employee Bulk Upload Template'],
+    [''],
+    ['IMPORTANT RULES:'],
+    ['• Each row will CREATE a new employee.'],
+    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE. Any changes will be rejected.'],
+    ['• To change email, mobile, or employeeCode later, use the individual employee edit form.'],
+    ['• A temporary password will be automatically generated and emailed to the new employee.'],
+    ['• Required fields: firstName, email, mobile, designation, joiningDate, department, reportingManagerEmail.'],
+    ['• "employeeCode" format: 2–5 letters followed by 3–6 digits (e.g. EMP001, TL001). Leave blank to auto-generate.'],
+    ['• "isActive" must be TRUE or FALSE.'],
+    ['• Dates must use YYYY-MM-DD format.'],
+    ['• "reportingManagerEmail" or "reportingManagerCode" must match an active admin, HR, or reporting manager.'],
+    ['• "department" must match an active department name (case-insensitive).'],
+    ['• Maximum rows: 500 per upload.'],
+  ];
+  const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
+  instructionsSheet['!cols'] = [{ wch: 90 }];
+  XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instructions');
+
   const worksheet = XLSX.utils.aoa_to_sheet([
     [
       'firstName',
       'lastName',
       'email',
       'mobile',
-      'password',
-      'pin4Digite',
       'employeeCode',
       'department',
       'designation',
@@ -1221,8 +1221,6 @@ export function buildEmployeeTemplateWorkbook() {
       'Doe',
       'jane@grubpac.com',
       '9876543210',
-      'Employee@123',
-      '1234',
       'EMP001',
       'Development',
       'Software Engineer',
@@ -1233,7 +1231,6 @@ export function buildEmployeeTemplateWorkbook() {
       '',
     ],
   ]);
-  const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Employees');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }

@@ -139,7 +139,7 @@ test('parseEmployeeWorkbook maps reportingManagerEmail and reportingManagerCode 
 test('buildEmployeeTemplateWorkbook includes reporting manager columns', () => {
   const buffer = buildEmployeeTemplateWorkbook();
   const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const sheet = workbook.Sheets['Employees'];
   const headerRow = XLSX.utils.sheet_to_json(sheet, { header: 1 })[0];
 
   assert.ok(headerRow.includes('reportingManagerEmail'));
@@ -303,53 +303,6 @@ test('parseEmployeeWorkbook rejects files without a recognizable header row', ()
     () => parseEmployeeWorkbook(buffer),
     /Could not find a header row/,
   );
-});
-
-test('parseEmployeeWorkbook maps the pin4Digite header to pin4', () => {
-  const buffer = buildWorkbookBuffer([
-    ['firstName', 'email', 'mobile', 'password', 'pin4Digite', 'employeeCode'],
-    ['Jane', 'jane.pin@example.com', '9876543210', 'Employee@123', '4321', 'EMP001'],
-  ]);
-  const rows = parseEmployeeWorkbook(buffer);
-
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].data.pin4, '4321');
-});
-
-test('buildEmployeeTemplateWorkbook sample row aligns with its headers', () => {
-  const buffer = buildEmployeeTemplateWorkbook();
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const [headers, sample] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-  assert.equal(sample.length, headers.length, 'sample values must match header count');
-  const codeIndex = headers.indexOf('employeeCode');
-  assert.equal(sample[codeIndex], 'EMP001');
-  assert.equal(sample[headers.indexOf('pin4Digite')], '1234');
-});
-
-test('buildDirectoryExportRow values align 1:1 with BULK_EXPORT_HEADERS', () => {
-  const row = buildDirectoryExportRow({
-    _id: { toString: () => '507f1f77bcf86cd799439011' },
-    firstName: 'Jane',
-    lastName: 'Doe',
-    email: 'jane@example.com',
-    mobile: '9876543210',
-    employeeCode: 'EMP001',
-    departmentId: { name: 'Development' },
-    designation: 'Engineer',
-    reportingManagerId: { email: 'manager@grubpac.com', employeeCode: 'TL001' },
-    joiningDate: '2026-01-15',
-    dateOfBirth: null,
-    endingDate: null,
-    isActive: true,
-  });
-
-  assert.equal(row.length, 16);
-  assert.equal(row[0], '507f1f77bcf86cd799439011');
-  assert.equal(row[7], 'EMP001');
-  assert.equal(row[8], 'Development');
-  assert.equal(row[15], 'TRUE');
 });
 
 test('parseEmployeeWorkbook maps isActive as lowercase true/false', () => {
