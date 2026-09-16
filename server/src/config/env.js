@@ -22,8 +22,8 @@ export const env = {
   /** Short-lived access token (v1 — no refresh-token rotation yet). Default matches template.yaml JwtExpiresIn so token and cookie (JWT_COOKIE_MAX_AGE_MS) expire together. */
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '12h',
   jwtCookieMaxAgeMs: Number(process.env.JWT_COOKIE_MAX_AGE_MS ?? 2 * 60 * 60 * 1000),
-  clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
-  apiOrigin: process.env.API_ORIGIN ?? process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
+  clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  apiOrigin: process.env.API_ORIGIN || process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@grubpac.com',
   adminPassword: process.env.ADMIN_PASSWORD ?? 'Admin@12345',
   adminPin: process.env.ADMIN_PIN ?? '1234',

@@ -557,16 +557,24 @@ export default function EmployeeDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {teamStatus.filter((member) => member.userId !== user?.id).length === 0 ? (
+                    {teamStatus.filter(
+                        (member) => String(member.userId) !== String(user?.id ?? user?._id ?? '')
+                      ).length === 0 ? (
                       <tr>
                         <td colSpan={2} className="muted small dash-team-table__empty">
                           No team members found.
                         </td>
                       </tr>
                     ) : (
-                      teamStatus
-                        .filter((member) => member.userId !== user?.id)
-                        .map((member) => {
+                      Array.from(
+                        new Map(
+                          teamStatus
+                            .filter(
+                              (member) => String(member.userId) !== String(user?.id ?? user?._id ?? '')
+                            )
+                            .map((m) => [String(m.userId), m])
+                        ).values()
+                      ).map((member) => {
                         const present =
                           member.status === 'checked_in' || member.status === 'wfh';
                         const onLeave = !present && member.status === 'on_leave';
@@ -582,20 +590,40 @@ export default function EmployeeDashboard() {
                               : member.status === 'on_leave'
                                 ? 'On Leave'
                                 : 'Not Checked In';
+                        const roleLabel =
+                          member.role === 'admin'
+                            ? 'Admin'
+                            : member.role === 'reporting-manager'
+                              ? 'RM'
+                              : member.role === 'hr'
+                                ? 'HR'
+                                : member.role === 'employee'
+                                  ? 'Employee'
+                                  : member.roleName ?? null;
                         return (
                           <tr key={member.userId}>
                             <td data-label="Employee" className="dash-team-table__name">
                               <span>
-                                {member.firstName ||
-                                  member.name?.split(' ')[0] ||
+                                {member.name ||
+                                  [member.firstName, member.lastName].filter(Boolean).join(' ') ||
                                   'Team Member'}
                               </span>
-                              {member.roleName && (
+                              {member.employeeCode ? (
+                                <span className="dash-team-table__code muted small">
+                                  {' '}
+                                  ({member.employeeCode})
+                                </span>
+                              ) : member.roleName ? (
                                 <span className="dash-team-table__code muted small">
                                   {' '}
                                   ({member.roleName})
                                 </span>
-                              )}
+                              ) : null}
+                              {roleLabel ? (
+                                <span className="dash-team-table__detail muted small">
+                                  {roleLabel}
+                                </span>
+                              ) : null}
                             </td>
                             <td data-label="Status">
                               <span

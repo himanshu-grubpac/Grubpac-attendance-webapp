@@ -18,7 +18,7 @@ import {
   resetPassword,
 } from '../controllers/passwordResetController.js';
 import { clearCsrfCookie } from '../middleware/csrf.js';
-import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
+import { auditLog, auditRequest, getRequestAuditContext } from '../utils/auditLog.js';
 
 const router = Router();
 
@@ -49,7 +49,7 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     await invalidateUserSessions(req.user._id);
-    auditLog('logout', { userId: req.user._id.toString(), email: req.user.email });
+    auditRequest(req, 'logout', { userId: req.user._id.toString(), email: req.user.email });
     clearAuthCookie(res);
     clearCsrfCookie(res);
     res.json({ message: 'Logged out successfully.' });
@@ -84,7 +84,7 @@ router.post(
   }),
 );
 
-// Employee self-service PIN setup/change (employee only — enforced in controller).
+// Self-service PIN setup/change (all roles).
 router.post(
   '/set-pin',
   authenticate,
@@ -95,7 +95,7 @@ router.post(
   }),
 );
 
-// Employee self-service PIN removal (employee only — enforced in controller).
+// Self-service PIN removal (all roles).
 router.post(
   '/delete-pin',
   authenticate,

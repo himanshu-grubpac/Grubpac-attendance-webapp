@@ -258,6 +258,7 @@ export async function changePassword(userId, body) {
   }
 
   user.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  user.mustChangePassword = false;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   user.forcePasswordChange = false;
   await user.save();
@@ -278,9 +279,8 @@ export async function changePassword(userId, body) {
 }
 
 /**
- * Employee self-service PIN setup and change.
- * - Only employees may set a PIN (admins use the admin reset endpoint).
- * - Setting a PIN for the first time requires no current PIN.
+ * Self-service PIN setup and change (all roles).
+ * - Setting a PIN for the first time requires the current password.
  * - Changing an existing PIN requires the current PIN to be supplied and correct.
  * - PINs are strictly 4-digit (pin4Hash).
  */
@@ -291,12 +291,6 @@ export async function setPin(userId, body, auditContext = {}) {
   if (!user || !user.isActive) {
     const error = new Error('User not found.');
     error.statusCode = 404;
-    throw error;
-  }
-
-  if (user.role !== 'employee') {
-    const error = new Error('PIN setup is available for employees only.');
-    error.statusCode = 403;
     throw error;
   }
 
@@ -350,8 +344,7 @@ export async function setPin(userId, body, auditContext = {}) {
 }
 
 /**
- * Employee self-service PIN removal.
- * - Only employees may remove their own PIN.
+ * Self-service PIN removal.
  * - Requires the current account password (when no PIN is set this is moot) or
  *   the current PIN to re-verify identity before clearing the credential.
  */
@@ -361,12 +354,6 @@ export async function deletePin(userId, body = {}, auditContext = {}) {
   if (!user || !user.isActive) {
     const error = new Error('User not found.');
     error.statusCode = 404;
-    throw error;
-  }
-
-  if (user.role !== 'employee') {
-    const error = new Error('PIN removal is available for employees only.');
-    error.statusCode = 403;
     throw error;
   }
 

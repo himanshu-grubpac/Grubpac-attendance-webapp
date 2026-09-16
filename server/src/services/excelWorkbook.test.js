@@ -6,6 +6,7 @@ import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import {
   buildDirectoryExportRow,
   buildEmployeeTemplateWorkbook,
+  generateBulkPassword,
   normalizeExcelDateCell,
   parseBulkCreatePin,
   parseEmployeeWorkbook,
@@ -215,44 +216,50 @@ test('buildSalaryExportWorkbook returns a valid xlsx zip buffer', () => {
   );
 });
 
-test('parseEmployeeWorkbook maps id and isActive columns', () => {
+test('parseEmployeeWorkbook maps email, role and isActive columns', () => {
   const buffer = buildWorkbookBuffer([
-    ['id', 'firstName', 'lastName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'isActive'],
-    ['507f1f77bcf86cd799439011', 'Jane', 'Doe', 'jane@example.com', '9876543210', 'Employee@123', 'Engineer', '2025-06-01', 'TRUE'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'isActive'],
+    ['Jane', 'Doe', 'jane@example.com', '9876543210', 'Employee', 'Engineer', '2025-06-01', 'TRUE'],
   ]);
   const rows = parseEmployeeWorkbook(buffer);
 
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].data.id, '507f1f77bcf86cd799439011');
+  assert.equal(rows[0].data.role, 'Employee');
   assert.equal(rows[0].data.firstName, 'Jane');
   assert.equal(rows[0].data.email, 'jane@example.com');
   assert.equal(rows[0].data.isActive, 'TRUE');
 });
 
-test('parseEmployeeWorkbook handles blank id for new employee rows', () => {
+test('parseEmployeeWorkbook drops removed id/password/pin columns and warns', () => {
   const buffer = buildWorkbookBuffer([
-    ['id', 'firstName', 'email', 'mobile', 'password', 'designation', 'joiningDate'],
-    ['', 'New', 'new@example.com', '9876543210', 'Employee@123', 'Engineer', '2025-06-01'],
+    ['id', 'firstName', 'email', 'mobile', 'password', 'pin4Digite', 'designation', 'joiningDate'],
+    ['507f1f77bcf86cd799439011', 'Legacy', 'legacy@example.com', '9876543210', 'Employee@123', '1234', 'Engineer', '2025-06-01'],
   ]);
   const rows = parseEmployeeWorkbook(buffer);
 
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].data.id, '');
-  assert.equal(rows[0].data.firstName, 'New');
+  assert.equal(rows[0].data.id, undefined);
+  assert.equal(rows[0].data.password, undefined);
+  assert.equal(rows[0].data.pin4, undefined);
+  assert.equal(rows[0].data.email, 'legacy@example.com');
+  assert.ok(Array.isArray(rows.warnings) && rows.warnings.length === 3);
+  assert.ok(rows.warnings.some((warning) => warning.includes('Password')));
+  assert.ok(rows.warnings.some((warning) => warning.includes('PIN')));
+  assert.ok(rows.warnings.some((warning) => warning.includes('ID')));
 });
 
-test('parseEmployeeWorkbook correctly handles multiple rows with mix of id and blank id', () => {
+test('parseEmployeeWorkbook keys rows by email for mixed update/create files', () => {
   const buffer = buildWorkbookBuffer([
-    ['id', 'firstName', 'email', 'mobile', 'password', 'designation', 'joiningDate'],
-    ['507f1f77bcf86cd799439011', 'Existing', 'existing@example.com', '9876543210', '', 'Engineer', '2025-06-01'],
-    ['', 'New', 'new@example.com', '9876543211', 'Employee@123', 'Manager', '2025-07-01'],
+    ['firstName', 'email', 'mobile', 'role', 'designation', 'joiningDate'],
+    ['Existing', 'existing@example.com', '9876543210', 'Employee', 'Engineer', '2025-06-01'],
+    ['New', 'new@example.com', '9876543211', 'HR', 'Manager', '2025-07-01'],
   ]);
   const rows = parseEmployeeWorkbook(buffer);
 
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].data.id, '507f1f77bcf86cd799439011');
+  assert.equal(rows[0].data.email, 'existing@example.com');
   assert.equal(rows[0].data.firstName, 'Existing');
-  assert.equal(rows[1].data.id, '');
+  assert.equal(rows[1].data.email, 'new@example.com');
   assert.equal(rows[1].data.firstName, 'New');
 });
 
@@ -262,18 +269,18 @@ test('parseEmployeeWorkbook skips Instructions sheet and reads branded Employees
     ['Employee Directory Export — Bulk Import Template'],
     [''],
     ['IMPORTANT RULES:'],
-    ['• The "id" column (column A) is the unique employee identifier.'],
-    ['• Rows with an "id" value will UPDATE the existing employee record.'],
+    ['• The "email" column is the unique employee identifier.'],
+    ['• Rows whose email matches an existing employee will UPDATE that record.'],
   ]);
   XLSX.utils.book_append_sheet(workbook, instructions, 'Instructions');
   const employees = XLSX.utils.aoa_to_sheet([
     ['Grubpac Technologies'],
     ['Employee Directory Export — 2 employees'],
-    ['Rows with an id will UPDATE existing records.'],
+    ['Rows whose email matches will UPDATE.'],
     [],
-    ['id', 'firstName', 'lastName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'isActive'],
-    ['507f1f77bcf86cd799439011', 'Jane', 'Doe', 'jane@example.com', '9876543210', '', 'Engineer', '2025-06-01', 'TRUE'],
-    ['', 'New', 'Hire', 'new@example.com', '9876543211', 'Employee@123', 'Manager', '2025-07-01', 'TRUE'],
+    ['firstName', 'lastName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'isActive'],
+    ['Jane', 'Doe', 'jane@example.com', '9876543210', 'Employee', 'Engineer', '2025-06-01', 'TRUE'],
+    ['New', 'Hire', 'new@example.com', '9876543211', 'HR', 'Manager', '2025-07-01', 'TRUE'],
   ]);
   XLSX.utils.book_append_sheet(workbook, employees, 'Employees');
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -282,11 +289,11 @@ test('parseEmployeeWorkbook skips Instructions sheet and reads branded Employees
 
   assert.equal(rows.length, 2);
   assert.equal(rows[0].rowNumber, 6);
-  assert.equal(rows[0].data.id, '507f1f77bcf86cd799439011');
+  assert.equal(rows[0].data.role, 'Employee');
   assert.equal(rows[0].data.firstName, 'Jane');
   assert.equal(rows[0].data.email, 'jane@example.com');
   assert.equal(rows[1].rowNumber, 7);
-  assert.equal(rows[1].data.id, '');
+  assert.equal(rows[1].data.role, 'HR');
   assert.equal(rows[1].data.firstName, 'New');
 });
 
@@ -305,16 +312,120 @@ test('parseEmployeeWorkbook rejects files without a recognizable header row', ()
   );
 });
 
-test('parseEmployeeWorkbook maps isActive as lowercase true/false', () => {
+test('parseEmployeeWorkbook ignores password/pin columns and warns', () => {
   const buffer = buildWorkbookBuffer([
-    ['id', 'firstName', 'email', 'mobile', 'password', 'designation', 'joiningDate', 'isActive'],
-    ['507f1f77bcf86cd799439011', 'Active', 'active@example.com', '9876543210', '', 'Engineer', '2025-06-01', 'TRUE'],
-    ['507f1f77bcf86cd799439012', 'Inactive', 'inactive@example.com', '9876543211', '', 'Engineer', '2025-06-01', 'FALSE'],
+    ['firstName', 'email', 'mobile', 'password', 'pin4Digite', 'employeeCode'],
+    ['Jane', 'jane.pin@example.com', '9876543210', 'Employee@123', '4321', 'EMP001'],
+  ]);
+  const rows = parseEmployeeWorkbook(buffer);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.pin4, undefined);
+  assert.equal(rows[0].data.password, undefined);
+  assert.equal(rows[0].data.employeeCode, 'EMP001');
+  assert.ok(Array.isArray(rows.warnings) && rows.warnings.length === 2);
+});
+
+test('buildEmployeeTemplateWorkbook sample row aligns with its headers', () => {
+  const buffer = buildEmployeeTemplateWorkbook();
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const [headers, sample] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+  assert.equal(sample.length, headers.length, 'sample values must match header count');
+  const codeIndex = headers.indexOf('employeeCode');
+  assert.equal(sample[codeIndex], 'EMP001');
+  assert.equal(sample[headers.indexOf('role')], 'Employee');
+  assert.ok(!headers.includes('password'));
+  assert.ok(!headers.includes('pin4Digite'));
+  assert.ok(!headers.includes('id'));
+});
+
+test('directory export strips dots and junk from stored mobiles', () => {
+  const dotted = buildDirectoryExportRow({
+    firstName: 'A', lastName: 'B', email: 'a@b.c', mobile: '96909.8452',
+    employeeCode: 'E1', roleId: null, role: 'Employee', departmentId: null,
+    designation: '', reportingManagerId: null, joiningDate: null,
+    dateOfBirth: null, endingDate: null, isActive: true,
+  });
+  assert.equal(dotted[3], '969098452');
+  assert.ok(!dotted[3].includes('.'));
+
+  const spaced = buildDirectoryExportRow({
+    firstName: 'A', lastName: 'B', email: 'a@b.c', mobile: '+91 98765 43210',
+    employeeCode: 'E1', roleId: null, role: 'Employee', departmentId: null,
+    designation: '', reportingManagerId: null, joiningDate: null,
+    dateOfBirth: null, endingDate: null, isActive: true,
+  });
+  assert.equal(spaced[3], '9876543210');
+
+  const clean = buildDirectoryExportRow({
+    firstName: 'A', lastName: 'B', email: 'a@b.c', mobile: '9876543210',
+    employeeCode: 'E1', roleId: null, role: 'Employee', departmentId: null,
+    designation: '', reportingManagerId: null, joiningDate: null,
+    dateOfBirth: null, endingDate: null, isActive: true,
+  });
+  assert.equal(clean[3], '9876543210');
+});
+
+test('buildDirectoryExportRow values align 1:1 with BULK_EXPORT_HEADERS', () => {
+  const row = buildDirectoryExportRow({
+    firstName: 'Jane',
+    lastName: 'Doe',
+    email: 'jane@example.com',
+    mobile: '9876543210',
+    employeeCode: 'EMP001',
+    roleId: { name: 'Employee', slug: 'employee' },
+    departmentId: { name: 'Development' },
+    designation: 'Engineer',
+    reportingManagerId: { email: 'manager@grubpac.com', employeeCode: 'TL001' },
+    joiningDate: '2026-01-15',
+    dateOfBirth: null,
+    endingDate: null,
+    isActive: true,
+  });
+
+  assert.equal(row.length, 14);
+  assert.equal(row[0], 'Jane');
+  assert.equal(row[2], 'jane@example.com');
+  assert.equal(row[4], 'EMP001');
+  assert.equal(row[5], 'Employee');
+  assert.equal(row[6], 'Development');
+  assert.equal(row[13], 'TRUE');
+  assert.ok(!row.includes('Employee@123'));
+});
+
+test('parseEmployeeWorkbook maps isActive as uppercase TRUE/FALSE text', () => {
+  const buffer = buildWorkbookBuffer([
+    ['firstName', 'email', 'mobile', 'role', 'designation', 'joiningDate', 'isActive'],
+    ['Active', 'active@example.com', '9876543210', 'Employee', 'Engineer', '2025-06-01', 'TRUE'],
+    ['Inactive', 'inactive@example.com', '9876543211', 'Employee', 'Engineer', '2025-06-01', 'FALSE'],
   ]);
   const rows = parseEmployeeWorkbook(buffer);
 
   assert.equal(rows[0].data.isActive, 'TRUE');
   assert.equal(rows[1].data.isActive, 'FALSE');
+});
+
+test('generateBulkPassword follows the Firstname@EmpCode pattern', () => {
+  assert.equal(generateBulkPassword('kenny henkin', 'EMP108'), 'Kenny@EMP108');
+  assert.equal(generateBulkPassword('  aarav  ', 'EMP101'), 'Aarav@EMP101');
+});
+
+test('generateBulkPassword output always satisfies the password policy', () => {
+  for (const [firstName, code] of [
+    ['Al', 'EMP001'],
+    ['OM', 'EMP002'],
+    ['Jo', 'EMP003'],
+    ['A', 'EMP004'],
+    ['', 'EMP005'],
+  ]) {
+    const candidate = generateBulkPassword(firstName, code);
+    assert.match(candidate, /[A-Z]/, `needs uppercase: ${candidate}`);
+    assert.match(candidate, /[a-z]/, `needs lowercase: ${candidate}`);
+    assert.match(candidate, /[0-9]/, `needs a number: ${candidate}`);
+    assert.ok(candidate.length >= 8, `needs 8+ chars: ${candidate}`);
+  }
 });
 
 test('parseBulkCreatePin accepts blank and valid 4-digit PINs', () => {

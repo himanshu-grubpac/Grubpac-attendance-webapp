@@ -14,7 +14,7 @@ import {
   updateUserSalarySchema,
 } from '../../../shared/validation/salary.js';
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditRequest } from '../utils/auditLog.js';
 import {
   buildSalaryExportWorkbook,
   buildSalaryMonthMeta,
@@ -52,7 +52,7 @@ export async function updateUserSalaryHandler(req, res) {
 
   const user = await updateUserSalary(req.params.id, payload, req.user._id);
 
-  auditLog('salary_updated', {
+  auditRequest(req, 'salary_updated', {
     adminId: req.user._id.toString(),
     employeeId: user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
@@ -91,7 +91,7 @@ export async function updateSalarySettingsHandler(req, res) {
   const parsed = updateSalarySettingsSchema.parse(req.body);
   const result = await updateSalarySettings(parsed, req.user._id);
 
-  auditLog('salary_settings_updated', {
+  auditRequest(req, 'salary_settings_updated', {
     adminId: req.user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
   });
@@ -154,7 +154,7 @@ export async function generateSalaryTransfersHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await generatePendingSalaryTransfers(parsed.month, req.user._id);
 
-  auditLog('salary_transfers_generated', {
+  auditRequest(req, 'salary_transfers_generated', {
     adminId: req.user._id.toString(),
     month: parsed.month,
     created: result.created,
@@ -180,7 +180,7 @@ export async function updateSalaryTransferHandler(req, res) {
   const parsed = updateSalaryTransferStatusSchema.parse(req.body);
   const transfer = await updateSalaryTransferStatus(req.params.id, parsed, req.user._id);
 
-  auditLog('salary_transfer_updated', {
+  auditRequest(req, 'salary_transfer_updated', {
     adminId: req.user._id.toString(),
     transferId: transfer.id,
     status: transfer.status,
@@ -237,7 +237,7 @@ export async function exportSalaryAuditHandler(req, res) {
     { departmentId },
   );
 
-  auditLog('salary_audit_exported', {
+  auditRequest(req, 'salary_audit_exported', {
     adminId: req.user._id.toString(),
     periodKey,
   });

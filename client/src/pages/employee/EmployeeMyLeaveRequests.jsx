@@ -134,7 +134,7 @@ export default function EmployeeMyLeaveRequests() {
             }
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive my-requests-table-wrap">
             <table className="table data-table">
                 <thead>
                   <tr>

@@ -89,6 +89,16 @@ api.interceptors.request.use((config) => {
       config.headers['X-CSRF-Token'] = token;
     }
   }
+  // Stable per-browser id so audit trails attribute every action — not just
+  // logins — to the originating device.
+  try {
+    const { deviceId } = getDeviceFingerprint();
+    if (deviceId) {
+      config.headers['X-Device-Id'] = deviceId;
+    }
+  } catch {
+    // Fingerprint must never break the request path.
+  }
   return config;
 });
 
@@ -176,6 +186,17 @@ export const adminApi = {
       })
       .then((r) => r.data);
   },
+  bulkPreview: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    // Dry run: computes the exact per-row diff/validation without writing
+    // anything, sending any email, or emitting audit logs.
+    return api
+      .post('/admin/users/bulk-preview', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data);
+  },
   getOfficeSettings: () =>
     api
       .get('/admin/office-settings', {
@@ -207,6 +228,27 @@ export const adminApi = {
     api.post('/admin/attendance/records', payload).then((r) => r.data),
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
+  exportAuditLogs: (params = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== '') {
+        search.set(key, String(value));
+      }
+    }
+    const query = search.toString();
+    const format = params.format === 'csv' ? 'csv' : 'xlsx';
+    if (format === 'csv') {
+      return api
+        .get(`/admin/audit-logs/export${query ? `?${query}` : ''}`, {
+          responseType: 'arraybuffer',
+          headers: { Accept: 'text/csv' },
+        })
+        .then((r) => new Blob([r.data], { type: 'text/csv;charset=utf-8' }));
+    }
+    return downloadExcelBlob(`/api/admin/audit-logs/export${query ? `?${query}` : ''}`, {
+      errorMessage: 'Failed to export audit logs.',
+    });
+  },
   getReportsSummary: () => api.get('/admin/reports/summary').then((r) => r.data),
   getTeamTodayStatus: (params = {}) =>
     api.get('/admin/attendance/team-today', { params }).then((r) => r.data),
@@ -260,6 +302,7 @@ export const leaveApi = {
   listTypes: () => api.get('/leave/types').then((r) => r.data),
   createType: (payload) => api.post('/leave/types', payload).then((r) => r.data),
   updateType: (id, payload) => api.patch(`/leave/types/${id}`, payload).then((r) => r.data),
+  deleteType: (id) => api.delete(`/leave/types/${id}`).then((r) => r.data),
   listPolicies: (params = {}) => api.get('/leave/policies', { params }).then((r) => r.data),
   createPolicy: (payload) => api.post('/leave/policies', payload).then((r) => r.data),
   updatePolicy: (id, payload) => api.patch(`/leave/policies/${id}`, payload).then((r) => r.data),
@@ -271,6 +314,8 @@ export const leaveApi = {
     api.get('/leave/adjustments/grid', { params }).then((r) => r.data),
   batchAdjustCarried: (payload) =>
     api.post('/leave/adjustments/batch', payload).then((r) => r.data),
+  getAdjustmentHistory: (userId, params = {}) =>
+    api.get(`/leave/adjustments/history/${userId}`, { params }).then((r) => r.data),
   downloadCarryTemplate: (params = {}) => {
     const search = new URLSearchParams();
     if (params.year != null) search.set('year', String(params.year));
@@ -351,6 +396,8 @@ export const leaveApi = {
   updateRecurringHolidayRules: (payload) => api.put('/leave/recurring-rules', payload).then((r) => r.data),
   materializeRecurringHolidays: (payload) =>
     api.post('/leave/holidays/materialize-recurring', payload).then((r) => r.data),
+  deleteRecurringRuleHolidays: (name) =>
+    api.post('/leave/holidays/delete-by-rule', { name }).then((r) => r.data),
 };
 
 export const compOffApi = {

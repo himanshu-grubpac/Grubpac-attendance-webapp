@@ -19,6 +19,12 @@ export const createLeaveTypeSchema = z.object({
 
 export const updateLeaveTypeSchema = z
   .object({
+    code: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z]{2,5}$/, 'Leave type code must be 2–5 uppercase letters.')
+      .optional(),
     name: z.string().trim().min(2).max(100).optional(),
     description: z.string().trim().max(500).optional(),
     isActive: z.boolean().optional(),

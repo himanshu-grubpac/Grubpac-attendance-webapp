@@ -7904,6 +7904,15 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.45;
 }
 
+.modal__year-field {
+  margin-top: 0.75rem;
+  max-width: 12rem;
+}
+
+.leave-history-table__no-record {
+  color: var(--muted);
+}
+
 .modal__form {
   display: flex;
   flex-direction: column;
@@ -8983,7 +8992,7 @@ body::-webkit-scrollbar-thumb {
 
 .attendance-grid-panel {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   border-radius: var(--radius-lg, var(--radius));
 }
 
@@ -9333,10 +9342,20 @@ body::-webkit-scrollbar-thumb {
   border-bottom: none;
 }
 
-.attendance-grid thead th {
+.attendance-grid thead {
+  display: flex;
+  flex-direction: column;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 4;
+}
+
+.attendance-grid thead tr {
+  display: flex;
+  width: 100%;
+}
+
+.attendance-grid thead th {
   height: 3.1rem;
   padding: var(--attendance-cell-padding);
   background: var(--surface-2);
@@ -9626,6 +9645,8 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-grid__day {
+  width: var(--attendance-day-width);
+  min-width: var(--attendance-day-width);
   text-align: center;
   vertical-align: top;
 }
@@ -10870,7 +10891,9 @@ body::-webkit-scrollbar-thumb {
 .calendar-management__month h2 { margin: 0 0 var(--space-2); color: var(--text-h); font-size: 0.8rem; font-weight: 700; }
 .calendar-management__weekdays, .calendar-management__days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.18rem; }
 .calendar-management__weekdays { margin-bottom: 0.22rem; color: var(--text-muted); font-size: 0.58rem; text-align: center; }
-.calendar-management__day { display: grid; place-items: center; aspect-ratio: 1; min-width: 0; padding: 0; border: 1px solid transparent; border-radius: 0.32rem; background: transparent; color: var(--text-h); font: inherit; font-size: 0.67rem; font-weight: 600; cursor: pointer; }
+.calendar-management__day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.12rem; aspect-ratio: 1; min-width: 0; padding: 0.15rem 0.1rem; border: 1px solid transparent; border-radius: 0.32rem; background: transparent; color: var(--text-h); font: inherit; font-size: 0.67rem; font-weight: 600; cursor: pointer; line-height: 1; }
+.calendar-management__day-number { display: block; line-height: 1; }
+.calendar-management__day-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.52rem; font-weight: 600; line-height: 1; opacity: 0.9; padding-inline: 0.15rem; }
 .calendar-management__day:not(.calendar-management__day--empty):hover { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); }
 .calendar-management__day:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .calendar-management__day--empty { pointer-events: none; }
@@ -10941,6 +10964,26 @@ body::-webkit-scrollbar-thumb {
   font-size: 0.72rem;
   line-height: 1.4;
   color: var(--text-muted);
+}
+.calendar-management__recurring-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.calendar-management__recurring-item--editing {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-2));
+}
+.calendar-management__recurring-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.calendar-management__recurring-actions {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
 }
 .calendar-management__recurring-form {
   display: flex;
@@ -12848,8 +12891,51 @@ body::-webkit-scrollbar-thumb {
 .table-wrap.approvals-table-wrap,
 .table-wrap.salary-table-wrap,
 .table-wrap.help-tickets-table-wrap,
-.table-wrap.today-present-table-wrap {
+.table-wrap.today-present-table-wrap,
+.table-wrap.leave-adjustment-table-wrap,
+.table-wrap.help-team-table-wrap,
+.table-wrap.leave-balances-table-wrap,
+.table-wrap.employee-history-table-wrap,
+.table-wrap.my-requests-table-wrap,
+.table-wrap.my-comp-off-table-wrap,
+.table-wrap.my-help-tickets-table-wrap,
+.leave-types-panel .table-wrap {
   scrollbar-gutter: auto;
+}
+
+/* Desktop only: small breathing room for ACTIONS on the two tables just made edge-to-edge */
+@media (min-width: 769px) {
+  .leave-types-panel .table th:last-child,
+  .leave-types-panel .table td:last-child,
+  .leave-types-panel .data-table th:last-child,
+  .leave-types-panel .data-table td:last-child,
+  .leave-adjustment-table th:last-child,
+  .leave-adjustment-table td:last-child {
+    padding-right: 1.15rem;
+  }
+
+  /* Employee "mine" tables: flush right edge (last column only, these three tables only) */
+  .my-requests-table-wrap .table th:last-child,
+  .my-requests-table-wrap .table td:last-child,
+  .my-requests-table-wrap .data-table th:last-child,
+  .my-requests-table-wrap .data-table td:last-child,
+  .my-comp-off-table-wrap .table th:last-child,
+  .my-comp-off-table-wrap .table td:last-child,
+  .my-comp-off-table-wrap .data-table th:last-child,
+  .my-comp-off-table-wrap .data-table td:last-child,
+  .my-help-tickets-table-wrap .table th:last-child,
+  .my-help-tickets-table-wrap .table td:last-child,
+  .my-help-tickets-table-wrap .data-table th:last-child,
+  .my-help-tickets-table-wrap .data-table td:last-child {
+    padding-right: 0;
+  }
+
+  /* Help tickets: action button sits exactly under the left-aligned ACTIONS header */
+  .my-help-tickets-table-wrap .table td.cell-actions,
+  .my-help-tickets-table-wrap .data-table td.cell-actions {
+    text-align: left;
+    padding-left: 0.85rem;
+  }
 }
 
 .roles-table {
@@ -14426,12 +14512,40 @@ body::-webkit-scrollbar-thumb {
 }
 
 .salary-detail-modal__body {
-  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .salary-detail__lop-dates {
+  min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.salary-detail__lop-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.salary-detail__lop-tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.35;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: color-mix(in srgb, var(--surface-2) 75%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+@media (min-width: 769px) {
+  .salary-detail-modal .salary-detail__lop-row {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 768px) {
@@ -14843,6 +14957,21 @@ body::-webkit-scrollbar-thumb {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   font-size: 0.8rem;
+}
+
+.leave-adjustment-table__available {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.leave-adjustment-table__available--negative {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 .leave-adjustment-table__row-actions {

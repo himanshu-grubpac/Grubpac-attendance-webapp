@@ -2553,14 +2553,21 @@ export async function getLeavePendingCounts(actor, permissions) {
     : await resolveLeaveApprovalUserIds(actor);
   const userFilter = scopedIds === null ? {} : { userId: { $in: scopedIds } };
   const wfhType = await LeaveType.findOne({ code: 'WFH' }).select('_id');
+  // Match the table's default year filter so badge counts align with what the
+  // manager sees when the approval page opens (current IST year).
+  const currentYear = getISTYear();
+  const yearStart = parseDateInputAsISTDay(`${currentYear}-01-01`);
+  const yearEnd = parseDateInputAsISTDay(`${currentYear}-12-31`);
+  const yearFilter = { startDate: { $gte: yearStart, $lte: yearEnd } };
   const [leave, wfh] = await Promise.all([
     LeaveRequest.countDocuments({
       status: 'pending',
       ...userFilter,
+      ...yearFilter,
       ...(wfhType ? { leaveTypeId: { $ne: wfhType._id } } : {}),
     }),
     wfhType
-      ? LeaveRequest.countDocuments({ status: 'pending', ...userFilter, leaveTypeId: wfhType._id })
+      ? LeaveRequest.countDocuments({ status: 'pending', ...userFilter, ...yearFilter, leaveTypeId: wfhType._id })
       : 0,
   ]);
   return { leave, wfh };

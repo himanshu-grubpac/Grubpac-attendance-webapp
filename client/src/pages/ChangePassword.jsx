@@ -37,10 +37,8 @@ export default function ChangePassword() {
   const [removeAuth, setRemoveAuth] = useState('');
   const [removeError, setRemoveError] = useState('');
 
-  // PIN setup is employee-only (admins manage PINs via the admin panel).
-  const isEmployee = user?.role === 'employee';
   const hasPin = Boolean(user?.hasPin);
-  const canSetPin = isEmployee && Boolean(user?.hasPassword);
+  const canSetPin = Boolean(user?.hasPassword);
 
   async function handlePasswordSubmit(event) {
     event.preventDefault();
@@ -58,6 +56,8 @@ export default function ChangePassword() {
     try {
       const result = await authApi.changePassword(validation.data);
       setPasswordForm(emptyPasswordForm);
+      // Refresh so a cleared mustChangePassword flag lifts the forced-change gate.
+      await refreshUser();
       showSuccess(result.message || 'Password changed successfully.');
     } catch (err) {
       setPasswordError(getErrorMessage(err));
@@ -137,6 +137,13 @@ export default function ChangePassword() {
 
   return (
     <div className="page page--form">
+      {user?.mustChangePassword ? (
+        <div className="page-alerts">
+          <div className="alert alert--warning">
+            You are signing in with a temporary password. Please set a new password to continue.
+          </div>
+        </div>
+      ) : null}
       <div className="card card--form">
         <p className="card__section-title">Update password</p>
         <form className="form-grid" onSubmit={handlePasswordSubmit}>
@@ -183,8 +190,7 @@ export default function ChangePassword() {
         )}
       </div>
 
-      {isEmployee && (
-        <div className="card card--form">
+      <div className="card card--form">
           <p className="card__section-title">
             {hasPin ? 'Change security PIN' : 'Set security PIN'}
           </p>
@@ -290,7 +296,6 @@ export default function ChangePassword() {
             </div>
           )}
         </div>
-      )}
     </div>
   );
 }

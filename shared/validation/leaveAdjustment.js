@@ -22,4 +22,8 @@ export const leaveAdjustmentBatchSchema = z.object({
   adjustments: z.array(leaveAdjustmentBatchItemSchema).min(1).max(500),
 });
 
+export const leaveAdjustmentHistoryQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
 export const DEFAULT_LEAVE_ADJUSTMENT_REASON = 'Manual carried adjustment via leave policies';

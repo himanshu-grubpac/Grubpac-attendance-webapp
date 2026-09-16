@@ -6,6 +6,7 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import { singleFileUpload } from '../middleware/upload.js';
 import {
   bulkUploadEmployees,
+  previewBulkUploadEmployees,
   downloadEmployeeTemplate,
   exportAuditLogs,
   getOfficeSettingsHandler,
@@ -19,6 +20,7 @@ import {
   confirmWeekAttendance,
   unconfirmWeekAttendance,
   listAuditLogs,
+  exportAuditLogs,
   getEmployee,
   getEmployeeStats,
   listEmployees,
@@ -128,6 +130,12 @@ router.post(
   requirePermission(PERMISSIONS.USERS_WRITE),
   singleFileUpload(upload),
   asyncHandler(bulkUploadEmployees),
+);
+router.post(
+  '/users/bulk-preview',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  singleFileUpload(upload),
+  asyncHandler(previewBulkUploadEmployees),
 );
 router.get('/users/:id', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(getEmployee));
 

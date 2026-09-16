@@ -223,7 +223,7 @@ test('approve → undo → reject → only the final rejection is emailed with t
     manager,
     MANAGER_PERMS,
     'approve',
-    {},
+    { comment: 'Approved. Good work planned.' },
   );
   assert.equal(stagedApprove.pendingAction, 'approved');
   assert.equal(stagedApprove.status, 'pending', 'status frozen during undo window');
@@ -259,9 +259,9 @@ test('double approve resolves to one staged decision; loser gets 409', async () 
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
 
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await assert.rejects(
-    decideCompOffRequest(created.id, admin2, ADMIN_PERMS, 'approve', {}),
+    decideCompOffRequest(created.id, admin2, ADMIN_PERMS, 'approve', { comment: 'Approved. Good work planned.' }),
     (err) => err.statusCode === 409,
   );
   const live = await CompOffRequest.findById(created.id).lean();
@@ -273,7 +273,7 @@ test('undo past expiry returns 410; finalize commits the staged outcome exactly 
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
 
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   // Force the undo window closed: decision window is ~15s.
   await CompOffRequest.updateOne(
     { _id: created.id },
@@ -297,7 +297,7 @@ test('stale pendingRevision items are skipped by the finalizer without state or 
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
 
   // Simulate a newer revision superseding the staged one (e.g. an undo landed
   // and a fresh action was staged) with stale timing still due.
@@ -326,20 +326,20 @@ test('scope enforcement: non-manager approve 403, other-manager 403, admin read_
   await runCompOffSweep(FUTURE);
 
   await assert.rejects(
-    decideCompOffRequest(created.id, employee, EMPLOYEE_PERMS, 'approve', {}),
+    decideCompOffRequest(created.id, employee, EMPLOYEE_PERMS, 'approve', { comment: 'Approved. Good work planned.' }),
     (err) => err.statusCode === 403,
   );
   await assert.rejects(
-    decideCompOffRequest(created.id, otherManager, MANAGER_PERMS, 'approve', {}),
+    decideCompOffRequest(created.id, otherManager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' }),
     (err) => err.statusCode === 403,
   );
-  const staged = await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  const staged = await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   assert.equal(staged.pendingAction, 'approved');
 
   // Admin with read_all may act on any request.
   const second = await submitCompOff(employee, nextWeekendKey(satKey));
   await runCompOffSweep(FUTURE);
-  const adminActed = await decideCompOffRequest(second.id, otherManager, ADMIN_PERMS, 'approve', {});
+  const adminActed = await decideCompOffRequest(second.id, otherManager, ADMIN_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   assert.equal(adminActed.pendingAction, 'approved');
 });
 
@@ -417,7 +417,7 @@ test('happy path: manager notified after submit, employee after approve, credit 
   assert.ok(testSmsOutbox[0].message.includes('for comp off'), testSmsOutbox[0].message);
 
   // Manager approves → employee notified only after finalize.
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   assert.equal(await countNotifications('comp_off_decision'), 0, 'no notify while undoable');
   await runCompOffSweep(FUTURE);
   const approvedDoc = await CompOffRequest.findById(created.id).lean();
@@ -460,11 +460,11 @@ test('half assessment credits days × 0.5; none credits 0 — both still notify'
   const { manager, employee, satKey, sunKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey, sunKey); // 2 days
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
 
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'half', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'half', { comment: 'Assessment: half work.' });
   await runCompOffSweep(FUTURE);
   const coType = await LeaveType.findOne({ code: 'CO' });
   let balance = await LeaveBalance.findOne({ userId: employee._id, leaveTypeId: coType._id });
@@ -473,11 +473,11 @@ test('half assessment credits days × 0.5; none credits 0 — both still notify'
   const secondSat = nextWeekendKey(sunKey);
   const created2 = await submitCompOff(employee, secondSat);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created2.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created2.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created2.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
 
-  await assessCompOffWork(created2.id, manager, MANAGER_PERMS, 'none', {});
+  await assessCompOffWork(created2.id, manager, MANAGER_PERMS, 'none', { comment: 'Assessment: no work.' });
   await runCompOffSweep(FUTURE);
   const assessed2 = await CompOffRequest.findById(created2.id).lean();
   assert.equal(assessed2.status, 'assessed', 'none still finalizes to assessed');
@@ -491,11 +491,11 @@ test('assess undo inside the window restores assessable state with no credit', a
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
 
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' });
   const undone = await undoCompOffAssessment(created.id, manager, MANAGER_PERMS);
   assert.equal(undone.pendingAction, null);
   assert.equal(undone.status, 'worked');
@@ -510,10 +510,10 @@ test('assessing a non-worked request returns 409', async () => {
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await assert.rejects(
-    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {}),
+    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' }),
     (err) => err.statusCode === 409 && /checked out/.test(err.message),
   );
 });
@@ -522,12 +522,15 @@ test('lapse: approved request without check-in lapses silently after holiday + 1
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'approved');
 
-  // No check-in ever happened. Advance well past the holiday + following day.
-  await runCompOffSweep(new Date(Date.now() + 5 * 24 * 60 * 60 * 1000));
+  // No check-in ever happened. Advance past the comp-off day + the day after
+  // (lapse boundary: endDate < startOfDay(now) − 1d). Use the fixture's
+  // satKey so the test works regardless of which day the suite runs on.
+  const satIST = parseDateInputAsISTDay(satKey);
+  await runCompOffSweep(new Date(satIST.getTime() + 2 * 24 * 60 * 60 * 1000));
   const live = await CompOffRequest.findById(created.id).lean();
   assert.equal(live.status, 'lapsed');
   assert.equal(await countNotifications(), 2, 'only submit + decision notifications exist');
@@ -541,10 +544,10 @@ test('available balance includes compOffEarned and CO leave consumes it', async 
   const { manager, employee, satKey, sunKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey, sunKey); // 2 days
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' });
   await runCompOffSweep(FUTURE);
 
   const coType = await LeaveType.findOne({ code: 'CO' });
@@ -581,7 +584,7 @@ test('lapse boundary is exact to the millisecond (startOfDayIST math)', async ()
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'approved');
 
@@ -673,7 +676,7 @@ test('self-approval is forbidden even with approve permission', async () => {
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
   await assert.rejects(
-    decideCompOffRequest(created.id, employee, [...EMPLOYEE_PERMS, PERMISSIONS.LEAVE_APPROVE], 'approve', {}),
+    decideCompOffRequest(created.id, employee, [...EMPLOYEE_PERMS, PERMISSIONS.LEAVE_APPROVE], 'approve', { comment: 'Approved. Good work planned.' }),
     (err) => err.statusCode === 403,
   );
   assert.equal((await CompOffRequest.findById(created.id).lean()).pendingAction, null);
@@ -683,10 +686,10 @@ test('inactive CO type fails assess finalize cleanly and recovers after reactiva
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' });
   await LeaveType.updateOne({ code: 'CO' }, { $set: { isActive: false } });
 
   const failed = await runCompOffSweep(FUTURE);
@@ -707,10 +710,10 @@ test('assess-undo past expiry is rejected; finalize still credits exactly once',
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' });
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { undoExpiresAt: new Date(Date.now() - 1000) } });
 
   await assert.rejects(
@@ -729,13 +732,13 @@ test('double assess stages once; the loser gets 409', async () => {
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
 
   const results = await Promise.allSettled([
-    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {}),
-    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'half', {}),
+    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' }),
+    assessCompOffWork(created.id, manager, MANAGER_PERMS, 'half', { comment: 'Assessment: half work.' }),
   ]);
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
   const rejected = results.filter((r) => r.status === 'rejected');
@@ -764,10 +767,10 @@ test('cross-year request credits the worked-year CO balance', async () => {
   });
   assert.equal(created.days, 2);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne({ _id: created.id }, { $set: { status: 'worked', checkoutRecordId: new mongoose.Types.ObjectId() } });
-  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', {});
+  await assessCompOffWork(created.id, manager, MANAGER_PERMS, 'completed', { comment: 'Great work. Full credit.' });
   await runCompOffSweep(FUTURE);
 
   const coType = await LeaveType.findOne({ code: 'CO' });
@@ -865,7 +868,7 @@ test('decision-login auto-logs-in, redirects to the comp-off queue, stays reusab
   assert.equal(second.statusCode, 302);
 
   // Deciding clears tokens: the link dies with a 410 afterwards.
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   const dead = mockLoginRes();
   await compOffDecisionLoginHandler(
     { query: { request: String(created.id), action: 'decide', token: raw } },
@@ -945,7 +948,7 @@ test('double withdraw and manager decide during staged withdraw both lose with 4
     (err) => err.statusCode === 409,
   );
   await assert.rejects(
-    decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {}),
+    decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' }),
     (err) => err.statusCode === 409,
   );
   // The staged withdrawal itself is untouched by the losers.
@@ -1008,7 +1011,7 @@ test('withdraw before finalize kills Take Action links issued at submit finalize
 async function driveToWorked(manager, employee, satKey, sunKey) {
   const created = await submitCompOff(employee, satKey, sunKey);
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   await runCompOffSweep(FUTURE);
   await CompOffRequest.updateOne(
     { _id: created.id },

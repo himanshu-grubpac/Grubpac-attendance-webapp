@@ -23,6 +23,7 @@ import {
   leaveDecisionLinkPageHandler,
   leaveDecisionLoginHandler,
   deleteHolidayCategory,
+  deleteRecurringRuleHolidays,
   editLeaveRequestHandler,
   encashLeaveBalanceHandler,
   getApprovalsPendingCountsHandler,
@@ -58,6 +59,7 @@ import { compOffDecisionLoginHandler } from '../controllers/compOffController.js
 import {
   batchAdjustLeaveCarriedHandler,
   getLeaveAdjustmentGridHandler,
+  getLeaveAdjustmentHistoryHandler,
 } from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
@@ -268,11 +270,21 @@ router.post(
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(materializeRecurringHolidays),
 );
+router.post(
+  '/holidays/delete-by-rule',
+  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(deleteRecurringRuleHolidays),
+);
 
 router.get(
   '/adjustments/grid',
   requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
   asyncHandler(getLeaveAdjustmentGridHandler),
+);
+router.get(
+  '/adjustments/history/:userId',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  asyncHandler(getLeaveAdjustmentHistoryHandler),
 );
 router.post(
   '/adjustments/batch',

@@ -1,10 +1,9 @@
 /**
  * Team Attendance Today strip scope (integration, real Mongo).
  *
- * A reporting manager (ATTENDANCE_READ_TEAM, no READ_ALL) sees ONLY their own
- * report subtree, transitively (RMs under them AND their teams). Sibling
- * teams under the same superior are never included. Full admins (READ_ALL)
- * still see everyone.
+ * A reporting manager (ATTENDANCE_READ_TEAM, no READ_ALL) sees ONLY their
+ * direct reports in the SAME department. No transitive subtree, no
+ * cross-department, no sibling teams. Full admins (READ_ALL) still see everyone.
  */
 process.env.NODE_ENV = 'test';
 
@@ -44,7 +43,7 @@ async function createRole(slug, permissions) {
   return Role.create({ name: slug, slug: `${slug}-${sequence}`, permissions });
 }
 
-async function createUser(name, { roleId = null, reportingManagerId = null, isActive = true } = {}) {
+async function createUser(name, { roleId = null, reportingManagerId = null, departmentId = null, isActive = true } = {}) {
   sequence += 1;
   return User.create({
     firstName: name,
@@ -56,6 +55,7 @@ async function createUser(name, { roleId = null, reportingManagerId = null, isAc
     role: 'employee',
     roleId,
     reportingManagerId,
+    departmentId,
     isActive,
   });
 }
@@ -81,28 +81,45 @@ async function setupTree() {
 
 const idsOf = (rows) => rows.map((m) => String(m.userId));
 
-test('mid-level RM sees own subtree only, siblings and boss hidden', async () => {
+test('mid-level RM sees direct reports only, siblings/boss/indirect hidden', async () => {
   const { mid, boss, emp, subRm, subEmp, sibRm, sibEmp, otherBoss, otherEmp } = await setupTree();
   const rows = await getTeamTodayStatusService(mid, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  for (const u of [emp, subRm, subEmp]) {
+  for (const u of [emp, subRm]) {
     assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
   }
-  for (const u of [mid, boss, sibRm, sibEmp, otherBoss, otherEmp]) {
+  for (const u of [mid, boss, subEmp, sibRm, sibEmp, otherBoss, otherEmp]) {
     assert.ok(!seen.has(String(u._id)), `hidden: ${u.name}`);
   }
 });
 
-test('top boss sees whole subtree, other branch hidden', async () => {
+test('top boss sees direct reports only, indirect/other branch hidden', async () => {
   const { boss, mid, emp, subRm, subEmp, sibRm, sibEmp, otherBoss, otherEmp } = await setupTree();
   const rows = await getTeamTodayStatusService(boss, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  for (const u of [mid, emp, subRm, subEmp, sibRm, sibEmp]) {
+  for (const u of [mid, sibRm]) {
     assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
   }
-  for (const u of [boss, otherBoss, otherEmp]) {
+  for (const u of [boss, emp, subRm, subEmp, sibEmp, otherBoss, otherEmp]) {
     assert.ok(!seen.has(String(u._id)), `hidden: ${u.name}`);
   }
+});
+
+test('RM sees only same-department direct reports, cross-department hidden', async () => {
+  const rmRole = await createRole('rmdept', RM_PERMS);
+  const empRole = await createRole('empdept', []);
+  const deptA = new mongoose.Types.ObjectId();
+  const deptB = new mongoose.Types.ObjectId();
+  const mgr = await createUser('DeptMgr', { roleId: rmRole._id, departmentId: deptA });
+  const same = await createUser('SameDept', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptA });
+  const other = await createUser('OtherDept', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptB });
+  const nostaff = await createUser('NoDept', { roleId: empRole._id, reportingManagerId: mgr._id });
+  // NoDept has null department — will appear only if manager also has null dept; here mgr has deptA so it is hidden.
+  const rows = await getTeamTodayStatusService(mgr, RM_PERMS);
+  const seen = new Set(idsOf(rows));
+  assert.ok(seen.has(String(same._id)), 'same department visible');
+  assert.ok(!seen.has(String(other._id)), 'other department hidden');
+  assert.ok(!seen.has(String(nostaff._id)), 'null department hidden when manager has dept');
 });
 
 test('read-all admins still see everyone', async () => {

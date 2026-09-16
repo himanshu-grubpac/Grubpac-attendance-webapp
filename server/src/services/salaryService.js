@@ -678,8 +678,8 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '' })
 
   const [employees, total] = await Promise.all([
     User.find(query)
-      .select('name employeeCode departmentId department designation monthlySalary salaryEffectiveFrom')
-      .populate('departmentId', 'name')
+      .select('name employeeCode department departmentId designation monthlySalary salaryEffectiveFrom')
+      .populate('departmentId', 'name code')
       // _id tiebreaker keeps offset pagination stable when names tie.
       .sort({ name: 1, _id: 1 })
       .skip(skip)
@@ -692,7 +692,10 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '' })
       id: employee._id.toString(),
       name: employee.name,
       employeeCode: employee.employeeCode ?? null,
+      // Live department name from the Department master; legacy text fallback.
       department: employee.departmentId?.name ?? employee.department ?? null,
+      departmentId: employee.departmentId?._id?.toString() ?? employee.departmentId?.toString?.() ?? null,
+      departmentName: employee.departmentId?.name ?? null,
       designation: employee.designation ?? null,
       monthlySalary: employee.monthlySalary ?? null,
       salaryEffectiveFrom: employee.salaryEffectiveFrom ?? null,

@@ -128,7 +128,7 @@ async function createApprovedCompOffToday(employee, manager) {
     reason: 'Working today for comp off',
   });
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved.' });
   await runCompOffSweep(FUTURE);
   return CompOffRequest.findById(created.id).lean();
 }
@@ -260,7 +260,7 @@ test('approved comp-off on an active-holiday weekday also opens the gate', async
     reason: 'Working the holiday',
   });
   await runCompOffSweep(FUTURE);
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved.' });
   await runCompOffSweep(FUTURE);
   const allowed = await markAttendance(approvedEmployee._id, 'check_in', geoPayload({ attendanceMode: 'office' }), {});
   assert.equal(allowed.status, 'allowed', allowed.rejectionReasons?.join(' | '));
@@ -283,7 +283,7 @@ test('end-to-end: submit → approve → real check-in/out → assess → credit
     'manager notified once after submit finalize',
   );
 
-  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', {});
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved.' });
   await runCompOffSweep(FUTURE);
   assert.equal(
     testEmailOutbox.filter((m) => m.tag === 'comp-off-status').length,

@@ -64,7 +64,7 @@ export default function EmployeeLeaveBalances() {
             description="Balances appear once leave policies are assigned to your account."
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive leave-balances-table-wrap">
             <table className="table data-table">
               <thead>
                 <tr>

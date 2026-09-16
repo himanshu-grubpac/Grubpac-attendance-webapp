@@ -6,6 +6,7 @@ import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { showFormError } from '../../utils/formErrors.js';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 import RequestsTabs from '../../components/RequestsTabs.jsx';
@@ -179,6 +180,7 @@ export default function AdminCompOffRequests() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const alertRef = useRef(null);
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
@@ -307,7 +309,7 @@ export default function AdminCompOffRequests() {
     const item = decisionModal.item || requests.find((r) => r.id === id);
     const note = (decisionModal.comment ?? '').trim();
     if (!note) {
-      showError('A remark is required for this action.');
+      showFormError({ setError, alertRef, message: 'A remark is required for this action.' });
       return;
     }
     const payload = { comment: note };
@@ -358,7 +360,7 @@ export default function AdminCompOffRequests() {
     if (!item) return;
     const remark = (assessment.comment ?? '').trim();
     if (!remark) {
-      setError('A remark is required to record the assessment.');
+      showFormError({ setError, alertRef, message: 'A remark is required to record the assessment.' });
       return;
     }
     setActingId(item.id);
@@ -456,7 +458,11 @@ export default function AdminCompOffRequests() {
           </div>
         </div>
 
-        {error ? <div className="alert alert--error">{error}</div> : null}
+        {error ? (
+          <div className="alert alert--error" ref={alertRef} tabIndex={-1}>
+            {error}
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="skeleton-stack">

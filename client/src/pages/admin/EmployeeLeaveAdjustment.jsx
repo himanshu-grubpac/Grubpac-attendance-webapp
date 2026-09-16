@@ -8,6 +8,7 @@ import PaginationBar from '../../components/PaginationBar.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import LeaveAdjustmentBulkUploadModal from './LeaveAdjustmentBulkUploadModal.jsx';
+import LeaveBalanceHistoryModal from './LeaveBalanceHistoryModal.jsx';
 
 const PAGE_SIZE_OPTIONS = [
   { value: '10', label: '10 / page' },
@@ -116,6 +117,8 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
   const [bulkEditMode, setBulkEditMode] = useState(false);
   // Task 3: bulk upload modal visibility.
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  // Carry-forward history drawer (read-only, per employee).
+  const [historyUser, setHistoryUser] = useState(null);
 
   const originalRef = useRef(new Map());
   const editedRef = useRef(new Map());
@@ -227,6 +230,29 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
       return editedRef.current.get(key);
     }
     return originalRef.current.get(key) ?? 0;
+  }
+
+  function getBalanceInfo(row, leaveTypeId) {
+    return row.carriedByLeaveType?.[leaveTypeId] ?? {};
+  }
+
+  // Available moves 1:1 with carried, so the sub-line stays exact while the
+  // admin steps carried up/down (refreshed from the server on save).
+  function getLiveAvailable(row, leaveTypeId, displayedCarried) {
+    const key = adjustmentKey(row.id, leaveTypeId);
+    const info = getBalanceInfo(row, leaveTypeId);
+    const originalCarried = originalRef.current.get(key) ?? info.carried ?? 0;
+    return (info.available ?? 0) + (displayedCarried - originalCarried);
+  }
+
+  function getBalanceBreakdown(row, leaveTypeId, displayedCarried, liveAvailable) {
+    const info = getBalanceInfo(row, leaveTypeId);
+    return (
+      `Entitled ${formatCarried(info.entitled ?? 0)} + Carried ${formatCarried(displayedCarried)}` +
+      ` + Comp-off ${formatCarried(info.compOffEarned ?? 0)} − Used ${formatCarried(info.used ?? 0)}` +
+      ` − Pending ${formatCarried(info.pending ?? 0)} − Encashed ${formatCarried(info.encashed ?? 0)}` +
+      ` = Available ${formatCarried(liveAvailable)}`
+    );
   }
 
   function getRowDirtyCount(rowId) {
@@ -585,6 +611,8 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
                       const isDirty =
                         editedRef.current.has(key) &&
                         editedRef.current.get(key) !== originalRef.current.get(key);
+                      const displayedCarried = getDisplayedCarried(row.id, leaveType.id);
+                      const liveAvailable = getLiveAvailable(row, leaveType.id, displayedCarried);
                       return (
                         <td
                           key={leaveType.id}
@@ -593,7 +621,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
                         >
                           {editable ? (
                             <CarriedStepper
-                              value={getDisplayedCarried(row.id, leaveType.id)}
+                              value={displayedCarried}
                               disabled={busy || loading}
                               onChange={(nextValue) =>
                                 updateCarried(row.id, leaveType.id, nextValue)
@@ -602,11 +630,18 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
                           ) : (
                             <span
                               className="leave-adjustment-table__value"
-                              aria-label={`${leaveType.code} carried days: ${formatCarried(getDisplayedCarried(row.id, leaveType.id))}`}
+                              aria-label={`${leaveType.code} carried days: ${formatCarried(displayedCarried)}`}
                             >
-                              {formatCarried(getDisplayedCarried(row.id, leaveType.id))}
+                              {formatCarried(displayedCarried)}
                             </span>
                           )}
+                          <span
+                            className={`leave-adjustment-table__available${liveAvailable < 0 ? ' leave-adjustment-table__available--negative' : ''}`}
+                            title={getBalanceBreakdown(row, leaveType.id, displayedCarried, liveAvailable)}
+                            aria-label={`${leaveType.code} available days: ${formatCarried(liveAvailable)}`}
+                          >
+                            Avl {formatCarried(liveAvailable)}
+                          </span>
                         </td>
                       );
                     })}
@@ -646,19 +681,30 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-ghost"
-                          onClick={() => handleEditRow(row.id)}
-                          disabled={busy || loading || editingRowId != null}
-                          title={
-                            editingRowId != null
-                              ? 'Finish the current row edit first'
-                              : `Edit carried balances for ${row.name}`
-                          }
-                        >
-                          Edit
-                        </button>
+                        <div className="leave-adjustment-table__row-actions">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => handleEditRow(row.id)}
+                            disabled={busy || loading || editingRowId != null}
+                            title={
+                              editingRowId != null
+                                ? 'Finish the current row edit first'
+                                : `Edit carried balances for ${row.name}`
+                            }
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setHistoryUser({ id: row.id, name: row.name })}
+                            disabled={busy || loading || editingRowId != null}
+                            title={`View leave balance history for ${row.name}`}
+                          >
+                            History
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -722,6 +768,13 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
         policyYear={policyYear}
         departmentId={departmentId}
         onImported={loadGrid}
+      />
+
+      <LeaveBalanceHistoryModal
+        userId={historyUser?.id ?? null}
+        userName={historyUser?.name ?? ''}
+        policyYear={policyYear}
+        onClose={() => setHistoryUser(null)}
       />
 
       {confirmDialog}

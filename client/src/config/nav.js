@@ -127,6 +127,7 @@ export const NAV_ITEMS = [
     section: 'Employees',
     portal: 'admin',
     permission: PERMISSIONS.HELP_MANAGE,
+    excludeIfAllPermissions: [PERMISSIONS.USERS_WRITE],
   },
   {
     to: '/admin/leave/policies',
@@ -311,6 +312,10 @@ export function getVisibleNavItems(user, loginPortal) {
       return false;
     }
 
+    if (item.excludeIfAllPermissions?.length && hasAllPermissions(permissions, item.excludeIfAllPermissions)) {
+      return false;
+    }
+
     if (item.allPermissions?.length) {
       return hasAllPermissions(permissions, item.allPermissions);
     }
@@ -396,6 +401,9 @@ const ADMIN_BOTTOM_NAV = [
 ];
 
 function navItemAllowed(item, permissions) {
+  if (item.excludeIfAllPermissions?.length && hasAllPermissions(permissions, item.excludeIfAllPermissions)) {
+    return false;
+  }
   if (item.allPermissions?.length) {
     return item.allPermissions.every((p) => hasPermission(permissions, p));
   }
@@ -513,8 +521,11 @@ export function isMoreNavActive(pathname, user, loginPortal) {
   );
 }
 
-export function canAccessRoute(user, { permission, anyPermission, allPermissions } = {}) {
+export function canAccessRoute(user, { permission, anyPermission, allPermissions, excludeIfAllPermissions } = {}) {
   const permissions = user?.permissions ?? [];
+  if (excludeIfAllPermissions?.length && hasAllPermissions(permissions, excludeIfAllPermissions)) {
+    return false;
+  }
   if (allPermissions?.length) {
     return allPermissions.every((item) => hasPermission(permissions, item));
   }

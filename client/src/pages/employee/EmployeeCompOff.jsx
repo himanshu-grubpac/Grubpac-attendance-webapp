@@ -145,10 +145,18 @@ export default function EmployeeCompOff() {
     [eligibleByYear, loadEligible],
   );
 
-  // Settle polling while any row carries a staged action.
+  // Settle polling while any row carries a staged action. Also refresh the CO
+  // balance pill when staged rows settle — assessment credit lands in
+  // leaveBalance.compOffEarned only after finalize, so the pill must re-read.
   const settlePollsRef = useRef(0);
+  const prevHadStagedRef = useRef(false);
   useEffect(() => {
-    if (!requests.some((item) => item.pendingAction)) {
+    const hasStaged = requests.some((item) => item.pendingAction);
+    if (prevHadStagedRef.current && !hasStaged) {
+      loadBalances();
+    }
+    prevHadStagedRef.current = hasStaged;
+    if (!hasStaged) {
       settlePollsRef.current = 0;
       return undefined;
     }
@@ -412,7 +420,7 @@ export default function EmployeeCompOff() {
             description="Request approval before working a weekend or holiday."
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive">
+          <div className="table-wrap table-wrap--responsive my-comp-off-table-wrap">
             <table className="table data-table">
               <thead>
                 <tr>
