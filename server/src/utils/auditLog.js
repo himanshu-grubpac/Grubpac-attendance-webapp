@@ -132,6 +132,14 @@ export function getRequestAuditContext(req) {
  */
 const pendingAuditPersists = new Set();
 
+function stripSensitiveKeys(meta) {
+  const safe = { ...meta };
+  for (const key of SENSITIVE_KEYS) {
+    delete safe[key];
+  }
+  return safe;
+}
+
 /**
  * Best-effort backfill of actor identity. Controllers should pass email/role
  * explicitly (see auditRequest), but any call that only knows the user id

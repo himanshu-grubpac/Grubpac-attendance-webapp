@@ -20,7 +20,6 @@ import {
   confirmWeekAttendance,
   unconfirmWeekAttendance,
   listAuditLogs,
-  exportAuditLogs,
   getEmployee,
   getEmployeeStats,
   listEmployees,

@@ -109,6 +109,22 @@ export function applyEmployeeDateRangeRules(data, ctx) {
       message: 'Ending date must be on or after joining date.',
     });
   }
+
+  const today = getTodayIstDateInput();
+  if (data.joiningDate && data.joiningDate > today) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['joiningDate'],
+      message: 'Joining date cannot be in the future.',
+    });
+  }
+  if (data.endingDate && data.endingDate > today) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['endingDate'],
+      message: 'Ending date cannot be in the future.',
+    });
+  }
 }
 
 /** Optional DOB must be a reasonable past date (IST calendar day). */

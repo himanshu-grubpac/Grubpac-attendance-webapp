@@ -37,6 +37,7 @@ import { sendWelcomeEmail } from './emailService.js';
 
 export { normalizeMobile };
 
+const ID_COLUMN_FILL = 'FFFFFBF0';
 const BULK_EXPORT_HEADERS = [
   'firstName',
   'lastName',

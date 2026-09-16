@@ -9,9 +9,7 @@ import { OfficeSettings } from '../models/OfficeSettings.js';
 import { WeekAttendanceConfirmation } from '../models/WeekAttendanceConfirmation.js';
 import {
   buildEmployeeDirectoryWorkbook,
-  buildEmployeeTemplateWorkbook,
   createEmployee,
-  importEmployeesFromRows,
   importEmployeesFromRowsUpsert,
   parseEmployeeWorkbook,
 } from '../services/excelImportService.js';
@@ -20,7 +18,7 @@ import {
   getQuarterWarningSummaryForUsers,
   resetQuarterWarningsForUsers,
 } from '../services/attendancePolicyService.js';
-import { officeSchema, officeUpdateSchema } from '../../../shared/validation/office.js';
+import { officeUpdateSchema } from '../../../shared/validation/office.js';
 import { paginationSchema, objectIdSchema } from '../../../shared/validation/common.js';
 import { adminResetPasswordSchema, adminResetPinSchema } from '../../../shared/validation/auth.js';
 import {
@@ -83,9 +81,6 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
 import { auditRequest, auditRequestSync } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
-import { sendEmail, isEmailConfigured, renderWelcomeEmployeeEmail } from '../services/emailService.js';
-import { generatePassword } from '../../../shared/utils/generatePassword.js';
-
 const attendanceQuerySchema = paginationSchema
   .extend({
     userId: objectIdSchema.optional(),
@@ -703,8 +698,8 @@ export async function bulkUploadEmployees(req, res) {
       id: item.id || null,
       email: item.email || null,
       status: item.status,
-      emailSent: emailStatusMap.get(item.email)?.emailSent ?? undefined,
-      emailError: emailStatusMap.get(item.email)?.emailError ?? undefined,
+      emailSent: item.emailStatus === 'sent',
+      emailError: item.emailStatus === 'failed',
       changedFields: item.changedFields ?? [],
       ignoredFields: item.ignoredFields ?? [],
     }));
@@ -718,7 +713,7 @@ export async function bulkUploadEmployees(req, res) {
   });
 
   delete result.createdEmployees;
-  res.status(201).json({ summary: result.summary, results: changes, emailResults });
+  res.status(201).json({ summary: result.summary, results: changes });
 }
 
 /**
@@ -953,83 +948,6 @@ export async function resetQuarterWarnings(req, res) {
   res.json(result);
 }
 
-export async function exportAuditLogs(req, res) {
-  const { action, search, date, entityType, actionType, userId, fieldChanged } = req.query;
-  const query = {};
-  if (action) query.action = action;
-  if (entityType) query.entityType = entityType;
-  if (actionType) query.actionType = actionType;
-  if (userId) query.userId = userId;
-  if (fieldChanged) query.fieldChanged = fieldChanged;
-  if (search) query.email = { $regex: escapeRegex(search), $options: 'i' };
-  if (date) {
-    const istDay = parseDateInputAsISTDay(date);
-    if (istDay) {
-      query.timestamp = {
-        $gte: startOfDayIST(istDay),
-        $lte: endOfDayIST(istDay),
-      };
-    }
-  }
-
-  res.setHeader(
-    'Content-Type',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  );
-  res.setHeader(
-    'Content-Disposition',
-    'attachment; filename="audit-logs-export.xlsx"',
-  );
-
-  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-    stream: res,
-    useStyles: false,
-    useSharedStrings: false,
-  });
-  workbook.creator = 'Grubpac Attendance';
-  const sheet = workbook.addWorksheet('Audit Logs');
-
-  sheet.columns = [
-    { header: 'Timestamp', key: 'timestamp', width: 22 },
-    { header: 'Action', key: 'action', width: 28 },
-    { header: 'Action Type', key: 'actionType', width: 14 },
-    { header: 'Actor Email', key: 'email', width: 28 },
-    { header: 'Actor Role', key: 'role', width: 16 },
-    { header: 'Entity Type', key: 'entityType', width: 18 },
-    { header: 'Entity ID', key: 'entityId', width: 24 },
-    { header: 'Field Changed', key: 'fieldChanged', width: 20 },
-    { header: 'Old Value', key: 'oldValue', width: 30 },
-    { header: 'New Value', key: 'newValue', width: 30 },
-    { header: 'Status', key: 'status', width: 10 },
-    { header: 'IP', key: 'ip', width: 16 },
-    { header: 'Device ID', key: 'deviceId', width: 20 },
-    { header: 'User Agent', key: 'userAgent', width: 40 },
-  ];
-
-  const logs = await AuditLog.find(query).sort({ timestamp: -1 }).cursor();
-
-  for await (const log of logs) {
-    sheet.addRow({
-      timestamp: log.timestamp?.toISOString() ?? '',
-      action: log.action ?? '',
-      actionType: log.actionType ?? '',
-      email: log.email ?? '',
-      role: log.role ?? '',
-      entityType: log.entityType ?? '',
-      entityId: log.entityId?.toString() ?? '',
-      fieldChanged: log.fieldChanged ?? '',
-      oldValue: log.oldValue != null ? JSON.stringify(log.oldValue) : '',
-      newValue: log.newValue != null ? JSON.stringify(log.newValue) : '',
-      status: log.status ?? '',
-      ip: log.ip ?? '',
-      deviceId: log.deviceId ?? '',
-      userAgent: log.userAgent ?? '',
-    }).commit();
-  }
-
-  await workbook.commit();
-}
-
 const weekConfirmationSchema = z.object({
   userId: objectIdSchema,
   weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.'),
@@ -1175,8 +1093,7 @@ function mapAuditLogResponse(log, conflict) {
   };
 }
 
-function buildAuditLogQuery({ action, search, date } = {}) {
-  const { entityType, actionType, userId, fieldChanged } = req.query;
+function buildAuditLogQuery({ action, search, date, entityType, actionType, userId, fieldChanged } = {}) {
   const query = {};
   if (action) {
     query.action = action;

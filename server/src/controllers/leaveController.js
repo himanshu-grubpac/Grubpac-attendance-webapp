@@ -245,27 +245,6 @@ export async function updateLeavePolicy(req, res) {
     return res.status(404).json({ message: 'Leave policy not found.' });
   }
 
-  const previousSnapshot = {
-    annualQuota: policy.annualQuota,
-    accrualPerMonth: policy.accrualPerMonth,
-    carryForwardMax: policy.carryForwardMax,
-    maxAccumulation: policy.maxAccumulation,
-    requireDocAfterConsecutiveDays: policy.requireDocAfterConsecutiveDays,
-    paid: policy.paid,
-    encashmentMaxPerYear: policy.encashmentMaxPerYear,
-    combinedCarryGroup: policy.combinedCarryGroup,
-  };
-
-  await LeavePolicyHistory.create({
-    policyId: policy._id,
-    leaveTypeId: policy.leaveTypeId,
-    year: policy.year,
-    ...previousSnapshot,
-    changedBy: req.user._id,
-    changeReason: parsed.changeReason || undefined,
-    snapshot: previousSnapshot,
-  });
-
   const previous = {
     annualQuota: policy.annualQuota,
     accrualPerMonth: policy.accrualPerMonth,

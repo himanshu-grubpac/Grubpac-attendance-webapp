@@ -96,6 +96,18 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
+  if (user.endingDate && new Date(user.endingDate) < new Date()) {
+    auditLog('login_failed', {
+      identifier: parsed.identifier,
+      reason: 'employment_ended',
+      endingDate: user.endingDate,
+      ...loginAuditContext,
+    });
+    const error = new Error('Your employment has ended. Contact your administrator.');
+    error.statusCode = 403;
+    throw error;
+  }
+
   const permissions = resolveUserPermissions(user);
 
   if (portal === 'admin' && !hasAdminPortalAccess(permissions)) {

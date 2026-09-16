@@ -479,7 +479,7 @@ async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
  */
 export async function getEmployeeSalaryHistory(actor, permissions, userId, options = {}) {
   const subject = await User.findById(userId)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate createdAt')
     .lean();
   if (!subject || !subject.isActive) {
     throwError('Employee not found.', 404);
@@ -501,8 +501,20 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
   const currentIstMonth = getISTMonth(istNow);
   const maxMonth = currentIstYear === year ? currentIstMonth : 12;
 
+  // Start month from the employee's onboarding date (createdAt) or joining date
+  const effectiveStartDate = subject.createdAt ?? subject.joiningDate;
+  let minMonth = 1;
+  if (effectiveStartDate) {
+    const startYear = getISTYear(new Date(effectiveStartDate));
+    if (startYear === year) {
+      minMonth = getISTMonth(new Date(effectiveStartDate));
+    } else if (startYear > year) {
+      minMonth = maxMonth + 1;
+    }
+  }
+
   const months = [];
-  for (let m = 1; m <= maxMonth; m++) {
+  for (let m = minMonth; m <= maxMonth; m++) {
     months.push(`${year}-${String(m).padStart(2, '0')}`);
   }
 
@@ -565,6 +577,8 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
       monthlySalary: subject.monthlySalary ?? null,
       salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
       salaryCurrency: 'INR',
+      joiningDate: subject.joiningDate ?? null,
+      createdAt: subject.createdAt ?? null,
     },
     history,
   };

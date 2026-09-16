@@ -1580,9 +1580,19 @@ export async function adminEditAttendanceRecord({
       ? 'pending'
       : 'approved';
   checkInRecord.leaveRequestId = wfhRequestForDay?._id ?? null;
-  checkInRecord.attendanceTag = policyFields.attendanceTag;
-  checkInRecord.warningIssued = policyFields.warningIssued;
-  checkInRecord.quarterWarningIndex = policyFields.quarterWarningIndex;
+
+  // Recalculate warning based on the actual new check-in time
+  const office = await getOfficeSettings();
+  const recalculatedPolicy = await evaluateCheckInPolicy(checkInRecord.userId, newCheckInTs, office);
+  checkInRecord.attendanceTag = payload.statusCode
+    ? policyFields.attendanceTag
+    : recalculatedPolicy.attendanceTag;
+  checkInRecord.warningIssued = payload.statusCode
+    ? policyFields.warningIssued
+    : recalculatedPolicy.warningIssued;
+  checkInRecord.quarterWarningIndex = payload.statusCode
+    ? policyFields.quarterWarningIndex
+    : recalculatedPolicy.quarterWarningIndex;
   checkInRecord.lateNote = payload.lateNote ?? null;
   if (checkInRecord.status === 'rejected') {
     checkInRecord.status = 'allowed';
@@ -1780,6 +1790,9 @@ export async function adminUpsertAttendanceForDay({
   const wfhDecisionPending =
     wfhRequestForDay?.status === 'approved'
     && isLeaveDecisionAwaitingFinalization(wfhRequestForDay.notifyAfter);
+
+  // Recalculate warning based on the actual check-in time
+  const recalculatedPolicy = await evaluateCheckInPolicy(userId, newCheckInTs, office);
 
   const checkInRecord = await AttendanceRecord.create({
     userId,
