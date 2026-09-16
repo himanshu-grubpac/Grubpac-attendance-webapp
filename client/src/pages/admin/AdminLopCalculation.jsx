@@ -266,7 +266,7 @@ export default function AdminLopCalculation() {
                     <th>Employee name</th>
                     <th className="salary-table__num">Total salary</th>
                     <th className="salary-table__num">This month</th>
-                    <th className="cell-actions-col--text">LOP</th>
+                    <th className="cell-actions-col--text">Loss of Pay</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -306,7 +306,7 @@ export default function AdminLopCalculation() {
                             </div>
                           ) : null}
                         </td>
-                        <td data-label="LOP" className="cell-actions">
+                        <td data-label="Loss of Pay" className="cell-actions">
                           <div className="cell-actions__group">
                             <button
                               type="button"
