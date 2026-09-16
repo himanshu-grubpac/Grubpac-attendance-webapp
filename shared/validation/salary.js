@@ -101,3 +101,30 @@ export const salaryAuditExportQuerySchema = z.object({
   periodKey: monthInputSchema,
   departmentId: objectIdSchema.optional(),
 });
+
+export const asOfDateInputSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'As-of date must be YYYY-MM-DD.')
+  .optional();
+
+export const lopListQuerySchema = z.object({
+  month: monthInputSchema,
+  asOf: asOfDateInputSchema,
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const lopDetailQuerySchema = z.object({
+  month: monthInputSchema,
+  asOf: asOfDateInputSchema,
+});
+
+export const lopDetailParamsSchema = z.object({
+  userId: objectIdSchema,
+});
+
+export const lopExportQuerySchema = z.object({
+  month: monthInputSchema,
+  asOf: asOfDateInputSchema,
+});

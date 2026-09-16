@@ -6,10 +6,9 @@ import { LeaveRequest } from '../models/LeaveRequest.js';
 import { User } from '../models/User.js';
 import { getISTYear } from '../utils/istDate.js';
 import {
-  computeMonthlySalarySummary,
+  computePerDaySalary,
   generatePendingSalaryTransfers,
   loadPaidLeaveTypeIds,
-  unionWfhLeaveTypeId,
 } from './salaryService.js';
 import {
   ensureBalancesForUser,
@@ -405,10 +404,9 @@ export async function settleMonthPayroll(periodKey, actorId) {
           paidQuotaByTypeId,
         );
 
-        // Calculate perDaySalary for deduction amounts
-        const workingDaysInMonth = countWorkingDaysIST(start, end, holidayDates);
+        // Fixed 30-day divisor for settlement deduction amounts (team-lead spec).
         const monthlySalary = employee.monthlySalary ?? 0;
-        const perDaySalary = workingDaysInMonth > 0 ? roundMoney(monthlySalary / workingDaysInMonth) : 0;
+        const perDaySalary = computePerDaySalary(monthlySalary) ?? 0;
 
         if (lopCauses.length > 0) {
           const employeeLopDays = lopCauses.reduce((sum, c) => sum + c.lopDays, 0);

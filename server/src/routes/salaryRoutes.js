@@ -3,14 +3,18 @@ import { PERMISSIONS } from '../../../shared/permissions.js';
 import { authenticate, requireAllPermissions, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
+  exportLopBulkHandler,
+  exportLopSingleHandler,
   exportSalaryAuditHandler,
   exportSalaryHandler,
   generateSalaryTransfersHandler,
+  getLopDetailHandler,
   getSalaryAuditHandler,
   getSalaryHistoryHandler,
   getSalarySettingsHandler,
   getSalarySummaryHandler,
   getUserSalaryHandler,
+  listLopSummariesHandler,
   listSalaryStructureHandler,
   listSalarySummariesHandler,
   listSalaryTransfersHandler,
@@ -130,6 +134,33 @@ router.get(
   '/audit/export',
   requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
   asyncHandler(exportSalaryAuditHandler),
+);
+
+// LOP list — company-wide admin bar (same as /summaries).
+router.get(
+  '/lop/summaries',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(listLopSummariesHandler),
+);
+
+// LOP bulk export — same admin bar as list.
+router.get(
+  '/lop/export',
+  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  asyncHandler(exportLopBulkHandler),
+);
+
+// Single employee LOP detail — scoped like /summary and /audit.
+router.get(
+  '/lop/:userId/export',
+  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  asyncHandler(exportLopSingleHandler),
+);
+
+router.get(
+  '/lop/:userId',
+  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  asyncHandler(getLopDetailHandler),
 );
 
 export default router;

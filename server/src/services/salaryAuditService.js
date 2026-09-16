@@ -7,6 +7,7 @@ import { SalaryTransfer } from '../models/SalaryTransfer.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
+import { LeaveType } from '../models/LeaveType.js';
 import { Department } from '../models/Department.js';
 import {
   getISTYear,
@@ -20,7 +21,9 @@ import {
 import {
   loadPaidLeaveTypeIds,
   buildPaidLeaveDayMap,
-  computeDailyCappedPayableDays,
+  buildUnpaidLeaveDayMap,
+  computeMtdSalaryMetrics,
+  resolveSalaryAsOfDate,
   salaryAppliesForMonth,
 } from './salaryService.js';
 import { getHolidayDateSet } from './leaveService.js';
@@ -166,18 +169,24 @@ async function bulkFetchDepartments(departmentIds) {
  * @param {object} bulkData - pre-fetched data maps
  * @returns {object} salary summary
  */
-function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
-  const range = parseMonthInputAsISTRange(monthInput);
-  if (!range) {
+function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData, options = {}) {
+  const resolved = resolveSalaryAsOfDate(monthInput, options.asOfDate);
+  if (!resolved) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const { year, monthKey, start, end } = range;
-  const { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser } = bulkData;
+  const { monthKey, start, end, asOfDateKey } = resolved;
+  const {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById = new Map(),
+  } = bulkData;
 
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
-  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
   const userId = user._id.toString();
   const userAttendance = attendanceByUser.get(userId) ?? new Map();
@@ -191,9 +200,6 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     ]),
   );
 
-  const presentDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (userAttendance.get(day) ?? 0), 0),
-  );
   const paidLeaveByDay = buildPaidLeaveDayMap(
     userRequests,
     start,
@@ -202,27 +208,27 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     paidTypeIds,
     paidQuotaByTypeId,
   );
-  const paidLeaveDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  const unpaidLeaveByDay = buildUnpaidLeaveDayMap(
+    userRequests,
+    start,
+    end,
+    holidayDates,
+    paidTypeIds,
+    paidQuotaByTypeId,
+    leaveTypeCodeById,
   );
-  const payableDays = computeDailyCappedPayableDays(
-    workingDayList,
-    userAttendance,
-    paidLeaveByDay,
-  );
-  const lopDays = Math.max(0, workingDaysInMonth - payableDays);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
-  let perDaySalary = null;
-  let payableEstimate = null;
-  let lopDeduction = null;
-  if (monthlySalary != null && workingDaysInMonth > 0) {
-    perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
-    payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
-    lopDeduction = roundMoney(lopDays * perDaySalary);
-  }
+  const mtdMetrics = computeMtdSalaryMetrics({
+    monthlySalary,
+    workingDayList,
+    attendanceCreditByDay: userAttendance,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    asOfDateKey,
+  });
 
   return {
     month: monthKey,
@@ -233,13 +239,14 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
     workingDaysInMonth,
-    presentDays,
-    paidLeaveDays,
-    payableDays,
-    lopDays,
-    lopDeduction,
-    perDaySalary,
-    payableEstimate,
+    presentDays: mtdMetrics.presentDays,
+    paidLeaveDays: mtdMetrics.paidLeaveDays,
+    payableDays: mtdMetrics.payableDays,
+    lopDays: mtdMetrics.lopDays,
+    lopDeduction: mtdMetrics.lopDeduction,
+    perDaySalary: mtdMetrics.perDaySalary,
+    payableEstimate: mtdMetrics.payableEstimate,
+    asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
 }
@@ -452,15 +459,27 @@ async function fetchSalaryTransfersByPeriod(userId, periodKeys) {
 async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
   const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
-  const [holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser] = await Promise.all([
+  const [holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser, leaveTypes] = await Promise.all([
     getHolidayDateSet(year),
     loadPaidLeaveTypeIds(year),
     bulkFetchAttendanceByUser(userIds, monthStart, monthEnd),
     bulkFetchLeaveBalancesByUser(userIds, year),
     bulkFetchLeaveRequestsByUser(userIds, yearStart, monthEnd),
+    LeaveType.find({ isActive: true }).select('_id code').lean(),
   ]);
 
-  return { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser };
+  const leaveTypeCodeById = new Map(
+    leaveTypes.map((leaveType) => [leaveType._id.toString(), leaveType.code]),
+  );
+
+  return {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById,
+  };
 }
 
 // ── API: Employee salary history ──────────────────────────────────────

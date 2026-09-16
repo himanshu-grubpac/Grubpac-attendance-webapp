@@ -5,6 +5,10 @@ import {
   salaryExportQuerySchema,
   salaryHistoryParamsSchema,
   salaryHistoryQuerySchema,
+  lopDetailParamsSchema,
+  lopDetailQuerySchema,
+  lopExportQuerySchema,
+  lopListQuerySchema,
   salaryStructureQuerySchema,
   salarySummaryQuerySchema,
   salaryTransferListQuerySchema,
@@ -16,20 +20,27 @@ import {
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
 import { auditLog } from '../utils/auditLog.js';
 import {
+  buildLopExportWorkbook,
   buildSalaryExportWorkbook,
   buildSalaryMonthMeta,
+  computeMonthlySalarySummary,
   generatePendingSalaryTransfers,
+  getLopDetailForUser,
   getSalarySettingsPayload,
   getSalarySummaryForUser,
+  listAllLopSummariesForMonth,
+  listLopSummaries,
   listRecentSettlements,
   listSalaryStructure,
   listSalarySummariesForMonth,
   listSalaryTransfers,
   loadSalarySubject,
+  lopDeductionRowsToExportRows,
   settleMonthPayroll,
   updateSalarySettings,
   updateSalaryTransferStatus,
   updateUserSalary,
+  canViewSalarySummary,
 } from '../services/salaryService.js';
 import {
   getEmployeeSalaryHistory,
@@ -247,6 +258,75 @@ export async function exportSalaryAuditHandler(req, res) {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   );
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}
+
+export async function listLopSummariesHandler(req, res) {
+  const parsed = lopListQuerySchema.parse(req.query);
+  const result = await listLopSummaries(parsed);
+  res.json(result);
+}
+
+export async function getLopDetailHandler(req, res) {
+  const { userId } = lopDetailParamsSchema.parse(req.params);
+  const { month, asOf } = lopDetailQuerySchema.parse(req.query);
+  const result = await getLopDetailForUser(req.user, req.userPermissions, userId, month, asOf);
+  res.json(result);
+}
+
+export async function exportLopSingleHandler(req, res) {
+  const { userId } = lopDetailParamsSchema.parse(req.params);
+  const { month, asOf } = lopExportQuerySchema.parse(req.query);
+
+  const subject = await loadSalarySubject(userId);
+  if (!canViewSalarySummary(req.user, subject, req.userPermissions)) {
+    return res.status(403).json({ message: 'You do not have permission to export this LOP log.' });
+  }
+
+  const summary = await computeMonthlySalarySummary(subject, month, { asOfDate: asOf });
+  const exportRows = lopDeductionRowsToExportRows(summary);
+  const buffer = buildLopExportWorkbook(exportRows);
+
+  auditLog('lop_exported', {
+    adminId: req.user._id.toString(),
+    employeeId: userId,
+    month,
+    asOfDate: summary.asOfDate,
+  });
+
+  const safeName = (subject.name ?? 'employee').replace(/[^\w.-]+/g, '_');
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="lop-${safeName}-${month}.xlsx"`,
+  );
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}
+
+export async function exportLopBulkHandler(req, res) {
+  const { month, asOf } = lopExportQuerySchema.parse(req.query);
+  const summaries = await listAllLopSummariesForMonth(month, asOf);
+  const exportRows = summaries.flatMap((summary) =>
+    lopDeductionRowsToExportRows(summary, { bulk: true }),
+  );
+  const buffer = buildLopExportWorkbook(exportRows, { bulk: true, sheetName: 'LOP Bulk Export' });
+
+  auditLog('lop_bulk_exported', {
+    adminId: req.user._id.toString(),
+    month,
+    employeeCount: summaries.length,
+  });
+
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="lop-bulk-${month}.xlsx"`);
   res.setHeader('Content-Length', buffer.length);
   res.end(buffer);
 }

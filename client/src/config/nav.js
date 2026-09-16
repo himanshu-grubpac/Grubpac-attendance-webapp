@@ -81,6 +81,14 @@ export const NAV_ITEMS = [
     allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
   },
   {
+    to: '/admin/salary/lop',
+    label: 'Salary Calculation / LOP',
+    icon: '₹',
+    section: 'Employees',
+    portal: 'admin',
+    allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
+  },
+  {
     to: '/admin/salary/team',
     label: 'Team Salary Audit',
     icon: '₹',

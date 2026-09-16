@@ -11,7 +11,9 @@ import {
 } from '../utils/istDate.js';
 import {
   buildPaidLeaveDayMap,
-  computeDailyCappedPayableDays,
+  buildUnpaidLeaveDayMap,
+  computeMtdSalaryMetrics,
+  resolveSalaryAsOfDate,
   salaryAppliesForMonth,
 } from './salaryService.js';
 import { getPaidLeaveQuota } from './leaveBalanceService.js';
@@ -41,22 +43,32 @@ function makeBulkData(overrides = {}) {
     attendanceByUser: overrides.attendanceByUser ?? new Map(),
     balancesByUser: overrides.balancesByUser ?? new Map(),
     requestsByUser: overrides.requestsByUser ?? new Map(),
+    leaveTypeCodeById: overrides.leaveTypeCodeById ?? new Map([
+      ['lt_cl', 'CL'],
+      ['lt_el', 'EL'],
+    ]),
   };
 }
 
 /**
- * Replicates computeMonthlySalarySummaryInMemory logic using the same
- * underlying IST/salary utilities the production code uses.
- * This is the "old calculation" reference — identical computation, different data source.
+ * Reference implementation mirroring computeMonthlySalarySummaryInMemory (Phase 1 engine).
  */
-function computeExpectedSummary(user, monthInput, bulkData) {
-  const range = parseMonthInputAsISTRange(monthInput);
-  const { year, monthKey, start, end } = range;
-  const { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser } = bulkData;
+const FULL_MONTH_OPTS = { asOfDate: null };
+
+function computeExpectedSummary(user, monthInput, bulkData, options = FULL_MONTH_OPTS) {
+  const resolved = resolveSalaryAsOfDate(monthInput, options.asOfDate);
+  const { monthKey, start, end, asOfDateKey } = resolved;
+  const {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById = new Map(),
+  } = bulkData;
 
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
-  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
   const userId = user._id.toString();
   const userAttendance = attendanceByUser.get(userId) ?? new Map();
@@ -70,36 +82,37 @@ function computeExpectedSummary(user, monthInput, bulkData) {
     ]),
   );
 
-  const presentDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (userAttendance.get(day) ?? 0), 0),
-  );
   const paidLeaveByDay = buildPaidLeaveDayMap(
     userRequests, start, end, holidayDates, paidTypeIds, paidQuotaByTypeId,
   );
-  const paidLeaveDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  const unpaidLeaveByDay = buildUnpaidLeaveDayMap(
+    userRequests, start, end, holidayDates, paidTypeIds, paidQuotaByTypeId, leaveTypeCodeById,
   );
-  const payableDays = computeDailyCappedPayableDays(workingDayList, userAttendance, paidLeaveByDay);
-  const lopDays = Math.max(0, workingDaysInMonth - payableDays);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
-  let perDaySalary = null;
-  let payableEstimate = null;
-  let lopDeduction = null;
-  if (monthlySalary != null && workingDaysInMonth > 0) {
-    perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
-    payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
-    lopDeduction = roundMoney(lopDays * perDaySalary);
-  }
+  const mtdMetrics = computeMtdSalaryMetrics({
+    monthlySalary,
+    workingDayList,
+    attendanceCreditByDay: userAttendance,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    asOfDateKey,
+  });
 
   return {
     month: monthKey, currency: 'INR', userId, userName: user.name,
     employeeCode: user.employeeCode ?? null, monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
-    workingDaysInMonth, presentDays, paidLeaveDays, payableDays,
-    lopDays, lopDeduction, perDaySalary, payableEstimate,
+    workingDaysInMonth,
+    presentDays: mtdMetrics.presentDays,
+    paidLeaveDays: mtdMetrics.paidLeaveDays,
+    payableDays: mtdMetrics.payableDays,
+    lopDays: mtdMetrics.lopDays,
+    lopDeduction: mtdMetrics.lopDeduction,
+    perDaySalary: mtdMetrics.perDaySalary,
+    payableEstimate: mtdMetrics.payableEstimate,
     hasSalaryConfigured: monthlySalary != null,
   };
 }
@@ -161,17 +174,18 @@ test('claim1: in-memory summary matches reference computation — no leave, full
   const user = makeUser({ monthlySalary: 60000 });
   const attendanceMap = new Map([['emp001', new Map([['2026-09-01', 1], ['2026-09-02', 1], ['2026-09-03', 1]])]]);
   const bulkData = makeBulkData({ attendanceByUser: attendanceMap });
+  const monthOpts = { asOfDate: '2026-09-30' };
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, monthOpts);
 
-  // Same computation path — both call identical IST/salary utilities
   assert.equal(expected.monthlySalary, 60000);
   assert.equal(expected.hasSalaryConfigured, true);
   assert.ok(expected.workingDaysInMonth > 0);
   assert.equal(expected.presentDays, 3);
   assert.equal(expected.paidLeaveDays, 0);
   assert.equal(expected.lopDays, expected.workingDaysInMonth - 3);
-  assert.ok(expected.perDaySalary > 0);
+  assert.equal(expected.perDaySalary, 2000);
+  assert.equal(expected.payableEstimate, 60000 - expected.lopDeduction);
 });
 
 test('claim1: in-memory summary matches reference — with paid leave consuming quota', () => {
@@ -191,7 +205,7 @@ test('claim1: in-memory summary matches reference — with paid leave consuming 
   const balancesByUser = new Map([['emp001', balances]]);
   const bulkData = makeBulkData({ requestsByUser, balancesByUser });
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, { asOfDate: '2026-09-30' });
 
   assert.equal(expected.paidLeaveDays, 1);
   assert.equal(expected.lopDays, expected.workingDaysInMonth - 1 - expected.presentDays);
@@ -215,11 +229,11 @@ test('claim1: in-memory summary matches reference — overdrawn leave becomes LO
   const balancesByUser = new Map([['emp001', balances]]);
   const bulkData = makeBulkData({ requestsByUser, balancesByUser });
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, { asOfDate: '2026-09-30' });
 
   assert.equal(expected.paidLeaveDays, 0);
   assert.equal(expected.lopDays, expected.workingDaysInMonth);
-  assert.ok(expected.lopDeduction > 0);
+  assert.equal(expected.lopDeduction, roundMoney(expected.workingDaysInMonth * 2000));
 });
 
 test('claim1: in-memory summary matches reference — half-day leave', () => {

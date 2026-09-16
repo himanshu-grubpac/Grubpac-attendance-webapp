@@ -50,6 +50,11 @@ const PAGE_META = [
   },
   { match: '/admin/leave/holidays', title: 'Holidays', subtitle: '' },
   {
+    match: '/admin/salary/lop',
+    title: 'Salary Calculation / LOP',
+    subtitle: 'Month-to-date payable and loss-of-pay deductions by employee.',
+  },
+  {
     match: '/admin/salary',
     title: 'Salary Management',
     subtitle: 'Monthly pay estimates, salary structure, and payroll schedule.',

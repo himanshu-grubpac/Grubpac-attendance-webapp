@@ -454,6 +454,24 @@ export const salaryApi = {
       errorMessage: 'Failed to download salary audit report.',
     });
   },
+  listLopSummaries: (params = {}) =>
+    api.get('/salary/lop/summaries', { params }).then((r) => r.data),
+  getLopDetail: (userId, params = {}) =>
+    api.get(`/salary/lop/${userId}`, { params }).then((r) => r.data),
+  exportLopSingle: (userId, { month, asOf } = {}) => {
+    const search = new URLSearchParams({ month });
+    if (asOf) search.set('asOf', asOf);
+    return downloadExcelBlob(`/api/salary/lop/${encodeURIComponent(userId)}/export?${search.toString()}`, {
+      errorMessage: 'Failed to download LOP log.',
+    });
+  },
+  exportLopBulk: ({ month, asOf } = {}) => {
+    const search = new URLSearchParams({ month });
+    if (asOf) search.set('asOf', asOf);
+    return downloadExcelBlob(`/api/salary/lop/export?${search.toString()}`, {
+      errorMessage: 'Failed to download bulk LOP report.',
+    });
+  },
 };
 
 export const demoFaqApi = {
