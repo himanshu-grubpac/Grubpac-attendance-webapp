@@ -309,12 +309,12 @@ export async function computeMonthlySalarySummary(user, monthInput) {
   };
 }
 
-export async function loadSalarySubject(userId) {
+export async function loadSalarySubject(userId, { allowInactive = false } = {}) {
   if (!mongoose.isValidObjectId(userId)) {
     throwError('Employee not found.', 404);
   }
   const user = await User.findById(userId).populate(USER_POPULATE_FIELDS);
-  if (!user || !user.isActive) {
+  if (!user || (!user.isActive && !allowInactive)) {
     throwError('Employee not found.', 404);
   }
   return user;
@@ -359,9 +359,14 @@ export function canViewSalarySummary(actor, subject, permissions) {
 }
 
 export async function getSalarySummaryForUser(actor, permissions, userId, month) {
-  const subject = await loadSalarySubject(userId);
+  // Reads tolerate deactivated subjects (empty-state downstream); writes keep
+  // the strict loader so inactive records stay uneditable.
+  const subject = await loadSalarySubject(userId, { allowInactive: true });
   if (!canViewSalarySummary(actor, subject, permissions)) {
     throwError('You do not have permission to view this salary summary.', 403);
+  }
+  if (!subject.isActive) {
+    return { summary: null, inactive: true };
   }
   const summary = await computeMonthlySalarySummary(subject, month);
   return { summary };
@@ -566,6 +571,7 @@ export async function updateSalaryTransferStatus(transferId, payload, actorId) {
     throwError('Transfer not found.', 404);
   }
 
+  const previousStatus = transfer.status;
   transfer.status = payload.status;
   transfer.updatedBy = actorId;
 
@@ -588,7 +594,7 @@ export async function updateSalaryTransferStatus(transferId, payload, actorId) {
   }
 
   await transfer.save();
-  return salaryTransferToJSON(transfer);
+  return { ...salaryTransferToJSON(transfer), previousStatus };
 }
 
 export async function getOrCreateSalarySettings() {

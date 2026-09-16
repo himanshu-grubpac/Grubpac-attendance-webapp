@@ -303,7 +303,39 @@ export async function peekLeaveDecisionToken(requestId, action, rawToken) {
 // mails the applicant. Shared with the client popup via LEAVE_DECISION_UNDO_MS.
 const LEAVE_DECISION_UNDO_MS = env.leaveDecisionUndoMs;
 
-export async function processLeaveDecision(request, actor, decision, decisionComment = null, { adminException = false } = {}) {
+/**
+ * Raw leave-type ObjectId for balance keying. Populating a deleted type
+ * yields `leaveTypeId: null`, losing the id that balance rows are keyed by —
+ * so fall back to a lean re-read. Only fires for orphaned-type requests.
+ */
+async function resolveDecisionLeaveTypeId(request) {
+  const populated = request.leaveTypeId?._id ?? request.leaveTypeId;
+  if (populated) return populated;
+  const raw = await LeaveRequest.findById(request._id).select('leaveTypeId').lean();
+  return raw?.leaveTypeId ?? null;
+}
+
+/**
+ * Submitter origin captured at request creation so background finalize /
+ * auto-approve audit rows can attribute device + network even though no
+ * HTTP request exists when they run. Absent on legacy documents.
+ */
+function applySubmitterContext(target, auditContext = {}) {
+  if (auditContext.ip !== undefined) target.submittedIp = auditContext.ip;
+  if (auditContext.deviceId !== undefined) target.submittedDeviceId = auditContext.deviceId;
+  if (auditContext.userAgent !== undefined) target.submittedUserAgent = auditContext.userAgent;
+}
+
+/** Async-path audit attribution: submitter origin, when it was captured. */
+function submittedAuditContext(request) {
+  return {
+    ip: request?.submittedIp ?? undefined,
+    deviceId: request?.submittedDeviceId ?? undefined,
+    userAgent: request?.submittedUserAgent ?? undefined,
+  };
+}
+
+export async function processLeaveDecision(request, actor, decision, decisionComment = null, { adminException = false, auditContext = {} } = {}) {
   if (decision !== 'approve' && decision !== 'approved' && decision !== 'reject' && decision !== 'rejected') {
     throwError('Invalid leave decision.', 400);
   }
@@ -311,27 +343,105 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
   const pendingDecision = isApproved ? 'approved' : 'rejected';
   const userId = request.userId?._id ?? request.userId;
 
-  // Finalizability pre-check (before staging anything): the finalizer can
-  // only commit against a live leave type and an existing balance row. If
-  // either vanished since submission (e.g. type deleted), staging would
-  // create a poison row that fails every sweep forever while looking
-  // PENDING. Fail loudly here instead, leaving the request untouched.
-  const decisionLeaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+  // Finalizability pre-check (before staging anything): an approval must be
+  // finalizable — the finalizer consumes the balance row, so a missing row
+  // would stage a poison decision that fails every sweep forever while
+  // looking PENDING. Rejections are exempt (releasePendingDays tolerates a
+  // missing balance and notify falls back), so they always stage.
+  //
+  // Approvals do NOT need the type row itself: the finalize path never reads
+  // LeaveType (balances are keyed by the type ObjectId; LOP/WFH/notify helpers
+  // are all null-safe), so a deleted/inactive type stays actionable. The raw
+  // type ObjectId is recovered via resolveDecisionLeaveTypeId: populating a
+  // deleted type yields null, which would otherwise key every lookup wrong.
+  const decisionLeaveTypeId = await resolveDecisionLeaveTypeId(request);
   // NB: request.startDate is a Date object here (loaded document), so use
   // getISTYear directly — resolveLeaveYear/parseDateInputAsISTDay only parse
   // YYYY-MM-DD strings and would return null for a Date.
   const decisionYear = getISTYear(request.startDate);
   const [decisionLeaveType, decisionBalance] = await Promise.all([
-    LeaveType.findById(decisionLeaveTypeId).select('_id isActive').lean(),
-    LeaveBalance.findOne({ userId, leaveTypeId: decisionLeaveTypeId, year: decisionYear })
-      .select('_id')
-      .lean(),
+    decisionLeaveTypeId
+      ? LeaveType.findById(decisionLeaveTypeId).select('_id isActive').lean()
+      : null,
+    decisionLeaveTypeId
+      ? LeaveBalance.findOne({ userId, leaveTypeId: decisionLeaveTypeId, year: decisionYear })
+        .select('_id')
+        .lean()
+      : null,
   ]);
-  if (!decisionLeaveType || !decisionLeaveType.isActive) {
-    throwError('This leave type is no longer available. Cancel the request instead.', 409);
-  }
-  if (!decisionBalance) {
-    throwError('Leave balance is missing for this request. Ask HR to re-run balance setup, then decide again.', 409);
+  const decisionTypeGone = !decisionLeaveType || !decisionLeaveType.isActive;
+  if (!isApproved) {
+    if (decisionTypeGone) {
+      auditLog('leave_decision_orphaned_type', {
+        adminId: actor._id.toString(),
+        userId: userId.toString(),
+        requestId: request._id.toString(),
+        decision: 'reject',
+        ip: auditContext.ip,
+        deviceId: auditContext.deviceId,
+        userAgent: auditContext.userAgent,
+      });
+    }
+  } else {
+    if (!decisionLeaveTypeId) {
+      throwError('This request has no leave type attached and cannot be approved.', 409);
+    }
+    if (!decisionBalance) {
+      // The balance row vanished (or never existed) since submission. First
+      // try the sanctioned regeneration — same calls the submit path makes —
+      // which restores the true quota when the policy is still live.
+      await refreshAccruedEntitlements(userId, decisionYear);
+      await ensureBalancesForUser(userId, decisionYear);
+      const regenerated = await LeaveBalance.findOne({
+        userId,
+        leaveTypeId: decisionLeaveTypeId,
+        year: decisionYear,
+      })
+        .select('_id')
+        .lean();
+      if (!regenerated) {
+        // No live policy (typically: the type was deleted). Provision a zeroed
+        // row so the decision can finalize instead of hanging PENDING forever.
+        // With zero quota the approved days land as unpaid via the normal LOP
+        // overdraw path — the payroll-safe default when no quota exists.
+        // Atomic upsert: concurrent deciders race safely, exactly one row wins.
+        await LeaveBalance.findOneAndUpdate(
+          { userId, leaveTypeId: decisionLeaveTypeId, year: decisionYear },
+          {
+            $setOnInsert: {
+              entitled: 0,
+              used: 0,
+              pending: 0,
+              carried: 0,
+              encashed: 0,
+              compOffEarned: 0,
+            },
+          },
+          { upsert: true, new: true },
+        );
+        auditLog('leave_balance_auto_provisioned', {
+          adminId: actor._id.toString(),
+          userId: userId.toString(),
+          requestId: request._id.toString(),
+          year: decisionYear,
+          reason: 'approve_on_missing_balance',
+          ip: auditContext.ip,
+          deviceId: auditContext.deviceId,
+          userAgent: auditContext.userAgent,
+        });
+      }
+    }
+    if (decisionTypeGone) {
+      auditLog('leave_decision_orphaned_type', {
+        adminId: actor._id.toString(),
+        userId: userId.toString(),
+        requestId: request._id.toString(),
+        decision: 'approve',
+        ip: auditContext.ip,
+        deviceId: auditContext.deviceId,
+        userAgent: auditContext.userAgent,
+      });
+    }
   }
 
   // Nothing changes until the undo window expires. The status, balance, and
@@ -404,12 +514,11 @@ export async function processLeaveDecision(request, actor, decision, decisionCom
     requestId: request._id.toString(),
     comment: decisionComment,
     revision: request.revision,
-    entityType: 'leave_request',
-    entityId: request._id.toString(),
-    actionType: isApproved ? 'approve' : 'reject',
-    fieldChanged: 'status',
-    oldValue: { status: 'pending' },
-    newValue: { status: isApproved ? 'approved' : 'rejected', decisionComment },
+    previous: { status: 'pending' },
+    next: { status: setUpdate.pendingDecision },
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
@@ -1071,7 +1180,7 @@ export async function adminApplyLeaveForEmployeeDay({
   });
 }
 
-export async function createLeaveRequest(userId, payload) {
+export async function createLeaveRequest(userId, payload, auditContext = {}) {
   // Validates the requester exists and is active; the applicant record for
   // notifications is loaded at finalize time, not submit time.
   await loadRequester(userId);
@@ -1120,6 +1229,9 @@ export async function createLeaveRequest(userId, payload) {
             undoExpiresAt: submitTiming?.undoExpiresAt ?? null,
             notifyAfter: submitTiming?.notifyAfter ?? null,
             finalizedAt: null,
+            submittedIp: auditContext.ip ?? null,
+            submittedDeviceId: auditContext.deviceId ?? null,
+            submittedUserAgent: auditContext.userAgent ?? null,
           },
         ],
         { session },
@@ -1155,6 +1267,16 @@ export async function createLeaveRequest(userId, payload) {
       days: createdRequest.days,
       startDate: payload.startDate,
       endDate: payload.endDate,
+      next: {
+        status: 'pending',
+        leaveTypeId: payload.leaveTypeId,
+        days: createdRequest.days,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+      },
+      ip: auditContext.ip,
+      deviceId: auditContext.deviceId,
+      userAgent: auditContext.userAgent,
     });
 
     return (await LeaveRequest.findById(createdRequest._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
@@ -1242,7 +1364,7 @@ async function notifyApplicantOnSubmit(request) {
   }
 }
 
-export async function dispatchSubmitNotifications(requestId, now = new Date()) {
+export async function dispatchSubmitNotifications(requestId, now = new Date(), auditContext = {}) {
   const key = String(requestId);
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   if (pendingSubmitDispatch.has(key)) return;
@@ -1296,9 +1418,17 @@ export async function dispatchSubmitNotifications(requestId, now = new Date()) {
       console.error('[leave] submit notification send failed', key, err?.message);
       return;
     }
+    // Live resend context wins when present (manual admin resend);
+    // otherwise attribute the submitter origin captured at creation.
+    const submitted = submittedAuditContext(request);
     auditLog('leave_submit_finalized', {
       userId: (request.userId?._id ?? request.userId)?.toString?.(),
       requestId: request._id.toString(),
+      previous: { submitNotificationsSent: false },
+      next: { submitNotificationsSent: true },
+      ip: auditContext.ip ?? submitted.ip,
+      deviceId: auditContext.deviceId ?? submitted.deviceId,
+      userAgent: auditContext.userAgent ?? submitted.userAgent,
     });
   } finally {
     pendingSubmitDispatch.delete(key);
@@ -1316,9 +1446,12 @@ export async function dispatchSubmitNotifications(requestId, now = new Date()) {
  * the guarded fields, turning this into a no-op for the superseded revision.
  */
 async function finalizeAutoApprovedSubmit(request) {
-  const userId = request.userId?._id ?? request.userId;
-  const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
-  const year = getISTYear(request.startDate);
+      const userId = request.userId?._id ?? request.userId;
+      // Recover the raw type ObjectId for orphaned-type requests (populate
+      // yields null when the type was deleted) so balance updates hit the
+      // right row instead of leaking phantom pending days.
+      const leaveTypeId = await resolveDecisionLeaveTypeId(request);
+      const year = getISTYear(request.startDate);
 
   const session = await mongoose.startSession();
   try {
@@ -1380,6 +1513,11 @@ async function finalizeAutoApprovedSubmit(request) {
   auditLog('leave_request_auto_approved', {
     userId: userId?.toString?.(),
     requestId: request._id.toString(),
+    previous: { status: 'pending' },
+    next: { status: 'approved' },
+    // System auto-approval runs without an HTTP request: attribute the
+    // submitter origin captured at creation.
+    ...submittedAuditContext(request),
   });
   return { finalized: true };
 }
@@ -1392,7 +1530,7 @@ async function finalizeAutoApprovedSubmit(request) {
  * markers, cancels the pending submit timer, and returns the request to the
  * employee for editing + resubmission (which starts a brand-new undo window).
  */
-export async function undoSubmittedLeaveRequest(requestId, actor) {
+export async function undoSubmittedLeaveRequest(requestId, actor, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   if (requesterId !== actor._id.toString()) {
@@ -1455,7 +1593,7 @@ export async function undoSubmittedLeaveRequest(requestId, actor) {
   try {
     await session.withTransaction(async () => {
       const userId = request.userId?._id ?? request.userId;
-      const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+      const leaveTypeId = await resolveDecisionLeaveTypeId(request);
       const year = getISTYear(request.startDate);
       await releasePendingDays(userId, leaveTypeId, request.days, year, session);
       await updateWfhAttendanceForRequest(request, {
@@ -1471,12 +1609,17 @@ export async function undoSubmittedLeaveRequest(requestId, actor) {
   auditLog('leave_request_withdrawn', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
+    previous: { status: 'pending' },
+    next: { status: 'cancelled' },
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
-export async function cancelLeaveRequest(requestId, actor) {
+export async function cancelLeaveRequest(requestId, actor, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   if (request.userId?._id?.toString() !== actor._id.toString() && request.userId?.toString() !== actor._id.toString()) {
     throwError('You can only cancel your own leave requests.', 403);
@@ -1493,27 +1636,31 @@ export async function cancelLeaveRequest(requestId, actor) {
   }
 
   const wasApproved = request.status === 'approved' || request.pendingDecision === 'approved';
-  await applyLeaveCancellation(request, actor, { undoable: wasApproved });
+  await applyLeaveCancellation(request, actor, { undoable: wasApproved, auditContext });
 
   return request.toSafeJSON();
 }
 
-/** Approver (or delegate) cancels an approved leave on behalf of the employee. */
-export async function cancelApprovedLeaveByApprover(requestId, actor, permissions, { decisionComment = null } = {}) {
+/**
+ * Approver (or delegate) cancels an approved leave on behalf of the employee.
+ * Deliberately allowed for past leaves too: approvers may need to correct
+ * history (e.g. leave marked but not taken). The cancellation stays undoable
+ * for the decision window, and the freed days return to the balance on
+ * finalize. NOTE: payroll for already-settled months is not recomputed —
+ * the UI warns about this before confirming.
+ */
+export async function cancelApprovedLeaveByApprover(requestId, actor, permissions, { decisionComment = null, auditContext = {} } = {}) {
   const request = await loadLeaveRequest(requestId);
   const isApproved = request.status === 'approved' || request.pendingDecision === 'approved';
   if (!isApproved) {
     throwError('Only approved leave requests can be cancelled.', 400);
-  }
-  if (request.endDate && new Date(endOfDayIST(request.endDate)).getTime() < Date.now()) {
-    throwError('This leave request can no longer be cancelled because the leave dates have passed.');
   }
   const requester = await loadRequester(request.userId?._id ?? request.userId);
   if (!canApproveLeave(actor, requester, permissions)) {
     throwError('You are not authorized to cancel this leave request.', 403);
   }
 
-  await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id, decisionComment });
+  await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id, decisionComment, auditContext });
   return request.toSafeJSON();
 }
 
@@ -1523,7 +1670,7 @@ export async function cancelApprovedLeaveByApprover(requestId, actor, permission
  * deferral window — the applicant/approver email is only sent after the window
  * expires (via the decision-notify job).
  */
-async function applyLeaveCancellation(request, actor, { undoable = false, approverId: cancelActorId = null, decisionComment = null } = {}) {
+async function applyLeaveCancellation(request, actor, { undoable = false, approverId: cancelActorId = null, decisionComment = null, auditContext = {} } = {}) {
   const wasApproved = request.status === 'approved' || request.pendingDecision === 'approved';
   const userId = request.userId?._id ?? request.userId;
 
@@ -1582,7 +1729,7 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
   } else {
     // Pending-leave cancellation: immediate, no undo needed.
     const year = getISTYear(request.startDate);
-    const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+    const leaveTypeId = await resolveDecisionLeaveTypeId(request);
     const originalApproverId = request.approverId?._id?.toString?.() ?? request.approverId?.toString?.() ?? null;
 
     const session = await mongoose.startSession();
@@ -1621,11 +1768,14 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
     requestId: request._id.toString(),
     wasApproved,
     undoable,
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 }
 
 /** Undoes an approved-leave cancellation, restoring the request to approved. */
-export async function undoLeaveCancellation(requestId, actor, permissions) {
+export async function undoLeaveCancellation(requestId, actor, permissions, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   if (request.pendingDecision !== 'cancelled') {
     // A finalized cancellation (status already cancelled) reports finality;
@@ -1715,6 +1865,11 @@ export async function undoLeaveCancellation(requestId, actor, permissions) {
     adminId: actor._id.toString(),
     userId: userId.toString(),
     requestId: request._id.toString(),
+    previous: { status: 'cancelled', pendingDecision: 'cancelled' },
+    next: { status: 'approved', pendingDecision: null },
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 
   // Refetch: the pre-claim `request` still carries the cleared pendingDecision.
@@ -1899,7 +2054,7 @@ async function notifyLeaveCancelled(request, wasApproved, approverId, { sendChan
   }
 }
 
-export async function editLeaveRequest(requestId, actor, payload) {
+export async function editLeaveRequest(requestId, actor, payload, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   if (requesterId !== actor._id.toString()) {
@@ -1921,6 +2076,14 @@ export async function editLeaveRequest(requestId, actor, payload) {
     leaveTypeId: request.leaveTypeId,
     startDate: request.startDate,
     endDate: request.endDate,
+  };
+  const previousEdit = {
+    leaveTypeId: String(oldLeaveTypeId),
+    startDate: request.startDate ? new Date(request.startDate).toISOString() : null,
+    endDate: request.endDate ? new Date(request.endDate).toISOString() : null,
+    days: request.days ?? null,
+    halfDay: request.halfDay ?? null,
+    reason: request.reason ?? null,
   };
   const adminException = false;
 
@@ -1969,6 +2132,9 @@ export async function editLeaveRequest(requestId, actor, payload) {
       // Old submit email links must not be able to decide the edited dates.
       request.decisionTokens = [];
       request.revision = (request.revision ?? 0) + 1;
+      // An edit re-submits: refresh the origin attribution for later
+      // background finalize rows (keeps prior values when no context).
+      applySubmitterContext(request, auditContext);
       await request.save({ session });
 
       if (isWfhLeaveType(validated.leaveType)) {
@@ -1987,6 +2153,18 @@ export async function editLeaveRequest(requestId, actor, payload) {
   auditLog('leave_request_edited', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
+    previous: previousEdit,
+    next: {
+      leaveTypeId: String(payload.leaveTypeId),
+      startDate: request.startDate ? new Date(request.startDate).toISOString() : null,
+      endDate: request.endDate ? new Date(request.endDate).toISOString() : null,
+      days: request.days ?? null,
+      halfDay: request.halfDay ?? null,
+      reason: request.reason ?? null,
+    },
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 
   scheduleSubmitNotification(request._id.toString(), request.notifyAfter);
@@ -2000,7 +2178,7 @@ export async function editLeaveRequest(requestId, actor, payload) {
   return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
-export async function decideLeaveRequestByToken(requestId, action, rawToken, decisionComment = null) {
+export async function decideLeaveRequestByToken(requestId, action, rawToken, decisionComment = null, auditContext = {}) {
   const comment = typeof decisionComment === 'string' ? decisionComment.trim() : null;
   if (!comment) {
     const err = new Error('A remark is required for this action.');
@@ -2031,7 +2209,7 @@ export async function decideLeaveRequestByToken(requestId, action, rawToken, dec
     err.statusCode = 403;
     throw err;
   }
-  await processLeaveDecision(request, manager, action, comment);
+  await processLeaveDecision(request, manager, action, comment, { auditContext });
   return { request, manager };
 }
 
@@ -2060,7 +2238,7 @@ export async function autoLoginByDecisionToken(requestId, action, rawToken) {
   }
   return { manager, requestId };
 }
-export async function decideLeaveRequest(requestId, actor, permissions, decision, payload = {}) {
+export async function decideLeaveRequest(requestId, actor, permissions, decision, payload = {}, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   if (request.status !== 'pending') {
     throwError('Only pending requests can be approved or rejected.');
@@ -2087,21 +2265,28 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
       auditLog('leave_admin_exception_denied', {
         actorId: actor._id.toString(),
         requestId: request._id.toString(),
+        ip: auditContext.ip,
+        deviceId: auditContext.deviceId,
+        userAgent: auditContext.userAgent,
       });
       throwError('Only HR or admin can grant an admin exception.', 403);
     }
     auditLog('leave_admin_exception_granted', {
       actorId: actor._id.toString(),
       requestId: request._id.toString(),
+      ip: auditContext.ip,
+      deviceId: auditContext.deviceId,
+      userAgent: auditContext.userAgent,
     });
   }
 
   return processLeaveDecision(request, actor, decision, comment, {
     adminException: !!payload.adminException,
+    auditContext,
   });
 }
 
-export async function undoLeaveDecision(requestId, actor, permissions) {
+export async function undoLeaveDecision(requestId, actor, permissions, auditContext = {}) {
   const request = await loadLeaveRequest(requestId);
   if (!request.pendingDecision) {
     // A decided (finalized) request reports finality so the UI can settle on
@@ -2183,6 +2368,11 @@ export async function undoLeaveDecision(requestId, actor, permissions) {
     adminId: actor._id.toString(),
     userId: userId.toString(),
     requestId: request._id.toString(),
+    previous: { status: 'pending', pendingDecision: stagedDecision },
+    next: { status: 'pending', pendingDecision: null },
+    ip: auditContext.ip,
+    deviceId: auditContext.deviceId,
+    userAgent: auditContext.userAgent,
   });
 
   // Refetch: the pre-claim `request` still carries the cleared pendingDecision.
@@ -2265,7 +2455,10 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
       }
 
       const userId = request.userId?._id ?? request.userId;
-      const leaveTypeId = request.leaveTypeId?._id ?? request.leaveTypeId;
+      // Recover the raw type ObjectId for orphaned-type requests (populate
+      // yields null when the type was deleted) so balance updates hit the
+      // right row instead of leaking phantom pending days.
+      const leaveTypeId = await resolveDecisionLeaveTypeId(request);
       const year = getISTYear(request.startDate);
       const finalStatus = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'cancelled';
 
@@ -2362,9 +2555,11 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
           error: notifyErr?.message,
         });
         auditLog('leave_finalized_notification_failed', {
+          userId: userId?.toString?.(),
           requestId: requestKey,
           decision,
           error: notifyErr?.message ?? 'unknown',
+          ...submittedAuditContext(request),
         });
       }
 
@@ -2373,6 +2568,12 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
         requestId: requestKey,
         decision,
         revision: (request.revision ?? 0) + 1,
+        previous: { status: 'pending', pendingDecision: decision },
+        next: { status: decision },
+        // The sweep runs without an HTTP request: attribute the submitter
+        // origin captured at creation (decider context lives on the
+        // request-driven staging rows).
+        ...submittedAuditContext(request),
       });
       processed += 1;
     } catch (err) {

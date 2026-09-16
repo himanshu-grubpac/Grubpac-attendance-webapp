@@ -145,7 +145,9 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
       : {}),
     hasPassword: Boolean(this.passwordHash),
     hasPin: Boolean(this.pin4Hash),
-    mustChangePassword: Boolean(this.mustChangePassword),
+    // Single source of truth with the login response: either flag forces the
+    // first-login gate (covers legacy rows where only one was ever set).
+    mustChangePassword: Boolean(this.mustChangePassword || this.forcePasswordChange),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

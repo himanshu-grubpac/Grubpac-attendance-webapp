@@ -5,6 +5,7 @@ import { useTableColumns } from '../../hooks/useTableColumns.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
+import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 
 const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
 const TODAY_PRESENT_PAGE_SIZE = 25;
@@ -41,6 +42,7 @@ export default function AdminTodayPresent() {
   const [query, setQuery] = useState('');
   const debouncedSearch = useDebouncedValue(query, 350);
   const loadMoreRef = useRef(null);
+  const tableWrapRef = useRef(null);
   const requestKeyRef = useRef('');
   const skipDebouncedSearchRef = useRef(true);
   const {
@@ -48,9 +50,12 @@ export default function AdminTodayPresent() {
     columnsLoading,
     columnsError,
     editorOpen,
-    setEditorOpen,
+    openColumnEditor,
+    cancelColumnEdit,
     isColumnVisible,
-    handleColumnToggle,
+    isDraftColumnVisible,
+    handleDraftColumnToggle,
+    applyColumnPreferences,
   } = useTableColumns({
     tableKey: TODAY_PRESENT_TABLE_KEY,
     allColumns: TODAY_PRESENT_COLUMNS,
@@ -176,7 +181,7 @@ export default function AdminTodayPresent() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => setEditorOpen(true)}
+              onClick={openColumnEditor}
             >
               Edit columns
             </button>
@@ -194,7 +199,7 @@ export default function AdminTodayPresent() {
           </div>
         ) : (
           <>
-            <div className="table-wrap table-wrap--responsive today-present-table-wrap">
+            <div ref={tableWrapRef} className="table-wrap table-wrap--responsive today-present-table-wrap">
               <table className="table data-table today-present-table">
                 <thead>
                   <tr>
@@ -266,6 +271,7 @@ export default function AdminTodayPresent() {
                 </tbody>
               </table>
             </div>
+            <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />
 
             {pagination && teamStatus.length > 0 ? (
               <p className="employees-scroll-hint muted small" role="status">
@@ -281,10 +287,11 @@ export default function AdminTodayPresent() {
       <ColumnEditorPanel
         open={editorOpen}
         columns={TODAY_PRESENT_COLUMNS}
-        isColumnVisible={isColumnVisible}
-        onToggle={handleColumnToggle}
+        isColumnVisible={isDraftColumnVisible}
+        onToggle={handleDraftColumnToggle}
         loading={columnsLoading}
-        onClose={() => setEditorOpen(false)}
+        onClose={applyColumnPreferences}
+        onCancel={cancelColumnEdit}
       />
     </div>
   );

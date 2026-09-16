@@ -112,6 +112,7 @@ export async function createHelpTicket(actor, payload, permissions = [], auditCo
     ticketId: ticket._id.toString(),
     category: ticket.category,
     priority: ticket.priority,
+    next: { status: 'open', category: ticket.category, priority: ticket.priority },
     ...auditContext,
   });
 
@@ -331,6 +332,8 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
     status: payload.status ?? ticket.status,
     previousPriority,
     priority: ticket.priority,
+    previous: { status: previousStatus, priority: previousPriority },
+    next: { status: payload.status ?? ticket.status, priority: ticket.priority },
     ...auditContext,
   });
 
@@ -417,6 +420,7 @@ export async function addHelpComment(ticketId, actor, permissions, payload, audi
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
     commentId: comment._id.toString(),
+    next: { commentId: comment._id.toString(), bodyLength: (comment.body ?? '').length },
     ...auditContext,
   });
 
@@ -445,6 +449,11 @@ export async function deleteHelpTicket(ticketId, actor, permissions, auditContex
   auditLog('help_ticket_deleted', {
     userId: actor._id.toString(),
     ticketId: ticket._id.toString(),
+    previous: {
+      title: ticket.title ?? null,
+      status: ticket.status ?? null,
+      priority: ticket.priority ?? null,
+    },
     ...auditContext,
   });
 }

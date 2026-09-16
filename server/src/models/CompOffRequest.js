@@ -71,6 +71,12 @@ const compOffRequestSchema = new mongoose.Schema(
     comment: { type: String, default: null, trim: true, maxlength: 1000 },
     /** Allowed check-out attendance record that flipped this request to worked. */
     checkoutRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'AttendanceRecord', default: null },
+    /**
+     * Who staged a `pendingAction: 'cancelled'`. Set for approver-initiated
+     * revokes of approved requests; null for employee withdrawals of
+     * never-live requests — this is how the undo paths tell them apart.
+     */
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     revision: { type: Number, default: 0, min: 0 },
     pendingRevision: { type: Number, default: null },
     /** End of the undo window for the current provisional action. */
@@ -128,6 +134,7 @@ compOffRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     decidedAt: this.decidedAt,
     comment: this.comment ?? null,
     checkoutRecordId: this.checkoutRecordId?.toString?.() ?? null,
+    cancelledBy: this.cancelledBy?._id?.toString() ?? this.cancelledBy?.toString?.() ?? null,
     revision: this.revision ?? 0,
     finalizedAt: this.finalizedAt ?? null,
     decisionUndoExpiresAt: this.undoExpiresAt ?? this.notifyAfter ?? null,

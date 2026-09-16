@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   approveCompOffRequestHandler,
   assessCompOffRequestHandler,
+  cancelApprovedCompOffRequestHandler,
   createCompOffRequestHandler,
   getCompOffApprovalsCountHandler,
   getCompOffEligibleDaysHandler,
@@ -65,6 +66,11 @@ router.post(
   '/comp-off/:id/undo',
   requirePermission(PERMISSIONS.LEAVE_APPROVE),
   asyncHandler(undoCompOffDecisionHandler),
+);
+router.post(
+  '/comp-off/:id/cancel',
+  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  asyncHandler(cancelApprovedCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/assess',

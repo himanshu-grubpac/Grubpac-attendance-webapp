@@ -20,6 +20,8 @@ import {
   confirmWeekAttendance,
   unconfirmWeekAttendance,
   listAuditLogs,
+  runAuditArchiveHandler,
+  getAuditArchiveStatusHandler,
   getEmployee,
   getEmployeeStats,
   listEmployees,
@@ -194,6 +196,8 @@ router.delete(
 );
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(listAuditLogs));
 router.get('/audit-logs/export', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(exportAuditLogs));
+router.get('/audit-logs/archive/status', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(getAuditArchiveStatusHandler));
+router.post('/audit-logs/archive', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(runAuditArchiveHandler));
 router.get(
   '/reports/summary',
   requirePermission(PERMISSIONS.USERS_READ),

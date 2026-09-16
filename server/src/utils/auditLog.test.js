@@ -7,11 +7,15 @@ import mongoose from 'mongoose';
 import { AuditLog } from '../models/AuditLog.js';
 import { User } from '../models/User.js';
 import {
+  auditActionMatchers,
   auditLog,
   auditRequest,
   buildPersistPayload,
   flushAuditLogs,
   getRequestAuditContext,
+  resolveAuditDisplayEmail,
+  resolveAuditDisplayRole,
+  resolveAuditModule,
 } from './auditLog.js';
 
 test('non-login actions default to success status with n/a reason', () => {
@@ -53,6 +57,48 @@ test('domain status values stay in metadata and never break the status enum', ()
   assert.equal(payload.status, 'success');
   assert.equal(payload.metadata.status, 'in_progress');
   assert.equal(payload.metadata.previousStatus, 'open');
+});
+
+test('resolveAuditModule maps every action family to its module', () => {
+  const cases = [
+    ['login_success', 'authentication'],
+    ['logout', 'authentication'],
+    ['password_reset_requested', 'authentication'],
+    ['pin_changed', 'authentication'],
+    ['employee_registered', 'employees'],
+    ['password_reset_by_admin', 'employees'],
+    ['pin_reset_by_admin', 'employees'],
+    ['department_created', 'organization'],
+    ['office_settings_updated', 'organization'],
+    ['role_updated', 'roles'],
+    ['leave_request_approved', 'leave'],
+    ['leave_policy_updated', 'leave'],
+    ['holiday_deleted', 'leave'],
+    ['recurring_holiday_rules_updated', 'leave'],
+    ['leave_admin_exception_denied', 'leave'],
+    ['comp_off_assess_staged', 'comp-off'],
+    ['comp_off_lapsed', 'comp-off'],
+    ['attendance_marked', 'attendance'],
+    ['week_attendance_confirmed', 'attendance'],
+    ['attendance_auto_checkout', 'attendance'],
+    ['help_ticket_status_updated', 'helpdesk'],
+    ['help_ticket_comment_deleted', 'helpdesk'],
+    ['salary_updated', 'salary'],
+    ['lop_record_created', 'salary'],
+    ['month_settled', 'salary'],
+    ['demo_faq_deleted', 'faq'],
+    ['audit_logs_exported', 'audit'],
+    ['something_brand_new', 'other'],
+    [null, 'other'],
+  ];
+  for (const [action, expected] of cases) {
+    assert.equal(resolveAuditModule(action), expected, action);
+  }
+});
+
+test('auditActionMatchers returns the prefix list for known modules', () => {
+  assert.deepEqual(auditActionMatchers('leave'), ['leave_', 'holiday_', 'recurring_']);
+  assert.deepEqual(auditActionMatchers('nope'), []);
 });
 
 test('device id resolves from body first, then X-Device-Id header', () => {
@@ -129,6 +175,19 @@ test('actor email and role backfill from user id', async () => {
   assert.equal(stored.role, 'employee');
   assert.equal(stored.status, 'success');
   assert.equal(stored.reason, 'n/a');
+});
+
+test('audit display fallbacks never leave actor fields blank', () => {
+  assert.equal(resolveAuditDisplayEmail({ email: 'a@b.c' }), 'a@b.c');
+  assert.equal(
+    resolveAuditDisplayEmail({ metadata: { identifier: 'ghost@x.y' } }),
+    'ghost@x.y',
+  );
+  assert.equal(resolveAuditDisplayEmail({ action: 'month_settled' }), 'System');
+  assert.equal(resolveAuditDisplayEmail({ userId: 'abc' }), 'Unknown user');
+  assert.equal(resolveAuditDisplayRole({ role: 'admin' }), 'admin');
+  assert.equal(resolveAuditDisplayRole({ action: 'month_settled' }), 'System');
+  assert.equal(resolveAuditDisplayRole({ userId: 'abc' }), 'Not recorded');
 });
 
 test('auditRequest merges request context with explicit meta winning', async () => {

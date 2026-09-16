@@ -481,7 +481,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
   const subject = await User.findById(userId)
     .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate createdAt')
     .lean();
-  if (!subject || !subject.isActive) {
+  if (!subject) {
     throwError('Employee not found.', 404);
   }
 
@@ -492,6 +492,23 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
     if (!inScope) {
       throwError('You do not have permission to view this employee\'s salary history.', 403);
     }
+  }
+
+  // Deactivated subjects stay viewable with an empty history (the UI renders
+  // an empty state instead of an error).
+  if (!subject.isActive) {
+    return {
+      employee: {
+        id: subject._id.toString(),
+        name: subject.name,
+        employeeCode: subject.employeeCode ?? null,
+        monthlySalary: subject.monthlySalary ?? null,
+        salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
+        salaryCurrency: 'INR',
+      },
+      history: [],
+      inactive: true,
+    };
   }
 
   const year = options.year ?? getISTYear();

@@ -15,6 +15,7 @@ export default function SalaryDetailModal({
   balances,
   loading,
   error,
+  inactive = false,
   onClose,
 }) {
   const titleId = useId();
@@ -42,22 +43,19 @@ export default function SalaryDetailModal({
   return createPortal(
     <div className="modal__backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal modal--wide salary-detail-modal"
+        className="modal modal--compact"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="modal__header salary-detail-modal__header">
+        <header className="modal__header">
           <h2 id={titleId} className="modal__title">
             {month ? `${month} breakdown` : 'Pay estimate details'}
           </h2>
           <p className="modal__lead muted">
             Month figures plus leave balances for the year — negative balances are LOP-driven minus.
           </p>
-          <button type="button" className="modal__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
         </header>
 
         <div className="modal__body salary-detail-modal__body">
@@ -69,6 +67,11 @@ export default function SalaryDetailModal({
               <div className="skeleton skeleton--row" />
               <div className="skeleton skeleton--row" />
             </div>
+          ) : inactive ? (
+            <p className="muted small" role="status">
+              Employee data not found — this employee is deactivated, so pay details are
+              unavailable.
+            </p>
           ) : hasSummary ? (
             <>
               <dl className="detail-list detail-list--grid salary-detail__grid">

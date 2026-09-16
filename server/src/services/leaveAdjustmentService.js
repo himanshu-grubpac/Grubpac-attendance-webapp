@@ -12,8 +12,9 @@ import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
 import { LeaveType } from '../models/LeaveType.js';
+import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveBalance, LEAVE_BALANCE_POPULATE } from '../models/LeaveBalance.js';
-import { adjustBalance, ensureBalancesForUser, resolvePolicyForLeaveType } from './leaveBalanceService.js';
+import { adjustBalance, ensureBalancesForUser, getPolicyMapForYear, resolvePolicyForLeaveType } from './leaveBalanceService.js';
 import {
   applyTeamScopeToEmployeeQuery,
   isUserInTeamScope,
@@ -82,12 +83,26 @@ async function assertEmployeeInScope(actor, permissions, userId) {
   }
 }
 
+/**
+ * When the requested year has no active policies, balances resolve against
+ * the current year's policies (see resolvePoliciesForYear). Callers surface
+ * this so the UI can say so instead of silently mixing years.
+ */
+async function resolvePolicyFallbackFlag(year) {
+  const hasOwnPolicies = await LeavePolicy.exists({ year, isActive: true });
+  if (hasOwnPolicies) return null;
+  const currentYear = getISTYear();
+  if (year === currentYear) return null;
+  return { requestedYear: year, resolvedYear: currentYear };
+}
+
 export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
   const parsed = leaveAdjustmentGridQuerySchema.parse(rawQuery);
   const query = await buildScopedEmployeeQuery(actor, permissions, {
     search: parsed.search,
     departmentId: parsed.departmentId,
   });
+  const policyFallback = await resolvePolicyFallbackFlag(parsed.year);
 
   const skip = (parsed.page - 1) * parsed.limit;
   const [employees, total, leaveTypes] = await Promise.all([
@@ -160,13 +175,19 @@ export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
     };
   });
 
+  const policyMap = await getPolicyMapForYear(parsed.year);
   return {
     year: parsed.year,
-    leaveTypes: leaveTypes.map((leaveType) => ({
-      id: leaveType._id.toString(),
-      code: leaveType.code,
-      name: leaveType.name,
-    })),
+    policyFallback,
+    leaveTypes: leaveTypes.map((leaveType) => {
+      const typeId = leaveType._id.toString();
+      return {
+        id: typeId,
+        code: leaveType.code,
+        name: leaveType.name,
+        annualQuota: policyMap.get(typeId)?.annualQuota ?? null,
+      };
+    }),
     rows,
     pagination: {
       page: parsed.page,
@@ -253,6 +274,7 @@ export async function getLeaveAdjustmentHistory(actor, permissions, userId, rawQ
 
   const endYear = parsed.year ?? getISTYear();
   const years = [endYear];
+  const policyFallback = await resolvePolicyFallbackFlag(endYear);
   await ensureBalancesForUser(employee._id, endYear);
   const leaveTypes = await LeaveType.find({ isActive: true }).sort({ code: 1 });
   const balances = await LeaveBalance.find({
@@ -270,6 +292,7 @@ export async function getLeaveAdjustmentHistory(actor, permissions, userId, rawQ
 
   const contractStart = employee.salaryEffectiveFrom ?? employee.joiningDate ?? null;
   return {
+    policyFallback,
     user: {
       id: employee._id.toString(),
       name: employee.name,

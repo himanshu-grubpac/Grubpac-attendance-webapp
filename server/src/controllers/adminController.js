@@ -78,7 +78,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
     field: 'endingDate',
   };
 }
-import { auditRequest, auditRequestSync } from '../utils/auditLog.js';
+import { auditActionMatchers, auditRequest, auditRequestSync, getRequestAuditContext, resolveAuditDisplayEmail, resolveAuditDisplayRole, resolveAuditModule } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 const attendanceQuerySchema = paginationSchema
@@ -92,6 +92,9 @@ const attendanceQuerySchema = paginationSchema
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.')
       .optional(),
+    search: z.string().trim().max(100).optional(),
+    type: z.enum(['check_in', 'check_out']).optional(),
+    status: z.enum(['allowed', 'rejected']).optional(),
   })
   .refine((value) => !(value.date && value.weekStart), {
     message: 'Use either date or weekStart, not both.',
@@ -621,9 +624,10 @@ export async function resetEmployeePassword(req, res) {
 
   employee.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
   // Resetting the password also revokes the employee's PIN credential.
+  // NOTE: no forced-change flag — first-login gating applies to new accounts
+  // only, never to existing ones (resets are already audit-logged per actor).
   employee.pin4Hash = null;
   employee.tokenVersion = (employee.tokenVersion ?? 0) + 1;
-  employee.forcePasswordChange = true;
   await employee.save();
 
   auditRequest(req, 'password_reset_by_admin', {
@@ -749,6 +753,7 @@ export async function getOfficeSettingsHandler(req, res) {
 export async function updateOfficeSettings(req, res) {
   const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
+  const previous = settings ? settings.toObject() : null;
   // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
   if (parsed.autoCheckout) {
     const existing = (settings && settings.autoCheckout) || {};
@@ -772,9 +777,21 @@ export async function updateOfficeSettings(req, res) {
     settings = await OfficeSettings.findById(settings._id);
   }
 
+  const nextSnapshot = settings.toObject();
+  const diff = {};
+  for (const key of Object.keys(parsed)) {
+    const before = previous?.[key] ?? null;
+    const after = nextSnapshot?.[key] ?? null;
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      diff[key] = { previous: before, next: after };
+    }
+  }
   auditRequest(req, 'office_settings_updated', {
     adminId: req.user._id.toString(),
     officeName: settings.name,
+    previous,
+    next: nextSnapshot,
+    changes: diff,
   });
 
   res.set('Cache-Control', 'no-store');
@@ -795,6 +812,7 @@ export async function editAttendanceRecord(req, res) {
   const recordId = objectIdSchema.parse(req.params.id);
   const payload = adminAttendanceEditSchema.parse(req.body);
   const auditContext = {
+    ...getRequestAuditContext(req),
     email: req.user?.email,
   };
   const result = await adminEditAttendanceRecord({
@@ -832,6 +850,7 @@ export async function upsertAttendanceRecord(req, res) {
   const parsed = adminAttendanceUpsertSchema.parse(req.body);
   const { userId, dayKey, ...payload } = parsed;
   const auditContext = {
+    ...getRequestAuditContext(req),
     email: req.user?.email,
   };
   const result = await adminUpsertAttendanceForDay({
@@ -1068,7 +1087,41 @@ const BULK_UPLOAD_AUDIT_ACTIONS = ['employee_bulk_upsert', 'employee_bulk_upload
 const ALL_AUDIT_ACTIONS = [...LOGIN_AUDIT_ACTIONS, ...BULK_UPLOAD_AUDIT_ACTIONS];
 const CONFLICT_FILTER_SCAN_LIMIT = 500;
 
+const AUDIT_RECORD_ID_KEYS = [
+  'entityId',
+  'employeeId',
+  'requestId',
+  'ticketId',
+  'commentId',
+  'policyId',
+  'leaveTypeId',
+  'departmentId',
+  'transferId',
+  'holidayId',
+  'roleId',
+  'userId',
+];
+
+export function resolveAuditRecordId(log) {
+  // entityId persists TOP-LEVEL (AuditLog schema), not in metadata — check it
+  // first, then the legacy metadata id family.
+  const top = log?.entityId;
+  if (top !== undefined && top !== null && String(top).trim() !== '') {
+    return String(top);
+  }
+  const metadata = log?.metadata;
+  if (metadata == null || typeof metadata !== 'object') return null;
+  for (const key of AUDIT_RECORD_ID_KEYS) {
+    const value = metadata[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      return String(value);
+    }
+  }
+  return null;
+}
+
 function mapAuditLogResponse(log, conflict) {
+  const metadata = log.metadata ?? null;
   return {
     id: log._id.toString(),
     action: log.action,
@@ -1078,7 +1131,9 @@ function mapAuditLogResponse(log, conflict) {
     ip: log.ip ?? null,
     deviceId: log.deviceId ?? null,
     userAgent: log.userAgent ?? null,
-    metadata: log.metadata ?? null,
+    metadata,
+    module: metadata?.module ?? resolveAuditModule(log.action),
+    recordId: resolveAuditRecordId(log),
     status: log.status ?? null,
     reason: log.reason ?? null,
     timestamp: log.timestamp,
@@ -1093,7 +1148,7 @@ function mapAuditLogResponse(log, conflict) {
   };
 }
 
-function buildAuditLogQuery({ action, search, date, entityType, actionType, userId, fieldChanged } = {}) {
+function buildAuditLogQuery({ action, search, date, entityType, actionType, userId, fieldChanged, dateFrom, dateTo, module, employee, entityId, q } = {}) {
   const query = {};
   if (action) {
     query.action = action;
@@ -1111,11 +1166,73 @@ function buildAuditLogQuery({ action, search, date, entityType, actionType, user
     query.fieldChanged = fieldChanged;
   }
 
+  if (module) {
+    const matchers = auditActionMatchers(module);
+    if (matchers.length > 0) {
+      query.$and = query.$and ?? [];
+      query.$and.push({
+        $or: [
+          { 'metadata.module': module },
+          ...matchers.map((prefix) => ({ action: new RegExp(`^${escapeRegex(prefix)}`) })),
+        ],
+      });
+    } else {
+      query['metadata.module'] = module;
+    }
+  }
+
   if (search) {
     query.email = { $regex: escapeRegex(search), $options: 'i' };
   }
 
-  if (date) {
+  if (employee) {
+    const trimmed = employee.trim();
+    const clauses = [{ email: { $regex: escapeRegex(trimmed), $options: 'i' } }];
+    if (/^[a-f\d]{24}$/i.test(trimmed)) {
+      clauses.push({ userId: trimmed });
+    }
+    query.$and = query.$and ?? [];
+    query.$and.push({ $or: clauses });
+  }
+
+  if (entityId) {
+    const trimmed = entityId.trim();
+    const clauses = AUDIT_RECORD_ID_KEYS.map((key) => ({ [`metadata.${key}`]: trimmed }));
+    // Top-level entityId is an ObjectId path — only match it for valid ids
+    // (anything else would throw a CastError out of the query).
+    if (/^[a-f\d]{24}$/i.test(trimmed)) {
+      clauses.unshift({ entityId: trimmed });
+    }
+    query.$and = query.$and ?? [];
+    query.$and.push({ $or: clauses });
+  }
+
+  if (q) {
+    // Unified search box: one input matched with OR semantics across actor
+    // email (partial, case-insensitive), user ObjectId, and record ids
+    // (top-level entityId + metadata id family, exact). ObjectId-typed paths
+    // are only queried for 24-hex input so other strings can never throw a
+    // CastError out of the query.
+    const trimmed = q.trim();
+    const clauses = [{ email: { $regex: escapeRegex(trimmed), $options: 'i' } }];
+    if (/^[a-f\d]{24}$/i.test(trimmed)) {
+      clauses.push({ userId: trimmed });
+      clauses.push({ entityId: trimmed });
+    }
+    for (const key of AUDIT_RECORD_ID_KEYS) {
+      clauses.push({ [`metadata.${key}`]: trimmed });
+    }
+    query.$and = query.$and ?? [];
+    query.$and.push({ $or: clauses });
+  }
+
+  const fromDay = dateFrom ? parseDateInputAsISTDay(dateFrom) : null;
+  const toDay = dateTo ? parseDateInputAsISTDay(dateTo) : null;
+  if (fromDay || toDay) {
+    query.timestamp = {};
+    if (fromDay) query.timestamp.$gte = startOfDayIST(fromDay);
+    if (toDay) query.timestamp.$lte = endOfDayIST(toDay);
+  } else if (date) {
     const istDay = parseDateInputAsISTDay(date);
     if (istDay) {
       query.timestamp = {
@@ -1138,29 +1255,24 @@ function flattenAuditMetadata(metadata) {
   }
 }
 
-function auditLogExportRows(logs) {
+export function auditLogExportRows(logs) {
   return logs.map((log) => ({
     Timestamp: log.timestamp ? new Date(log.timestamp).toISOString() : '',
     Action: log.action ?? '',
-    Email: log.email ?? '',
-    Role: log.role ?? '',
-    Status: log.status ?? log.metadata?.status ?? '',
-    Reason: log.reason ?? '',
-    Module: log.metadata?.module ?? '',
+    Email: resolveAuditDisplayEmail(log),
+    Role: resolveAuditDisplayRole(log),
+    Status: log.status ?? log.metadata?.status ?? 'UNKNOWN',
+    Reason: log.reason ?? 'Not recorded',
+    Module: log.metadata?.module ?? resolveAuditModule(log.action),
     Entity: log.metadata?.entity ?? '',
-    EntityId:
-      log.metadata?.entityId ??
-      log.metadata?.employeeId ??
-      log.metadata?.policyId ??
-      log.metadata?.departmentId ??
-      '',
+    EntityId: resolveAuditRecordId(log) ?? 'n/a',
     EntityAction: log.metadata?.entityAction ?? '',
     Previous: flattenAuditMetadata(log.metadata?.previous),
     Next: flattenAuditMetadata(
       log.metadata?.next ?? log.metadata?.changes ?? log.metadata?.after,
     ),
-    IP: log.ip ?? '',
-    DeviceId: log.deviceId ?? '',
+    IP: log.ip ?? 'Not recorded',
+    DeviceId: log.deviceId ?? 'Not recorded',
   }));
 }
 
@@ -1178,7 +1290,17 @@ export async function exportAuditLogs(req, res) {
     adminId: req.user._id.toString(),
     format: parsed.format,
     rows: rows.length,
-    filters: { action: parsed.action ?? null, search: parsed.search ?? null, date: parsed.date ?? null },
+    filters: {
+      action: parsed.action ?? null,
+      search: parsed.search ?? null,
+      q: parsed.q ?? null,
+      date: parsed.date ?? null,
+      dateFrom: parsed.dateFrom ?? null,
+      dateTo: parsed.dateTo ?? null,
+      module: parsed.module ?? null,
+      employee: parsed.employee ?? null,
+      entityId: parsed.entityId ?? null,
+    },
   });
 
   if (parsed.format === 'csv') {
@@ -1221,9 +1343,22 @@ export async function exportAuditLogs(req, res) {
   res.end(buffer);
 }
 
+export async function runAuditArchiveHandler(req, res) {
+  const dryRun = req.body?.dryRun === true;
+  const { runAuditArchiveJob } = await import('../services/auditArchiveService.js');
+  const result = await runAuditArchiveJob({ dryRun, actorId: req.user._id });
+  res.json(result);
+}
+
+export async function getAuditArchiveStatusHandler(req, res) {
+  const { getAuditArchiveStatus } = await import('../services/auditArchiveService.js');
+  res.json(await getAuditArchiveStatus());
+}
+
 export async function listAuditLogs(req, res) {
-  const { page, limit, action, search, date, conflictsOnly } = auditLogQuerySchema.parse(req.query);
-  const query = buildAuditLogQuery({ action, search, date });
+  const { page, limit, action, search, date, dateFrom, dateTo, module, employee, entityId, q, conflictsOnly } =
+    auditLogQuerySchema.parse(req.query);
+  const query = buildAuditLogQuery({ action, search, date, dateFrom, dateTo, module, employee, entityId, q });
 
   const skip = (page - 1) * limit;
   let logs;

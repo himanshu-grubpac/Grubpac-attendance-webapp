@@ -100,6 +100,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
   const [rows, setRows] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [pagination, setPagination] = useState(null);
+  const [policyFallback, setPolicyFallback] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState('20');
@@ -120,7 +121,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
   // Carry-forward history drawer (read-only, per employee).
   const [historyUser, setHistoryUser] = useState(null);
 
-  const originalRef = useRef(new Map());
+      const originalRef = useRef(new Map());
   const editedRef = useRef(new Map());
   const [editedVersion, setEditedVersion] = useState(0);
 
@@ -167,11 +168,13 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
       setRows(data.rows ?? []);
       setLeaveTypes(data.leaveTypes ?? []);
       setPagination(data.pagination ?? null);
+      setPolicyFallback(data.policyFallback ?? null);
     } catch (err) {
       setError(getErrorMessage(err));
       setRows([]);
       setLeaveTypes([]);
       setPagination(null);
+      setPolicyFallback(null);
     } finally {
       setLoading(false);
     }
@@ -247,8 +250,13 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
 
   function getBalanceBreakdown(row, leaveTypeId, displayedCarried, liveAvailable) {
     const info = getBalanceInfo(row, leaveTypeId);
+    const quota = leaveTypes.find((type) => type.id === leaveTypeId)?.annualQuota;
+    const entitledBasis =
+      quota == null || Number(info.entitled ?? 0) === Number(quota)
+        ? `Entitled ${formatCarried(info.entitled ?? 0)}`
+        : `Entitled ${formatCarried(info.entitled ?? 0)} (quota ${formatCarried(quota)}, joining-date pro-rated)`;
     return (
-      `Entitled ${formatCarried(info.entitled ?? 0)} + Carried ${formatCarried(displayedCarried)}` +
+      `${entitledBasis} + Carried ${formatCarried(displayedCarried)}` +
       ` + Comp-off ${formatCarried(info.compOffEarned ?? 0)} − Used ${formatCarried(info.used ?? 0)}` +
       ` − Pending ${formatCarried(info.pending ?? 0)} − Encashed ${formatCarried(info.encashed ?? 0)}` +
       ` = Available ${formatCarried(liveAvailable)}`
@@ -510,6 +518,12 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
             Adjust carried leave quota for individual employees. Changes apply to the carried balance
             only for policy year {policyYear}.
           </p>
+          {policyFallback ? (
+            <p className="alert alert--warning small" role="note">
+              No active policies exist for {policyFallback.requestedYear} — balances shown use the{' '}
+              {policyFallback.resolvedYear} policies.
+            </p>
+          ) : null}
         </div>
         <div className="leave-adjustment-panel__header-actions">
           <button

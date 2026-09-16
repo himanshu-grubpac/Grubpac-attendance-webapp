@@ -19,7 +19,7 @@ export const env = {
   port: Number(process.env.PORT ?? 5000),
   mongoUri: required('MONGODB_URI', 'mongodb://127.0.0.1:27017/attendance_web'),
   jwtSecret: required('JWT_SECRET', 'local-dev-attendance-secret-change-in-production'),
-  /** Short-lived access token (v1 — no refresh-token rotation yet). Default matches template.yaml JwtExpiresIn so token and cookie (JWT_COOKIE_MAX_AGE_MS) expire together. */
+  /** Short-lived access token. Open tabs renew the cookie ahead of expiry via POST /auth/refresh (sliding window); the crypto expiry is the backstop. Default matches template.yaml JwtExpiresIn so token and cookie (JWT_COOKIE_MAX_AGE_MS) expire together. */
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '12h',
   jwtCookieMaxAgeMs: Number(process.env.JWT_COOKIE_MAX_AGE_MS ?? 2 * 60 * 60 * 1000),
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',

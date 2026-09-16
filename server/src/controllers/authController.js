@@ -181,7 +181,9 @@ export async function loginUser(body, portal, auditContext = {}) {
     user: {
       ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
       loginPortal: portal,
-      mustChangePassword: Boolean(user.forcePasswordChange),
+      // Single source of truth with toSafeJSON: either flag forces the
+      // first-login gate (covers legacy rows where only one was ever set).
+      mustChangePassword: Boolean(user.forcePasswordChange || user.mustChangePassword),
     },
   };
 }
@@ -189,6 +191,33 @@ export async function loginUser(body, portal, auditContext = {}) {
 export function applyAuthSession(res, { token, csrfToken }) {
   setAuthCookie(res, token);
   setCsrfCookie(res, csrfToken);
+}
+
+/**
+ * Sliding session renewal for long-lived tabs (e.g. an admin triaging the
+ * Pending Requests queue for hours).
+ *
+ * The JWT cookie has a 2h browser lifetime (`jwtCookieMaxAgeMs`). Without
+ * renewal, the browser silently discards it and every subsequent mutation
+ * (approve/reject/confirm) 401s the user to /login. Renewing ahead of expiry
+ * keeps the session alive while the tab stays open.
+ *
+ * The current CSRF token value is preserved (not rotated) so other open tabs
+ * — which hold the old token in memory — keep passing double-submit checks.
+ * A fresh token is minted only when the client sent none.
+ */
+export async function refreshSession(userId, csrfToken) {
+  const user = await loadAuthenticatedUser(userId);
+  if (!user || !user.isActive) {
+    const error = new Error('Session has expired.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return {
+    token: signToken(user),
+    csrfToken: csrfToken || generateCsrfToken(),
+    expiresAt: Date.now() + env.jwtCookieMaxAgeMs,
+  };
 }
 
 export async function getCurrentUser(userId) {

@@ -110,6 +110,32 @@ function queueFromParam(value) {
   return 'pending';
 }
 
+function buildYearOptions() {
+  const currentYear = Number(getISTDateInputValue().slice(0, 4));
+  const years = [{ value: '', label: 'All years' }];
+  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
+    years.push({ value: String(year), label: String(year) });
+  }
+  return years;
+}
+
+const MONTH_PART_OPTIONS = [
+  { value: '', label: 'All months' },
+  ...Array.from({ length: 12 }, (_, index) => ({
+    value: String(index + 1).padStart(2, '0'),
+    label: new Intl.DateTimeFormat('en-IN', {
+      month: 'long',
+      timeZone: 'UTC',
+    }).format(new Date(Date.UTC(2020, index, 1))),
+  })),
+];
+
+/** Leave-period month param (YYYY-MM), or undefined when unfiltered. */
+function toMonthFilterValue(year, monthPart, fallbackYear) {
+  if (!monthPart) return undefined;
+  return `${year || fallbackYear}-${monthPart}`;
+}
+
 function decisionUndoDurationMs(request) {
   const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
   if (!Number.isFinite(expiresAt)) return DECISION_UNDO_MS;
@@ -184,15 +210,58 @@ export default function AdminCompOffRequests() {
   const [actingId, setActingId] = useState(null);
   const [expandedIds, setExpandedIds] = useState({});
   const [decisionModal, setDecisionModal] = useState({ open: false, item: null, comment: '' });
+  const [cancelModal, setCancelModal] = useState({ open: false, item: null, comment: '' });
   const [assessment, setAssessment] = useState({ open: false, item: null, values: {}, comment: '' });
   const [queueStatus, setQueueStatus] = useState(() => queueFromParam(searchParams.get('queue')));
+  // '' = All (unfiltered). Year/month mirror the Leave tab period filter,
+  // but default to All so no rows are hidden on first paint.
+  const [employeeFilter, setEmployeeFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
+  const [monthPartFilter, setMonthPartFilter] = useState('');
 
   const queueStatusRef = useRef(queueStatus);
   queueStatusRef.current = queueStatus;
   const pageRef = useRef(page);
   pageRef.current = page;
+  const employeeFilterRef = useRef(employeeFilter);
+  employeeFilterRef.current = employeeFilter;
+  const yearFilterRef = useRef(yearFilter);
+  yearFilterRef.current = yearFilter;
+  const monthPartFilterRef = useRef(monthPartFilter);
+  monthPartFilterRef.current = monthPartFilter;
 
-  const loadRequests = async ({ nextPage = 1, nextQueueStatus = queueStatusRef.current, quiet = false } = {}) => {
+  const yearOptions = useMemo(() => buildYearOptions(), []);
+  const currentYear = useMemo(() => getISTDateInputValue().slice(0, 4), []);
+
+  // Employee filter options derive from the loaded (already scope-filtered)
+  // queue rows — never from the directory. A reporting manager therefore only
+  // ever sees employees under them here; out-of-scope ids are additionally
+  // rejected server-side with a 403.
+  const employeeOptions = useMemo(() => {
+    const seen = new Map();
+    for (const item of requests) {
+      const id = item.userId ? String(item.userId) : '';
+      if (!id || seen.has(id)) continue;
+      seen.set(id, item.userName || 'Employee');
+    }
+    return [
+      { value: '', label: 'All employees' },
+      ...[...seen.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
+  }, [requests]);
+
+  const hasActiveFilters = Boolean(employeeFilter || yearFilter || monthPartFilter);
+
+  const loadRequests = async ({
+    nextPage = 1,
+    nextQueueStatus = queueStatusRef.current,
+    nextEmployee = employeeFilterRef.current,
+    nextYear = yearFilterRef.current,
+    nextMonthPart = monthPartFilterRef.current,
+    quiet = false,
+  } = {}) => {
     if (!quiet) {
       setLoading(true);
       setError('');
@@ -205,6 +274,11 @@ export default function AdminCompOffRequests() {
         status: nextQueueStatus,
         page: nextPage,
         limit: QUEUE_SIZE,
+        ...(nextEmployee ? { userId: nextEmployee } : {}),
+        ...(nextYear ? { year: Number(nextYear) } : {}),
+        ...(toMonthFilterValue(nextYear, nextMonthPart, currentYear)
+          ? { month: toMonthFilterValue(nextYear, nextMonthPart, currentYear) }
+          : {}),
       });
       setRequests(data.requests ?? []);
       setPagination(data.pagination ?? null);
@@ -218,11 +292,12 @@ export default function AdminCompOffRequests() {
 
   useEffect(() => {
     loadRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setExpandedIds({});
-  }, [page, queueStatus]);
+  }, [page, queueStatus, employeeFilter, yearFilter, monthPartFilter]);
 
   // Sync ?queue= deep links (dashboard button / notification links).
   useEffect(() => {
@@ -301,6 +376,28 @@ export default function AdminCompOffRequests() {
     loadRequests({ nextPage: 1, nextQueueStatus: value });
   }
 
+  function handleEmployeeChange(value) {
+    setEmployeeFilter(value);
+    loadRequests({ nextPage: 1, nextEmployee: value });
+  }
+
+  function handleYearChange(value) {
+    setYearFilter(value);
+    loadRequests({ nextPage: 1, nextYear: value });
+  }
+
+  function handleMonthPartChange(value) {
+    setMonthPartFilter(value);
+    loadRequests({ nextPage: 1, nextMonthPart: value });
+  }
+
+  function clearFilters() {
+    setEmployeeFilter('');
+    setYearFilter('');
+    setMonthPartFilter('');
+    loadRequests({ nextPage: 1, nextEmployee: '', nextYear: '', nextMonthPart: '' });
+  }
+
   function toggleExpanded(id) {
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   }
@@ -342,6 +439,50 @@ export default function AdminCompOffRequests() {
         });
       } else {
         showSuccess(`Comp off request ${decision === 'reject' ? 'declined' : 'approved'}.`);
+      }
+      await loadRequests({ nextPage: pageRef.current });
+    } catch (err) {
+      showError(getErrorMessage(err));
+      // A 409 race means the row changed underneath us — resync.
+      await loadRequests({ nextPage: pageRef.current });
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function handleCancelApproved() {
+    const item = cancelModal.item;
+    if (!item) return;
+    const note = (cancelModal.comment ?? '').trim();
+    if (!note) {
+      showFormError({ setError, alertRef, message: 'A remark is required to cancel this comp off request.' });
+      return;
+    }
+
+    setActingId(item.id);
+    setError('');
+    try {
+      const response = await compOffApi.cancelApproved(item.id, { comment: note });
+      const durationMs = decisionUndoDurationMs(response?.request);
+      setCancelModal({ open: false, item: null, comment: '' });
+      if (durationMs > 0) {
+        showActionPopup({
+          message: 'Approved comp off cancelled. If done by mistake, click Undo to revert it.',
+          undoLabel: 'Undo',
+          onUndo: async () => {
+            try {
+              await compOffApi.undo(item.id);
+              showSuccess('Cancellation undone. Comp off restored to approved.');
+              await loadRequests({ nextPage: pageRef.current });
+            } catch (err) {
+              showError(getErrorMessage(err));
+              await loadRequests({ nextPage: pageRef.current });
+            }
+          },
+          durationMs,
+        });
+      } else {
+        showSuccess('Approved comp off cancelled.');
       }
       await loadRequests({ nextPage: pageRef.current });
     } catch (err) {
@@ -455,6 +596,43 @@ export default function AdminCompOffRequests() {
                 aria-label="Comp off queue filter"
               />
             </label>
+
+            <label className="field-inline filter-bar__field approvals-toolbar__field">
+              <span className="label">Employee</span>
+              <SelectField
+                value={employeeFilter}
+                onChange={handleEmployeeChange}
+                options={employeeOptions}
+                aria-label="Employee filter"
+                disabled={loading}
+              />
+            </label>
+
+            <div className="field-inline filter-bar__field approvals-toolbar__field approvals-toolbar__field--period">
+              <span className="label">Leave period</span>
+              <div className="approvals-toolbar__period">
+                <SelectField
+                  value={yearFilter}
+                  onChange={handleYearChange}
+                  options={yearOptions}
+                  aria-label="Leave year filter"
+                />
+                <SelectField
+                  value={monthPartFilter}
+                  onChange={handleMonthPartChange}
+                  options={MONTH_PART_OPTIONS}
+                  aria-label="Leave month filter"
+                />
+              </div>
+            </div>
+
+            {hasActiveFilters ? (
+              <div className="filter-bar__field approvals-toolbar__clear">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -502,6 +680,7 @@ export default function AdminCompOffRequests() {
                     const staged = item.pendingAction;
                     const isPendingQueue = queueStatus === 'pending';
                     const isAssessmentQueue = queueStatus === 'worked';
+                    const isApprovedQueue = queueStatus === 'approved';
                     const mobileSubline = [
                       compactDateRangeLabel(item),
                       durationLabel(item.days),
@@ -509,7 +688,13 @@ export default function AdminCompOffRequests() {
                       .map((part) => String(part ?? '').trim())
                       .filter(Boolean)
                       .join(' · ');
-                    const mobileAction = isPendingQueue ? 'review' : isAssessmentQueue ? 'assess' : null;
+                    const mobileAction = isPendingQueue
+                      ? 'review'
+                      : isAssessmentQueue
+                        ? 'assess'
+                        : isApprovedQueue
+                          ? 'cancel'
+                          : null;
 
                     return (
                       <Fragment key={item.id}>
@@ -578,7 +763,7 @@ export default function AdminCompOffRequests() {
                                     >
                                       Review
                                     </button>
-                                  ) : (
+                                  ) : mobileAction === 'assess' ? (
                                     <button
                                       type="button"
                                       className="btn btn-primary btn-sm btn--compact approval-card__action"
@@ -586,6 +771,15 @@ export default function AdminCompOffRequests() {
                                       onClick={() => setAssessment({ open: true, item, values: defaultAssessmentValues(item), comment: '' })}
                                     >
                                       Assess
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-sm btn--compact approval-card__action"
+                                      disabled={busy}
+                                      onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                    >
+                                      Cancel
                                     </button>
                                   )
                                 ) : null}
@@ -651,6 +845,16 @@ export default function AdminCompOffRequests() {
                                   onClick={() => setAssessment({ open: true, item, values: defaultAssessmentValues(item), comment: '' })}
                                 >
                                   Assess
+                                </button>
+                              )}
+                              {isApprovedQueue && (
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  disabled={busy || Boolean(staged)}
+                                  onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                >
+                                  Cancel
                                 </button>
                               )}
                             </td>
@@ -748,6 +952,19 @@ export default function AdminCompOffRequests() {
                                       onClick={() => setAssessment({ open: true, item, values: defaultAssessmentValues(item), comment: '' })}
                                     >
                                       Assess work
+                                    </button>
+                                  </div>
+                                ) : null}
+
+                                {isApprovedQueue && !staged ? (
+                                  <div className="approval-row__actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger"
+                                      disabled={busy}
+                                      onClick={() => setCancelModal({ open: true, item, comment: '' })}
+                                    >
+                                      Cancel approval
                                     </button>
                                   </div>
                                 ) : null}
@@ -855,6 +1072,18 @@ export default function AdminCompOffRequests() {
         onApprove={() => handleDecision(decisionModal.item.id, 'approve')}
         onReject={() => handleDecision(decisionModal.item.id, 'reject')}
         onCancel={() => setDecisionModal({ open: false, item: null, comment: '' })}
+      />
+
+      <LeaveDecisionModal
+        open={cancelModal.open}
+        item={cancelModal.item}
+        action="cancel"
+        initialComment={cancelModal.comment}
+        busy={actingId === cancelModal.item?.id}
+        onCommentChange={(value) => setCancelModal((prev) => ({ ...prev, comment: value }))}
+        onApprove={handleCancelApproved}
+        onReject={() => setCancelModal({ open: false, item: null, comment: '' })}
+        onCancel={() => setCancelModal({ open: false, item: null, comment: '' })}
       />
     </div>
   );

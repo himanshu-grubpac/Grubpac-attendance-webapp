@@ -13,6 +13,66 @@ export function setCsrfToken(token) {
   csrfToken = token ?? null;
 }
 
+// ── Sliding session renewal ─────────────────────────────────────────────
+// The JWT + CSRF cookies live 2h (jwtCookieMaxAgeMs). An admin triaging the
+// Pending Requests queue keeps one tab open for hours, so the app renews the
+// session ahead of expiry instead of 401-bouncing to /login mid-decision.
+const SESSION_RENEW_KEY = 'grubpac_session_renewed_at';
+// Cookie lifetime is 2h; renew once it is older than 45m so even a tab left
+// idle-but-open slides the window indefinitely.
+const RENEW_AFTER_MS = 45 * 60 * 1000;
+const KEEPALIVE_CHECK_MS = 5 * 60 * 1000;
+
+function markSessionRenewed() {
+  try {
+    // localStorage (not sessionStorage): shared across tabs so N open tabs
+    // collectively issue ~1 refresh per 45m instead of N.
+    localStorage.setItem(SESSION_RENEW_KEY, String(Date.now()));
+  } catch {
+    // Storage failures must never break auth.
+  }
+}
+
+function readLastRenewed() {
+  try {
+    return Number(localStorage.getItem(SESSION_RENEW_KEY) ?? 0) || 0;
+  } catch {
+    return Date.now();
+  }
+}
+
+let keepaliveTimer = null;
+
+export function startSessionKeepalive() {
+  if (typeof window === 'undefined' || keepaliveTimer) return () => {};
+  const tick = async () => {
+    try {
+      if (document.hidden) return;
+      if (Date.now() - readLastRenewed() < RENEW_AFTER_MS) return;
+      // POST carries the CSRF header via the request interceptor above, so
+      // the global csrfProtection check passes. Failures are silent — a dead
+      // session redirects on the next real user action instead.
+      await api.post('/auth/refresh');
+    } catch {
+      // Network blip or dead session: the next tick retries, and a truly
+      // expired session still 401-redirects on the next user action.
+    }
+  };
+  const onVisible = () => {
+    if (!document.hidden) void tick();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  void tick();
+  keepaliveTimer = setInterval(tick, KEEPALIVE_CHECK_MS);
+  return () => {
+    document.removeEventListener('visibilitychange', onVisible);
+    if (keepaliveTimer) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+  };
+}
+
 const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 function normalizeApiPath(url) {
@@ -107,6 +167,16 @@ api.interceptors.response.use(
     if (response.data?.csrfToken) {
       setCsrfToken(response.data.csrfToken);
     }
+    // Login and session-refresh responses (re)start the 2h cookie window —
+    // record it so the keepalive only fires when actually due.
+    const url = response.config?.url ?? '';
+    if (
+      url.includes('/auth/admin/login') ||
+      url.includes('/auth/user/login') ||
+      url.includes('/auth/refresh')
+    ) {
+      markSessionRenewed();
+    }
     return response;
   },
   (error) => {
@@ -128,6 +198,10 @@ export const authApi = {
   },
   logout: () => api.post('/auth/logout').then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
+  // Sliding renewal: re-issues the JWT + CSRF cookies ahead of their 2h
+  // expiry. The response interceptor records the renewal for keepalive
+  // scheduling; failures reject so callers (keepalive) can stay silent.
+  refreshSession: () => api.post('/auth/refresh').then((r) => r.data),
   updateProfile: (payload) =>
     api.patch('/auth/me', payload).then((r) => r.data),
   changePassword: (payload) =>
@@ -228,6 +302,8 @@ export const adminApi = {
     api.post('/admin/attendance/records', payload).then((r) => r.data),
   listAuditLogs: (params = {}) =>
     api.get('/admin/audit-logs', { params }).then((r) => r.data),
+  getAuditArchiveStatus: () => api.get('/admin/audit-logs/archive/status').then((r) => r.data),
+  runAuditArchive: (payload = {}) => api.post('/admin/audit-logs/archive', payload).then((r) => r.data),
   exportAuditLogs: (params = {}) => {
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -418,6 +494,8 @@ export const compOffApi = {
   reject: (id, payload = {}) =>
     api.post(`/leave/comp-off/${id}/reject`, payload).then((r) => r.data),
   undo: (id) => api.post(`/leave/comp-off/${id}/undo`).then((r) => r.data),
+  cancelApproved: (id, payload = {}) =>
+    api.post(`/leave/comp-off/${id}/cancel`, payload).then((r) => r.data),
   assess: (id, payload = {}) =>
     api.post(`/leave/comp-off/${id}/assess`, payload).then((r) => r.data),
   undoAssess: (id) => api.post(`/leave/comp-off/${id}/undo-assess`).then((r) => r.data),

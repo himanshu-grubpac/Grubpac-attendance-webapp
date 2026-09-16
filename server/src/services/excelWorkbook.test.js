@@ -329,7 +329,8 @@ test('parseEmployeeWorkbook ignores password/pin columns and warns', () => {
 test('buildEmployeeTemplateWorkbook sample row aligns with its headers', () => {
   const buffer = buildEmployeeTemplateWorkbook();
   const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  // The template's first sheet is Instructions — read the Employees sheet by name.
+  const sheet = workbook.Sheets.Employees ?? workbook.Sheets[workbook.SheetNames[0]];
   const [headers, sample] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
   assert.equal(sample.length, headers.length, 'sample values must match header count');

@@ -68,9 +68,13 @@ function inclusiveDaySpan(fromKey, toKey) {
  * Daily-slice joining-date proration, applied to EVERY leave type for EVERY
  * employee: quota × (calendar days from joining to Dec 31 ÷ days in year),
  * rounded to the nearest half day.
- * - No joining date (or joined on/before Jan 1) → full quota.
+ * - No joining date (or joined on/before Jan 1) → full quota, granted upfront.
  * - Joined after Dec 31 → 0.
- * - Accrual types keep their monthly cap, applied on the prorated quota.
+ * - NOTE: accrualPerMonth is accepted for signature compatibility but no
+ *   longer gates the math — entitlements vest upfront for the whole year
+ *   (pro-rated by joining date). The field stays stored on the policy for
+ *   reference. A monthly cap made quotas unreachable (e.g. 30/mo can never
+ *   reach a 365 quota: 12 × 30 = 360).
  */
 export function computeProratedEntitled({
   annualQuota,
@@ -79,6 +83,8 @@ export function computeProratedEntitled({
   joiningDateKey = null,
   asOfDate = new Date(),
 }) {
+  void accrualPerMonth;
+  void asOfDate;
   const quota = Number(annualQuota) ?? 0;
   let proratedQuota = quota;
   if (joiningDateKey && /^\d{4}-\d{2}-\d{2}$/.test(joiningDateKey)) {
@@ -92,10 +98,6 @@ export function computeProratedEntitled({
       const remaining = inclusiveDaySpan(joiningDateKey, yearEndKey);
       proratedQuota = roundToHalfDay((quota * remaining) / daysInYear);
     }
-  }
-  if (accrualPerMonth > 0 && year === getISTYear(asOfDate)) {
-    const monthsElapsed = getISTMonth(asOfDate);
-    return Math.min(proratedQuota, monthsElapsed * accrualPerMonth);
   }
   return proratedQuota;
 }
@@ -151,10 +153,10 @@ export async function seedLeaveTypesAndPolicies(options = {}) {
         });
         console.log(`Seeded leave policy for ${typeCode} (${year})`);
       } else {
-        Object.assign(policy, policyFields);
-        policy.isActive = true;
-        await policy.save();
-        console.log(`Updated leave policy for ${typeCode} (${year})`);
+        // Create-only: never overwrite an admin-configured policy. Overwriting
+        // quotas here used to silently clobber live policies (and orphan the
+        // balances computed from them) every time seed/migrations ran.
+        console.log(`Kept existing leave policy for ${typeCode} (${year})`);
       }
     }
   }
@@ -273,14 +275,12 @@ export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDat
         encashed: 0,
         compOffEarned: 0,
       });
-    } else if (
-      !balance.entitledLocked &&
-      balance.entitled !== entitled &&
-      // Accrual rows always track the cap; non-accrual rows are corrected
-      // only when they still hold the untouched seeded full quota, so a
-      // deliberate manual tweak (any other value) is never overwritten here.
-      (policy.accrualPerMonth > 0 || balance.entitled === policy.annualQuota)
-    ) {
+    } else if (!balance.entitledLocked && balance.entitled !== entitled) {
+      // Heal-on-read: any unlocked row converges to the computed value.
+      // Deliberate manual tweaks are protected by entitledLocked (set only
+      // when an admin hand-tunes entitled) — never by value-sniffing, which
+      // froze stale rows whenever the stored value differed from the quota
+      // for any other reason (older quota era, recreated policies, …).
       balance.entitled = entitled;
       await balance.save();
     }
@@ -388,6 +388,12 @@ export function getPaidLeaveQuota(balance) {
   );
 }
 
+/**
+ * Convergence pass for unlocked rows: recomputes entitled from the current
+ * policy so stale values heal on read. Kept as a separate pass (also run by
+ * the monthly job) alongside ensureBalancesForUser. Writes nothing when the
+ * stored value already matches; locked rows are never touched.
+ */
 export async function refreshAccruedEntitlements(userId, year = getISTYear(), asOfDate = new Date()) {
   const user = await User.findById(userId).select('joiningDate').lean();
   const joiningDate = user?.joiningDate || null;

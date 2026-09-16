@@ -25,6 +25,8 @@ function columnsToPayload(visibleKeys) {
 
 export function useTableColumns({ tableKey, allColumns, defaultVisible }) {
   const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
+  // Draft edited inside the panel; only applied to the table on Done.
+  const [draftColumns, setDraftColumns] = useState(null);
   const [columnsLoading, setColumnsLoading] = useState(true);
   const [columnsError, setColumnsError] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
@@ -76,20 +78,48 @@ export function useTableColumns({ tableKey, allColumns, defaultVisible }) {
     [visibleColumns],
   );
 
-  const handleColumnToggle = useCallback(
+  const openColumnEditor = useCallback(() => {
+    setDraftColumns([...visibleColumns]);
+    setEditorOpen(true);
+  }, [visibleColumns]);
+
+  const cancelColumnEdit = useCallback(() => {
+    setDraftColumns(null);
+    setEditorOpen(false);
+  }, []);
+
+  const isDraftColumnVisible = useCallback(
+    (key) => (draftColumns ?? visibleColumns).includes(key),
+    [draftColumns, visibleColumns],
+  );
+
+  const handleDraftColumnToggle = useCallback(
     (key) => {
       if (allColumns.find((column) => column.key === key)?.always) return;
-      setVisibleColumns((prev) => {
-        const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-        const normalized = normalizeTableColumns(allColumns, next, defaultVisible);
-        saveColumnPreferences(normalized).catch(() => {
-          setVisibleColumns(prev);
-        });
-        return normalized;
+      setDraftColumns((prev) => {
+        const base = prev ?? visibleColumns;
+        const next = base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+        return normalizeTableColumns(allColumns, next, defaultVisible);
       });
     },
-    [allColumns, defaultVisible, saveColumnPreferences],
+    [allColumns, defaultVisible, visibleColumns],
   );
+
+  const applyColumnPreferences = useCallback(() => {
+    const normalized = normalizeTableColumns(
+      allColumns,
+      draftColumns ?? visibleColumns,
+      defaultVisible,
+    );
+    const previous = visibleColumns;
+    // Optimistic apply + close; rollback only if the server persist fails.
+    setVisibleColumns(normalized);
+    setDraftColumns(null);
+    setEditorOpen(false);
+    saveColumnPreferences(normalized).catch(() => {
+      setVisibleColumns(previous);
+    });
+  }, [allColumns, defaultVisible, draftColumns, visibleColumns, saveColumnPreferences]);
 
   return {
     visibleColumns,
@@ -97,7 +127,11 @@ export function useTableColumns({ tableKey, allColumns, defaultVisible }) {
     columnsError,
     editorOpen,
     setEditorOpen,
+    openColumnEditor,
+    cancelColumnEdit,
     isColumnVisible,
-    handleColumnToggle,
+    isDraftColumnVisible,
+    handleDraftColumnToggle,
+    applyColumnPreferences,
   };
 }

@@ -1,11 +1,17 @@
 /**
  * Decision-time finalizability guard (integration, real Mongo).
  *
- * A staged decision that can never finalize (deleted/inactive leave type,
- * missing balance row) must fail loudly at decide time — never stage a
- * poison row that hangs as PENDING through every sweep forever.
- * - decision on deleted leave type → 409, request left untouched
- * - decision with missing balance row → 409, request left untouched
+ * Every staged decision must be finalizable — never stage a poison row that
+ * hangs as PENDING through every sweep forever.
+ *
+ * Requests whose leave type was deleted/deactivated after submission stay
+ * actionable:
+ * - reject always stages + finalizes (release is null-safe, notify falls back)
+ * - approve stages + finalizes when the balance row survives (finalize never
+ *   reads the LeaveType row itself)
+ * - approve with a wiped balance but live policy regenerates the true quota
+ * - approve with no balance and no policy provisions a zeroed row so the
+ *   days finalize as unpaid (LOP) instead of hanging forever
  * - healthy decision still stages normally
  */
 process.env.NODE_ENV = 'test';
@@ -15,10 +21,12 @@ import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { LeaveBalance } from '../models/LeaveBalance.js';
+import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
 import { LeaveType } from '../models/LeaveType.js';
+import { LopRecord } from '../models/LopRecord.js';
 import { User } from '../models/User.js';
-import { processLeaveDecision } from './leaveService.js';
+import { processLeaveDecision, runLeaveDecisionNotifyJob } from './leaveService.js';
 
 let memoryServer;
 let sequence = 0;
@@ -32,8 +40,10 @@ before(async () => {
 beforeEach(async () => {
   await Promise.all([
     LeaveBalance.deleteMany({}),
+    LeavePolicy.deleteMany({}),
     LeaveRequest.deleteMany({}),
     LeaveType.deleteMany({}),
+    LopRecord.deleteMany({}),
     User.deleteMany({}),
   ]);
 });
@@ -78,37 +88,139 @@ async function freshRequest(id) {
   return LeaveRequest.findById(id);
 }
 
-test('decision on deleted leave type fails loudly without staging', async () => {
+async function createBalance(user, leaveType) {
+  return LeaveBalance.create({
+    userId: user._id,
+    leaveTypeId: leaveType._id,
+    year: 2026,
+    entitled: 7,
+    used: 0,
+    pending: 0,
+    carried: 0,
+    encashed: 0,
+  });
+}
+
+async function finalizeStaged(staged) {
+  const dueAt = new Date(new Date(staged.decisionUndoExpiresAt).getTime() + 5000);
+  await runLeaveDecisionNotifyJob(dueAt);
+}
+
+test('reject on deleted leave type stages and finalizes (no balance row)', async () => {
   const actor = await createUser();
   const applicant = await createUser();
   const type = await createType();
   const request = await createRequest(applicant, type);
   await LeaveType.findByIdAndDelete(type._id);
 
-  await assert.rejects(
-    processLeaveDecision(await freshRequest(request._id), actor, 'approve'),
-    (err) => err.statusCode === 409,
-    'expected 409 for deleted type',
-  );
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'reject');
+  assert.equal(staged.pendingDecision, 'rejected');
+  await finalizeStaged(staged);
+
   const live = await freshRequest(request._id);
-  assert.equal(live.status, 'pending');
+  assert.equal(live.status, 'rejected');
   assert.equal(live.pendingDecision, null);
-  assert.equal(live.notifyAfter, null);
 });
 
-test('decision with missing balance row fails loudly without staging', async () => {
+test('approve on deleted leave type finalizes against the surviving balance', async () => {
+  const actor = await createUser();
+  const applicant = await createUser();
+  const type = await createType();
+  await createBalance(applicant, type);
+  const request = await createRequest(applicant, type);
+  await LeaveType.findByIdAndDelete(type._id);
+
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'approve');
+  assert.equal(staged.pendingDecision, 'approved');
+  await finalizeStaged(staged);
+
+  const live = await freshRequest(request._id);
+  assert.equal(live.status, 'approved');
+  assert.equal(live.pendingDecision, null);
+  const balance = await LeaveBalance.findOne({ userId: applicant._id, leaveTypeId: type._id, year: 2026 });
+  assert.equal(balance.used, 2);
+});
+
+test('reject on inactive leave type stages and finalizes', async () => {
+  const actor = await createUser();
+  const applicant = await createUser();
+  const type = await createType();
+  const request = await createRequest(applicant, type);
+  await LeaveType.findByIdAndUpdate(type._id, { isActive: false });
+
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'reject');
+  assert.equal(staged.pendingDecision, 'rejected');
+  await finalizeStaged(staged);
+
+  const live = await freshRequest(request._id);
+  assert.equal(live.status, 'rejected');
+  assert.equal(live.pendingDecision, null);
+});
+
+test('approve with wiped balance but live policy regenerates quota and finalizes paid', async () => {
+  const actor = await createUser();
+  const applicant = await createUser();
+  const type = await createType();
+  await LeavePolicy.create({
+    leaveTypeId: type._id,
+    year: 2026,
+    annualQuota: 12,
+    accrualPerMonth: 0,
+    paid: true,
+    isActive: true,
+  });
+  const request = await createRequest(applicant, type);
+
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'approve');
+  assert.equal(staged.pendingDecision, 'approved');
+  await finalizeStaged(staged);
+
+  const live = await freshRequest(request._id);
+  assert.equal(live.status, 'approved');
+  assert.equal(live.pendingDecision, null);
+  const balance = await LeaveBalance.findOne({ userId: applicant._id, leaveTypeId: type._id, year: 2026 });
+  assert.equal(balance.entitled, 12);
+  assert.equal(balance.used, 2);
+  const lops = await LopRecord.find({ leaveRequestId: request._id });
+  assert.equal(lops.length, 0);
+});
+
+test('approve with deleted type and no balance provisions a zero row and finalizes as unpaid', async () => {
+  const actor = await createUser();
+  const applicant = await createUser();
+  const type = await createType();
+  const request = await createRequest(applicant, type);
+  const typeId = type._id;
+  await LeaveType.findByIdAndDelete(typeId);
+
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'approve');
+  assert.equal(staged.pendingDecision, 'approved');
+  await finalizeStaged(staged);
+
+  const live = await freshRequest(request._id);
+  assert.equal(live.status, 'approved');
+  assert.equal(live.pendingDecision, null);
+  const balance = await LeaveBalance.findOne({ userId: applicant._id, leaveTypeId: typeId, year: 2026 });
+  assert.equal(balance.entitled, 0);
+  assert.equal(balance.used, 2);
+  // Zero quota → the approved days land as unpaid via the normal LOP path.
+  const lops = await LopRecord.find({ leaveRequestId: request._id });
+  assert.equal(lops.length, 1);
+  assert.equal(lops[0].days, 2);
+});
+
+test('reject with missing balance row stages and finalizes', async () => {
   const actor = await createUser();
   const applicant = await createUser();
   const type = await createType();
   const request = await createRequest(applicant, type);
 
-  await assert.rejects(
-    processLeaveDecision(await freshRequest(request._id), actor, 'approve'),
-    (err) => err.statusCode === 409,
-    'expected 409 for missing balance',
-  );
+  const staged = await processLeaveDecision(await freshRequest(request._id), actor, 'reject');
+  assert.equal(staged.pendingDecision, 'rejected');
+  await finalizeStaged(staged);
+
   const live = await freshRequest(request._id);
-  assert.equal(live.status, 'pending');
+  assert.equal(live.status, 'rejected');
   assert.equal(live.pendingDecision, null);
 });
 

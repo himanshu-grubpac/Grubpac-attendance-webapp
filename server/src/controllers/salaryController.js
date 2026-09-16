@@ -50,12 +50,33 @@ export async function updateUserSalaryHandler(req, res) {
       : {}),
   };
 
+  const previous = {
+    monthlySalary: null,
+    salaryEffectiveFrom: null,
+  };
+  try {
+    const before = await loadSalarySubject(req.params.id);
+    previous.monthlySalary = before.monthlySalary ?? null;
+    previous.salaryEffectiveFrom = before.salaryEffectiveFrom
+      ? new Date(before.salaryEffectiveFrom).toISOString()
+      : null;
+  } catch {
+    // Subject load failure surfaces from updateUserSalary below.
+  }
+
   const user = await updateUserSalary(req.params.id, payload, req.user._id);
 
   auditRequest(req, 'salary_updated', {
     adminId: req.user._id.toString(),
     employeeId: user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
+    previous,
+    next: {
+      monthlySalary: user.monthlySalary ?? null,
+      salaryEffectiveFrom: user.salaryEffectiveFrom
+        ? new Date(user.salaryEffectiveFrom).toISOString()
+        : null,
+    },
   });
 
   // Route is gated by SALARY_WRITE, so the caller may view salary fields.
@@ -89,11 +110,20 @@ export async function getSalarySettingsHandler(req, res) {
 
 export async function updateSalarySettingsHandler(req, res) {
   const parsed = updateSalarySettingsSchema.parse(req.body);
+  let previous = null;
+  try {
+    const before = await getSalarySettingsPayload();
+    previous = { payrollDayOfMonth: before?.settings?.payrollDayOfMonth ?? null };
+  } catch {
+    // Settings load failure surfaces from updateSalarySettings below.
+  }
   const result = await updateSalarySettings(parsed, req.user._id);
 
   auditRequest(req, 'salary_settings_updated', {
     adminId: req.user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
+    previous,
+    next: { payrollDayOfMonth: result?.settings?.payrollDayOfMonth ?? null },
   });
 
   res.json(result);
@@ -184,6 +214,8 @@ export async function updateSalaryTransferHandler(req, res) {
     adminId: req.user._id.toString(),
     transferId: transfer.id,
     status: transfer.status,
+    previous: { status: transfer.previousStatus ?? null },
+    next: { status: transfer.status },
   });
 
   res.json({ transfer });
@@ -192,6 +224,18 @@ export async function updateSalaryTransferHandler(req, res) {
 export async function settleMonthHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await settleMonthPayroll(parsed.month, req.user._id);
+  auditRequest(req, 'month_settled', {
+    adminId: req.user._id.toString(),
+    periodKey: parsed.month,
+    settled: result.settled ?? false,
+    alreadySettled: result.alreadySettled ?? false,
+    employeesProcessed: result.employeesProcessed ?? 0,
+    employeesWithLop: result.employeesWithLop ?? 0,
+    totalLopDays: result.totalLopDays ?? 0,
+    totalLopRecords: result.totalLopRecords ?? 0,
+    transfersCreated: result.transfersCreated ?? 0,
+    transfersSkipped: result.transfersSkipped ?? 0,
+  });
   res.json(result);
 }
 

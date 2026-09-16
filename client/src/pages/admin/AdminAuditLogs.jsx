@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -7,27 +8,115 @@ import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 
+const MODULE_OPTIONS = [
+  { value: '', label: 'All modules' },
+  { value: 'authentication', label: 'Authentication' },
+  { value: 'employees', label: 'Employees' },
+  { value: 'organization', label: 'Organization' },
+  { value: 'roles', label: 'Roles & Permissions' },
+  { value: 'leave', label: 'Leave' },
+  { value: 'comp-off', label: 'Comp Off' },
+  { value: 'attendance', label: 'Attendance' },
+  { value: 'helpdesk', label: 'Helpdesk' },
+  { value: 'salary', label: 'Salary & Payroll' },
+  { value: 'faq', label: 'FAQ & Demo' },
+  { value: 'audit', label: 'Audit Logs' },
+  { value: 'other', label: 'Other' },
+];
+
 const ACTION_OPTIONS = [
   { value: '', label: 'All events' },
-  { value: 'login_success', label: 'Login success' },
-  { value: 'login_failed', label: 'Login failed' },
-  { value: 'employee_bulk_upsert', label: 'Bulk employee sync' },
-  { value: 'employee_bulk_upload', label: 'Bulk upload (legacy)' },
-  { value: 'employee_registered', label: 'Employee registered' },
-  { value: 'employee_org_updated', label: 'Employee updated' },
-  { value: 'password_reset_by_admin', label: 'Password reset' },
-  { value: 'pin_reset_by_admin', label: 'PIN reset' },
-  { value: 'audit_logs_exported', label: 'Audit logs exported' },
-  { value: 'leave_policy_created', label: 'Leave policy created' },
-  { value: 'leave_policy_updated', label: 'Leave policy updated' },
-  { value: 'leave_policy_entitled_recomputed', label: 'Entitlements recomputed' },
-  { value: 'department_created', label: 'Department created' },
-  { value: 'department_updated', label: 'Department updated' },
-  { value: 'department_deleted', label: 'Department deleted' },
-  { value: 'attendance_admin_edit', label: 'Attendance edited' },
-  { value: 'attendance_admin_create', label: 'Attendance created' },
-  { value: 'attendance_undo', label: 'Attendance undone' },
-  { value: 'office_settings_updated', label: 'Office settings updated' },
+  { value: 'login_success', label: 'Auth — Login success' },
+  { value: 'login_failed', label: 'Auth — Login failed' },
+  { value: 'logout', label: 'Auth — Logout' },
+  { value: 'profile_updated', label: 'Auth — Profile updated' },
+  { value: 'password_changed', label: 'Auth — Password changed' },
+  { value: 'pin_changed', label: 'Auth — PIN changed' },
+  { value: 'pin_set', label: 'Auth — PIN set' },
+  { value: 'pin_removed', label: 'Auth — PIN removed' },
+  { value: 'password_reset_requested', label: 'Auth — Password reset requested' },
+  { value: 'password_reset_completed', label: 'Auth — Password reset completed' },
+  { value: 'employee_registered', label: 'Employees — Registered' },
+  { value: 'employee_org_updated', label: 'Employees — Updated' },
+  { value: 'employee_bulk_upsert', label: 'Employees — Bulk sync' },
+  { value: 'employee_bulk_upload', label: 'Employees — Bulk upload (legacy)' },
+  { value: 'password_reset_by_admin', label: 'Employees — Password reset' },
+  { value: 'pin_reset_by_admin', label: 'Employees — PIN reset' },
+  { value: 'quarter_warnings_reset', label: 'Employees — Warnings reset' },
+  { value: 'department_created', label: 'Org — Department created' },
+  { value: 'department_updated', label: 'Org — Department updated' },
+  { value: 'department_deleted', label: 'Org — Department deleted' },
+  { value: 'office_settings_updated', label: 'Org — Office settings updated' },
+  { value: 'role_created', label: 'Roles — Created' },
+  { value: 'role_updated', label: 'Roles — Updated' },
+  { value: 'role_deleted', label: 'Roles — Deleted' },
+  { value: 'leave_type_created', label: 'Leave — Type created' },
+  { value: 'leave_type_updated', label: 'Leave — Type updated' },
+  { value: 'leave_type_deleted', label: 'Leave — Type deleted' },
+  { value: 'leave_policy_created', label: 'Leave — Policy created' },
+  { value: 'leave_policy_updated', label: 'Leave — Policy updated' },
+  { value: 'leave_policy_entitled_recomputed', label: 'Leave — Entitlements recomputed' },
+  { value: 'leave_balance_adjusted', label: 'Leave — Balance adjusted' },
+  { value: 'leave_encashment_recorded', label: 'Leave — Encashment recorded' },
+  { value: 'leave_carry_forward_applied', label: 'Leave — Carry forward applied' },
+  { value: 'leave_accrual_job_run', label: 'Leave — Accrual job run' },
+  { value: 'leave_request_created', label: 'Leave — Request created' },
+  { value: 'leave_request_approved', label: 'Leave — Request approved' },
+  { value: 'leave_request_rejected', label: 'Leave — Request rejected' },
+  { value: 'leave_request_edited', label: 'Leave — Request edited' },
+  { value: 'leave_request_withdrawn', label: 'Leave — Request withdrawn' },
+  { value: 'leave_request_cancelled', label: 'Leave — Request cancelled' },
+  { value: 'leave_request_cancellation_undone', label: 'Leave — Cancellation undone' },
+  { value: 'leave_request_decision_undone', label: 'Leave — Decision undone' },
+  { value: 'leave_request_finalized', label: 'Leave — Request finalized' },
+  { value: 'leave_request_auto_approved', label: 'Leave — Auto approved' },
+  { value: 'leave_submit_finalized', label: 'Leave — Submit finalized' },
+  { value: 'leave_admin_exception_granted', label: 'Leave — Admin exception granted' },
+  { value: 'leave_admin_exception_denied', label: 'Leave — Admin exception denied' },
+  { value: 'holiday_created', label: 'Leave — Holiday created' },
+  { value: 'holiday_updated', label: 'Leave — Holiday updated' },
+  { value: 'holiday_deleted', label: 'Leave — Holiday deleted' },
+  { value: 'recurring_holiday_rules_updated', label: 'Leave — Recurring rules updated' },
+  { value: 'recurring_holidays_materialized', label: 'Leave — Recurring holidays materialized' },
+  { value: 'recurring_rule_holidays_deleted', label: 'Leave — Rule holidays deleted' },
+  { value: 'leave_carry_bulk_upload', label: 'Leave — Carry bulk upload' },
+  { value: 'leave_adjustment_batch', label: 'Leave — Adjustment batch' },
+  { value: 'comp_off_requested', label: 'Comp off — Requested' },
+  { value: 'comp_off_submit_finalized', label: 'Comp off — Submit finalized' },
+  { value: 'comp_off_submit_undone', label: 'Comp off — Submit undone' },
+  { value: 'comp_off_approved', label: 'Comp off — Approved' },
+  { value: 'comp_off_rejected', label: 'Comp off — Rejected' },
+  { value: 'comp_off_decision_undone', label: 'Comp off — Decision undone' },
+  { value: 'comp_off_worked', label: 'Comp off — Worked' },
+  { value: 'comp_off_assess_staged', label: 'Comp off — Assessment staged' },
+  { value: 'comp_off_assess_undone', label: 'Comp off — Assessment undone' },
+  { value: 'comp_off_withdrawn', label: 'Comp off — Withdrawn' },
+  { value: 'comp_off_withdraw_undone', label: 'Comp off — Withdrawal undone' },
+  { value: 'comp_off_finalized', label: 'Comp off — Finalized' },
+  { value: 'comp_off_lapsed', label: 'Comp off — Lapsed' },
+  { value: 'attendance_marked', label: 'Attendance — Marked' },
+  { value: 'attendance_admin_create', label: 'Attendance — Created by admin' },
+  { value: 'attendance_admin_edit', label: 'Attendance — Edited by admin' },
+  { value: 'attendance_undo', label: 'Attendance — Undone' },
+  { value: 'attendance_auto_checkout', label: 'Attendance — Auto checkout' },
+  { value: 'week_attendance_confirmed', label: 'Attendance — Week confirmed' },
+  { value: 'week_attendance_unconfirmed', label: 'Attendance — Week unconfirmed' },
+  { value: 'help_ticket_created', label: 'Helpdesk — Ticket created' },
+  { value: 'help_ticket_status_updated', label: 'Helpdesk — Ticket updated' },
+  { value: 'help_ticket_comment_added', label: 'Helpdesk — Comment added' },
+  { value: 'help_ticket_comment_deleted', label: 'Helpdesk — Comment deleted' },
+  { value: 'help_ticket_deleted', label: 'Helpdesk — Ticket deleted' },
+  { value: 'salary_updated', label: 'Salary — Employee salary updated' },
+  { value: 'salary_settings_updated', label: 'Salary — Settings updated' },
+  { value: 'salary_transfers_generated', label: 'Salary — Transfers generated' },
+  { value: 'salary_transfer_updated', label: 'Salary — Transfer updated' },
+  { value: 'salary_audit_exported', label: 'Salary — Audit exported' },
+  { value: 'lop_record_created', label: 'Salary — LOP record created' },
+  { value: 'month_settled', label: 'Salary — Month settled' },
+  { value: 'demo_faq_created', label: 'FAQ — Created' },
+  { value: 'demo_faq_updated', label: 'FAQ — Updated' },
+  { value: 'demo_faq_deleted', label: 'FAQ — Deleted' },
+  { value: 'audit_logs_exported', label: 'Audit — Logs exported' },
 ];
 
 function statusBadgeClass(status) {
@@ -39,7 +128,8 @@ function statusBadgeClass(status) {
 function formatAuditStatus(status) {
   if (status === 'success') return 'SUCCESS';
   if (status === 'failed') return 'FAILED';
-  return status?.toUpperCase() || '—';
+  // Never invent an outcome for legacy rows: unknown stays unknown.
+  return status?.toUpperCase() || 'UNKNOWN';
 }
 
 function humanizeAction(action) {
@@ -76,18 +166,60 @@ function formatActionTitle(action) {
   return humanizeAction(action);
 }
 
-function formatRoleLabel(role) {
-  if (!role) return '—';
-  return role;
+function hasActor(log) {
+  const identifier = log?.metadata?.identifier;
+  return Boolean(
+    log?.userId ||
+      log?.email ||
+      (identifier !== undefined && identifier !== null && String(identifier).trim() !== ''),
+  );
+}
+
+function formatActorEmail(log) {
+  if (log.email) return { text: log.email, muted: false };
+  // Failed logins store the attempted credential (email / mobile / code).
+  const identifier = log.metadata?.identifier;
+  if (identifier !== undefined && identifier !== null && String(identifier).trim() !== '') {
+    return { text: String(identifier), muted: false };
+  }
+  if (!hasActor(log)) return { text: 'System', muted: true };
+  return { text: 'Unknown user', muted: true };
+}
+
+function formatRoleDisplay(log) {
+  if (log.role) return { text: log.role, muted: false };
+  if (!hasActor(log)) return { text: 'System', muted: true };
+  return { text: 'Not recorded', muted: true };
 }
 
 function formatReason(log) {
-  return log.reason || '—';
+  return log.reason || 'Not recorded';
 }
 
 function formatShortDeviceId(deviceId) {
-  if (!deviceId) return '—';
+  if (!deviceId) return null;
   return deviceId.slice(0, 8);
+}
+
+function formatDeviceDisplay(log) {
+  const shortDeviceId = formatShortDeviceId(log.deviceId);
+  if (shortDeviceId) return { text: shortDeviceId, muted: false };
+  if (log.userAgent) return { text: 'Browser', muted: false };
+  return { text: 'Not recorded', muted: true };
+}
+
+function formatModuleLabel(module) {
+  if (!module) return '—';
+  return String(module)
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function formatShortRecordId(recordId) {
+  if (!recordId) return 'n/a';
+  const text = String(recordId);
+  return text.length > 12 ? `${text.slice(0, 8)}…` : text;
 }
 
 function formatReasonLabel(reason) {
@@ -148,41 +280,62 @@ export default function AdminAuditLogs() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const [draftSearch, setDraftSearch] = useState('');
-  const [draftDate, setDraftDate] = useState('');
-  const [draftAction, setDraftAction] = useState('');
-  const [draftConflictsOnly, setDraftConflictsOnly] = useState(false);
-
-  const [appliedSearch, setAppliedSearch] = useState('');
-  const [appliedDate, setAppliedDate] = useState('');
-  const [appliedAction, setAppliedAction] = useState('');
-  const [appliedConflictsOnly, setAppliedConflictsOnly] = useState(false);
+  // Live filters: text inputs debounce, everything else applies instantly.
+  // One unified search box (email, user ID, or record ID — matched with OR
+  // semantics by the `q` query param).
+  const [query, setQuery] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [action, setAction] = useState('');
+  const [module, setModule] = useState('');
+  const [conflictsOnly, setConflictsOnly] = useState(false);
+  const debouncedQuery = useDebouncedValue(query, 350);
   const [exporting, setExporting] = useState(false);
+  const [archiveStatus, setArchiveStatus] = useState(null);
+  const [archiving, setArchiving] = useState(false);
 
   const requestKeyRef = useRef('');
+  const skipAutoFilterRef = useRef(true);
 
   const hasActiveFilters = Boolean(
-    appliedSearch || appliedDate || appliedAction || appliedConflictsOnly,
+    debouncedQuery.trim() ||
+      dateFrom ||
+      dateTo ||
+      action ||
+      module ||
+      conflictsOnly,
   );
 
   const loadLogs = useCallback(
     async ({
       nextPage = 1,
-      nextSearch = '',
-      nextDate = '',
+      nextQuery = '',
+      nextDateFrom = '',
+      nextDateTo = '',
       nextAction = '',
+      nextModule = '',
       nextConflictsOnly = false,
     } = {}) => {
-      const requestKey = `${nextPage}|${nextSearch}|${nextDate}|${nextAction}|${nextConflictsOnly}`;
+      const requestKey = [
+        nextPage,
+        nextQuery,
+        nextDateFrom,
+        nextDateTo,
+        nextAction,
+        nextModule,
+        nextConflictsOnly,
+      ].join('|');
       requestKeyRef.current = requestKey;
       setLoading(true);
       setError('');
 
       try {
         const params = { page: nextPage, limit: 20 };
-        if (nextSearch) params.search = nextSearch;
-        if (nextDate) params.date = nextDate;
+        if (nextQuery) params.q = nextQuery;
+        if (nextDateFrom) params.dateFrom = nextDateFrom;
+        if (nextDateTo) params.dateTo = nextDateTo;
         if (nextAction) params.action = nextAction;
+        if (nextModule) params.module = nextModule;
         if (nextConflictsOnly) params.conflictsOnly = 'true';
 
         const data = await adminApi.listAuditLogs(params);
@@ -204,21 +357,69 @@ export default function AdminAuditLogs() {
 
   useEffect(() => {
     loadLogs({ nextPage: 1 });
+    adminApi
+      .getAuditArchiveStatus()
+      .then((data) => setArchiveStatus(data))
+      .catch(() => setArchiveStatus(null));
   }, [loadLogs]);
 
-  function applyFilters() {
-    const nextSearch = draftSearch.trim();
-    setAppliedSearch(nextSearch);
-    setAppliedDate(draftDate);
-    setAppliedAction(draftAction);
-    setAppliedConflictsOnly(draftConflictsOnly);
+  // Auto-apply: debounced text inputs, instant selects/dates/checkbox.
+  useEffect(() => {
+    if (skipAutoFilterRef.current) {
+      skipAutoFilterRef.current = false;
+      return;
+    }
     loadLogs({
       nextPage: 1,
-      nextSearch,
-      nextDate: draftDate,
-      nextAction: draftAction,
-      nextConflictsOnly: draftConflictsOnly,
+      nextQuery: debouncedQuery.trim(),
+      nextDateFrom: dateFrom,
+      nextDateTo: dateTo,
+      nextAction: action,
+      nextModule: module,
+      nextConflictsOnly: conflictsOnly,
     });
+  }, [
+    debouncedQuery,
+    dateFrom,
+    dateTo,
+    action,
+    module,
+    conflictsOnly,
+    loadLogs,
+  ]);
+
+  async function handleArchiveNow() {
+    if (archiving) return;
+    if (
+      !window.confirm(
+        'Archive audit logs older than 1 month to cold storage and prune entries older than 2 months? This cannot be undone from the app.',
+      )
+    ) {
+      return;
+    }
+    setArchiving(true);
+    setError('');
+    try {
+      const result = await adminApi.runAuditArchive({});
+      setArchiveStatus((current) => ({ ...(current ?? {}), lastRun: result }));
+      loadLogs({
+        nextPage: 1,
+        nextQuery: query,
+        nextDateFrom: dateFrom,
+        nextDateTo: dateTo,
+        nextAction: action,
+        nextModule: module,
+        nextConflictsOnly: conflictsOnly,
+      });
+      adminApi
+        .getAuditArchiveStatus()
+        .then((data) => setArchiveStatus({ ...data, lastRun: result }))
+        .catch(() => {});
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setArchiving(false);
+    }
   }
 
   function downloadBlob(blob, filename) {
@@ -237,9 +438,11 @@ export default function AdminAuditLogs() {
     setError('');
     try {
       const blob = await adminApi.exportAuditLogs({
-        search: appliedSearch || undefined,
-        date: appliedDate || undefined,
-        action: appliedAction || undefined,
+        q: query.trim() || undefined,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
+        action: action || undefined,
+        module: module || undefined,
         format,
       });
       const stamp = new Date().toISOString().slice(0, 10);
@@ -252,21 +455,12 @@ export default function AdminAuditLogs() {
   }
 
   function clearFilters() {
-    setDraftSearch('');
-    setDraftDate('');
-    setDraftAction('');
-    setDraftConflictsOnly(false);
-    setAppliedSearch('');
-    setAppliedDate('');
-    setAppliedAction('');
-    setAppliedConflictsOnly(false);
-    loadLogs({
-      nextPage: 1,
-      nextSearch: '',
-      nextDate: '',
-      nextAction: '',
-      nextConflictsOnly: false,
-    });
+    setQuery('');
+    setDateFrom('');
+    setDateTo('');
+    setAction('');
+    setModule('');
+    setConflictsOnly(false);
   }
 
   const emptyTitle = useMemo(() => {
@@ -276,7 +470,7 @@ export default function AdminAuditLogs() {
 
   const emptyDescription = useMemo(() => {
     if (hasActiveFilters) {
-      return 'Try adjusting search, date, event type, or conflict filter, or clear filters to browse all events.';
+      return 'Try adjusting search, module, date range, event type, or conflict filter, or clear filters to browse all events.';
     }
     return 'Login events, bulk uploads, employee registrations, and other admin actions will appear here.';
   }, [hasActiveFilters]);
@@ -288,38 +482,58 @@ export default function AdminAuditLogs() {
           <div className="audit-logs-toolbar__filters filter-bar">
             <SearchInput
               className="filter-bar__search audit-logs-toolbar__search"
-              value={draftSearch}
-              onChange={(event) => setDraftSearch(event.target.value)}
-              placeholder="Search corporate email…"
-              ariaLabel="Search by corporate email"
-              onEnter={applyFilters}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search email, user ID, or record ID…"
+              ariaLabel="Search audit logs"
             />
 
+            <div className="audit-logs-toolbar__control-row">
             <label className="field-inline filter-bar__field audit-logs-toolbar__field">
-              <span className="label">Date</span>
-              <DateField
-                value={draftDate}
-                onChange={setDraftDate}
-                placeholder="All dates"
-                aria-label="Filter by date"
+              <span className="label">Module</span>
+              <SelectField
+                value={module}
+                onChange={setModule}
+                options={MODULE_OPTIONS}
+                aria-label="Module filter"
               />
             </label>
 
             <label className="field-inline filter-bar__field audit-logs-toolbar__field">
               <span className="label">Event</span>
               <SelectField
-                value={draftAction}
-                onChange={setDraftAction}
+                value={action}
+                onChange={setAction}
                 options={ACTION_OPTIONS}
                 aria-label="Login event filter"
+              />
+            </label>
+
+            <label className="field-inline filter-bar__field audit-logs-toolbar__field">
+              <span className="label">From</span>
+              <DateField
+                value={dateFrom}
+                onChange={setDateFrom}
+                placeholder="Start date"
+                aria-label="Filter from date"
+              />
+            </label>
+
+            <label className="field-inline filter-bar__field audit-logs-toolbar__field">
+              <span className="label">To</span>
+              <DateField
+                value={dateTo}
+                onChange={setDateTo}
+                placeholder="End date"
+                aria-label="Filter to date"
               />
             </label>
 
             <label className="filter-checkbox">
               <input
                 type="checkbox"
-                checked={draftConflictsOnly}
-                onChange={(event) => setDraftConflictsOnly(event.target.checked)}
+                checked={conflictsOnly}
+                onChange={(event) => setConflictsOnly(event.target.checked)}
               />
               <span>Conflicts only</span>
             </label>
@@ -330,9 +544,6 @@ export default function AdminAuditLogs() {
                   Clear
                 </button>
               ) : null}
-              <button type="button" className="btn btn-primary btn-sm" onClick={applyFilters}>
-                Apply Filters
-              </button>
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -352,10 +563,31 @@ export default function AdminAuditLogs() {
                 {exporting ? 'Exporting…' : 'CSV'}
               </button>
             </div>
+            </div>
           </div>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
+
+        <p className="muted small audit-logs-archive-note">
+          Showing live logs
+          {archiveStatus?.oldestRetainedAt
+            ? ` · oldest retained ${formatISTDateTime(archiveStatus.oldestRetainedAt)}`
+            : ''}
+          {archiveStatus?.archivedMonths?.length > 0
+            ? ` · archived through ${archiveStatus.archivedMonths[archiveStatus.archivedMonths.length - 1]}`
+            : ''}
+          {' · '}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={handleArchiveNow}
+            disabled={archiving}
+            title="Archive logs older than 1 month to cold storage and prune entries older than 2 months"
+          >
+            {archiving ? 'Archiving…' : 'Archive now'}
+          </button>
+        </p>
 
         {loading ? (
           <TableSkeleton />
@@ -379,7 +611,9 @@ export default function AdminAuditLogs() {
                 <colgroup>
                   <col className="audit-logs-table__col-time" />
                   <col className="audit-logs-table__col-action" />
+                  <col className="audit-logs-table__col-module" />
                   <col className="audit-logs-table__col-email" />
+                  <col className="audit-logs-table__col-record" />
                   <col className="audit-logs-table__col-role" />
                   <col className="audit-logs-table__col-status" />
                   <col className="audit-logs-table__col-reason" />
@@ -393,7 +627,9 @@ export default function AdminAuditLogs() {
                       Time
                     </th>
                     <th scope="col">Action</th>
+                    <th scope="col">Module</th>
                     <th scope="col">Email</th>
+                    <th scope="col">Record</th>
                     <th scope="col">Role</th>
                     <th scope="col">Status</th>
                     <th scope="col">Reason</th>
@@ -405,8 +641,9 @@ export default function AdminAuditLogs() {
                 <tbody>
                   {logs.map((log) => {
                     const reason = formatReason(log);
-                    const shortDeviceId = formatShortDeviceId(log.deviceId);
-                    const deviceLabel = shortDeviceId !== '—' ? shortDeviceId : log.userAgent ? 'Browser' : '—';
+                    const actorEmail = formatActorEmail(log);
+                    const roleDisplay = formatRoleDisplay(log);
+                    const deviceDisplay = formatDeviceDisplay(log);
                     const deviceTitle = log.deviceId || log.userAgent || undefined;
                     return (
                       <tr key={log.id}>
@@ -424,11 +661,17 @@ export default function AdminAuditLogs() {
                         >
                           {formatActionLabel(log.action)}
                         </td>
-                        <td data-label="Email" className="cell-ellipsis" title={log.email || undefined}>
-                          {log.email || '—'}
+                        <td data-label="Module" className="cell-ellipsis" title={log.module || undefined}>
+                          {formatModuleLabel(log.module)}
                         </td>
-                        <td data-label="Role" className="cell-ellipsis" title={log.role || undefined}>
-                          {formatRoleLabel(log.role)}
+                        <td data-label="Email" className="cell-ellipsis" title={actorEmail.muted ? undefined : actorEmail.text}>
+                          {actorEmail.muted ? <span className="muted">{actorEmail.text}</span> : actorEmail.text}
+                        </td>
+                        <td data-label="Record" className="cell-ellipsis" title={log.recordId || undefined}>
+                          {log.recordId ? formatShortRecordId(log.recordId) : <span className="muted">n/a</span>}
+                        </td>
+                        <td data-label="Role" className="cell-ellipsis" title={roleDisplay.muted ? undefined : roleDisplay.text}>
+                          {roleDisplay.muted ? <span className="muted">{roleDisplay.text}</span> : roleDisplay.text}
                         </td>
                         <td data-label="Status">
                           <span className={statusBadgeClass(log.status)}>
@@ -438,23 +681,23 @@ export default function AdminAuditLogs() {
                         <td
                           data-label="Reason"
                           className="cell-ellipsis audit-logs-table__reason"
-                          title={reason !== '—' ? reason : undefined}
+                          title={log.reason || undefined}
                         >
-                          {reason}
+                          {log.reason ? reason : <span className="muted">{reason}</span>}
                         </td>
                         <td
                           data-label="Device"
                           className="audit-logs-table__device"
                           title={deviceTitle}
                         >
-                          {deviceLabel}
+                          {deviceDisplay.muted ? <span className="muted">{deviceDisplay.text}</span> : deviceDisplay.text}
                         </td>
                         <td
                           data-label="IP"
                           className="cell-ellipsis audit-logs-table__ip"
                           title={log.ip || undefined}
                         >
-                          {log.ip || '—'}
+                          {log.ip ? log.ip : <span className="muted">Not recorded</span>}
                         </td>
                         <td data-label="Conflict" className="audit-logs-table__conflict-cell">
                           <ConflictBadge log={log} />
@@ -470,10 +713,12 @@ export default function AdminAuditLogs() {
               onPageChange={(nextPage) =>
                 loadLogs({
                   nextPage,
-                  nextSearch: appliedSearch,
-                  nextDate: appliedDate,
-                  nextAction: appliedAction,
-                  nextConflictsOnly: appliedConflictsOnly,
+                  nextQuery: query.trim(),
+                  nextDateFrom: dateFrom,
+                  nextDateTo: dateTo,
+                  nextAction: action,
+                  nextModule: module,
+                  nextConflictsOnly: conflictsOnly,
                 })
               }
               entityLabel="logs"

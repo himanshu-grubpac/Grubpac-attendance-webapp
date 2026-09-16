@@ -6,7 +6,6 @@ import {
   computeProratedEntitled,
   roundToHalfDay,
 } from './leaveBalanceService.js';
-import { getISTMonth, getISTYear } from '../utils/istDate.js';
 
 const YEAR = 2026;
 const SEPT = new Date('2026-09-15T00:00:00Z');
@@ -88,24 +87,21 @@ test('leap year uses a 366-day divisor', () => {
   assert.equal(actual, independentProrata(7, '2024-07-02', 2024));
 });
 
-test('accrual cap still applies on top of the prorated quota', () => {
-  const asOfDate = SEPT;
-  const monthsElapsed = getISTMonth(asOfDate);
-  assert.equal(getISTYear(asOfDate), YEAR);
-
-  // Full-year joiner keeps legacy behaviour: min(quota, months * rate).
+test('accrual rate does not gate the grant: full quota upfront in any month', () => {
+  // A 365 quota at 30/mo vests fully even in September (previously capped at
+  // 9 × 30 = 270, and 365 was unreachable all year since 12 × 30 = 360).
   assert.equal(
     computeProratedEntitled({
-      annualQuota: 18,
-      accrualPerMonth: 1.5,
+      annualQuota: 365,
+      accrualPerMonth: 30,
       year: YEAR,
       joiningDateKey: '2026-01-01',
-      asOfDate,
+      asOfDate: SEPT,
     }),
-    Math.min(18, monthsElapsed * 1.5),
+    365,
   );
 
-  // Mid-year joiner is capped by the prorated quota when it is lower.
+  // Mid-year joiners still pro-rate by joining date, independent of month.
   const prorated = independentProrata(18, '2026-08-27', YEAR);
   assert.equal(
     computeProratedEntitled({
@@ -113,23 +109,27 @@ test('accrual cap still applies on top of the prorated quota', () => {
       accrualPerMonth: 1.5,
       year: YEAR,
       joiningDateKey: '2026-08-27',
-      asOfDate,
+      asOfDate: SEPT,
     }),
-    Math.min(prorated, monthsElapsed * 1.5),
+    prorated,
   );
 });
 
-test('accrual cap is skipped for past years', () => {
-  assert.equal(
-    computeProratedEntitled({
-      annualQuota: 18,
-      accrualPerMonth: 1.5,
-      year: 2025,
-      joiningDateKey: '2025-08-27',
-      asOfDate: SEPT,
-    }),
-    independentProrata(18, '2025-08-27', 2025),
-  );
+test('grant is identical in every month of the year', () => {
+  const january = new Date('2026-01-15T00:00:00Z');
+  const december = new Date('2026-12-15T00:00:00Z');
+  for (const asOfDate of [january, SEPT, december]) {
+    assert.equal(
+      computeProratedEntitled({
+        annualQuota: 365,
+        accrualPerMonth: 30,
+        year: YEAR,
+        joiningDateKey: '2026-01-01',
+        asOfDate,
+      }),
+      365,
+    );
+  }
 });
 
 test('malformed joining keys fall back to full quota', () => {

@@ -39,6 +39,8 @@ import {
 import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
+import { WeekAttendanceConfirmation } from '../models/WeekAttendanceConfirmation.js';
+import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { createNotification } from './notificationService.js';
 import { materializeRecurringHolidaysForYear } from './recurringHolidayService.js';
 
@@ -48,6 +50,32 @@ function throwError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   throw error;
+}
+
+/** IST Monday (YYYY-MM-DD) of the week containing a YYYY-MM-DD day key. */
+function mondayOfDayKey(dayKey) {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+/**
+ * Confirmed weeks are read-only: edits require Undo Confirmation first.
+ * Throws 409 when a WeekAttendanceConfirmation covers (userId, dayKey).
+ */
+async function assertWeekNotConfirmed(userId, dayKey) {
+  const weekStart = mondayOfDayKey(dayKey);
+  const confirmation = await WeekAttendanceConfirmation.findOne({ userId, weekStart })
+    .select('_id')
+    .lean();
+  if (confirmation) {
+    throwError(
+      'This week is confirmed. Undo the confirmation before editing attendance.',
+      409,
+    );
+  }
 }
 
 async function getTodayRecords(userId, session = null) {
@@ -192,15 +220,22 @@ export function isLeaveDecisionAwaitingFinalization(decisionUndoExpiresAt, now =
  * Only meaningful on weekends/holidays (the comp-off gate's domain) — on
  * working days an approved comp-off never changes check-in behavior.
  */
-async function hasApprovedCompOffForToday(userId, office, istToday, session = null) {
+/**
+ * Weekend/holiday identity for an IST day key, mirroring the comp-off
+ * check-in gate exactly (a holiday falling on a weekend reports weekend).
+ */
+async function getTodayNonWorkingInfo(office, istToday) {
   const ref = parseDateInputAsISTDay(istToday) ?? new Date();
-  if (!isWeekendIST(ref, office.weekendDays)) {
-    await materializeRecurringHolidaysForYear(getISTYear(ref), userId);
-  }
-  const nonWorkingDay =
-    isWeekendIST(ref, office.weekendDays) ||
-    (await getHolidayMapForYear(getISTYear(ref))).has(istToday);
-  if (!nonWorkingDay) return false;
+  const isWeekend = isWeekendIST(ref, office.weekendDays);
+  const holiday = isWeekend
+    ? null
+    : (await getHolidayMapForYear(getISTYear(ref))).get(istToday) ?? null;
+  return { isWeekend, isHoliday: Boolean(holiday), holidayName: holiday?.name ?? null };
+}
+
+async function hasApprovedCompOffForToday(userId, office, istToday, session = null, dayInfo = null) {
+  const info = dayInfo ?? (await getTodayNonWorkingInfo(office, istToday));
+  if (!info.isWeekend && !info.isHoliday) return false;
   const compOff = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session);
   return Boolean(compOff);
 }
@@ -279,7 +314,8 @@ export async function getTodayStatus(userId) {
   const wfhPendingToday = wfhRequestToday?.status === 'pending';
   const wfhApprovalPendingToday =
     wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
-  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday);
+  const dayInfo = await getTodayNonWorkingInfo(office, istToday);
+  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday, null, dayInfo);
   const status = buildTodayStatus(
     records,
     office,
@@ -290,6 +326,9 @@ export async function getTodayStatus(userId) {
     wfhApprovalPendingToday,
     compOffApprovedToday,
   );
+  status.isWeekend = dayInfo.isWeekend;
+  status.isHoliday = dayInfo.isHoliday;
+  status.holidayName = dayInfo.holidayName;
   status.undo = await getUndoAvailability(userId);
   return status;
 }
@@ -534,7 +573,16 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   }
 
   // Stable sort so offset pages are deterministic across scroll fetches.
+  // Present members first, then on-leave, then absent; alphabetical (then
+  // userId) within each group.
+  const statusRank = (member) => {
+    if (member.status === 'checked_in' || member.status === 'wfh') return 0;
+    if (member.status === 'on_leave') return 1;
+    return 2;
+  };
   const sorted = [...teamStatus].sort((a, b) => {
+    const rankDelta = statusRank(a) - statusRank(b);
+    if (rankDelta !== 0) return rankDelta;
     const nameA = (a.name || a.firstName || '').toLowerCase();
     const nameB = (b.name || b.firstName || '').toLowerCase();
     if (nameA < nameB) return -1;
@@ -644,8 +692,11 @@ async function handleCompOffCheckout(userId, checkoutRecord) {
   if (!request || request.status === 'worked') return;
   if (!checkoutRecord?._id) return;
 
+  // Never flip a request carrying a staged approver cancellation — the
+  // finalizer owns it. The employee keeps their attendance record; only the
+  // comp-off credit path stands down.
   const claimed = await CompOffRequest.findOneAndUpdate(
-    { _id: request._id, status: 'approved' },
+    { _id: request._id, status: 'approved', pendingAction: null },
     { $set: { status: 'worked', checkoutRecordId: checkoutRecord._id } },
   );
   if (!claimed) return;
@@ -654,6 +705,8 @@ async function handleCompOffCheckout(userId, checkoutRecord) {
     userId: userId.toString(),
     requestId: request._id.toString(),
     attendanceRecordId: checkoutRecord._id.toString(),
+    previous: { status: 'approved' },
+    next: { status: 'worked' },
   });
 
   try {
@@ -729,6 +782,10 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         wfhApprovalPendingToday,
         compOffApprovedToday,
       );
+      const markDayInfo = await getTodayNonWorkingInfo(office, istToday);
+      today.isWeekend = markDayInfo.isWeekend;
+      today.isHoliday = markDayInfo.isHoliday;
+      today.holidayName = markDayInfo.holidayName;
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
       let attendanceMode;
       if (type === 'check_out' && existingCheckIn) {
@@ -951,6 +1008,9 @@ export async function getAdminAttendance({
   userId,
   date,
   weekStart,
+  search,
+  type,
+  status,
   page = 1,
   limit = 20,
   actor,
@@ -959,6 +1019,26 @@ export async function getAdminAttendance({
   const query = {};
   if (userId) {
     query.userId = userId;
+  }
+  if (type) {
+    query.type = type;
+  }
+  if (status) {
+    query.status = status;
+  }
+
+  // Name / employee-code search: resolve matching users first, then filter
+  // records to them (intersected with team scope below when applicable).
+  let searchUserIds = null;
+  const needle = String(search ?? '').trim();
+  if (needle) {
+    const regex = new RegExp(escapeRegex(needle), 'i');
+    const matched = await User.find({
+      $or: [{ name: regex }, { employeeCode: regex }],
+    })
+      .select('_id')
+      .lean();
+    searchUserIds = matched.map((user) => user._id);
   }
 
   const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
@@ -982,6 +1062,23 @@ export async function getAdminAttendance({
       }
     } else if (scopedIds !== null) {
       query.userId = { $in: scopedIds };
+    }
+  }
+
+  if (searchUserIds !== null) {
+    if (query.userId && query.userId.$in) {
+      const allowed = new Set(query.userId.$in.map((id) => id.toString()));
+      query.userId = { $in: searchUserIds.filter((id) => allowed.has(id.toString())) };
+    } else if (query.userId) {
+      const match = searchUserIds.some((id) => id.toString() === query.userId.toString());
+      if (!match) {
+        return {
+          records: [],
+          pagination: { page, limit, total: 0, totalPages: 1 },
+        };
+      }
+    } else {
+      query.userId = { $in: searchUserIds };
     }
   }
 
@@ -1016,7 +1113,11 @@ export async function getAdminAttendance({
     AttendanceRecord.countDocuments(query),
   ]);
 
-  const records = filterOrphanCheckOuts(allRecords).slice(0, limit).map(serializeAdminAttendanceListRecord);
+  // The orphan filter pairs check-outs against same-day check-ins in the
+  // result set — but a check-out-only type filter removes every check-in, so
+  // it must be skipped there or the list wrongly comes back empty.
+  const pairable = type !== 'check_out' ? filterOrphanCheckOuts(allRecords) : allRecords;
+  const records = pairable.slice(0, limit).map(serializeAdminAttendanceListRecord);
 
   return {
     records,
@@ -1525,6 +1626,7 @@ export async function adminEditAttendanceRecord({
   if (!istDay) {
     throwError('Invalid attendance day on record.');
   }
+  await assertWeekNotConfirmed(checkInRecord.userId, dayKey);
 
   if (payload.leaveTypeId) {
     await adminApplyLeaveForEmployeeDay({
@@ -1713,6 +1815,7 @@ export async function adminUpsertAttendanceForDay({
   if (!istDay) {
     throwError('Invalid attendance day.');
   }
+  await assertWeekNotConfirmed(userId, dayKey);
 
   const dayStart = startOfDayIST(istDay);
   const dayEnd = endOfDayIST(istDay);
@@ -1940,6 +2043,8 @@ export async function undoAttendance(
         deviceId: auditContext.deviceId,
         ip: auditContext.ip,
         userAgent: auditContext.userAgent,
+        previous: { status: attendanceRecord.status ?? 'allowed' },
+        next: { status: 'undone' },
       });
 
       // 6. Delete ONLY last attendance

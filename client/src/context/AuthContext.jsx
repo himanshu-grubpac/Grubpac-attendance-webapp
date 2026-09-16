@@ -12,7 +12,7 @@ import {
   hasAnyPermission as userHasAnyPermission,
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
-import { authApi } from '../services/api.js';
+import { authApi, startSessionKeepalive } from '../services/api.js';
 import { coldStartPing, restoreSession } from '../utils/coldStartPing.js';
 import { resolveLoginPortal } from '../config/nav.js';
 
@@ -122,6 +122,13 @@ export function AuthProvider({ children }) {
     setUser(result.user);
     return result.user;
   }, []);
+
+  // Sliding session renewal: while signed in, keep the 2h auth cookies alive
+  // so long-lived pages (e.g. Pending Requests triage) never 401 mid-action.
+  useEffect(() => {
+    if (!user) return undefined;
+    return startSessionKeepalive();
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;

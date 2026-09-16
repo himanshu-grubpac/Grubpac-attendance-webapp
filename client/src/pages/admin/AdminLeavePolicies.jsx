@@ -552,8 +552,8 @@ export default function AdminLeavePolicies() {
               <table className="table data-table">
                 <thead>
                   <tr>
-                    <th>Code</th>
-                    <th>Name</th>
+                    <th>Leave type</th>
+                    <th>Description</th>
                     <th>Status</th>
                     <th className="cell-actions-col">Actions</th>
                   </tr>
@@ -561,11 +561,20 @@ export default function AdminLeavePolicies() {
                 <tbody>
                   {leaveTypes.map((type) => (
                     <tr key={type.id}>
-                      <td data-label="Code">
-                        <code className="leave-policies-table__code">{type.code}</code>
+                      <td data-label="Leave type" className="leave-policies-table__name">
+                        <span className="leave-policies-table__identity">
+                          <code className="leave-policies-table__code">{type.code}</code>
+                          <span>{type.name}</span>
+                        </span>
                       </td>
-                      <td data-label="Name" className="leave-policies-table__name">
-                        {type.name}
+                      <td
+                        data-label="Description"
+                        className="muted small"
+                        title={type.description || undefined}
+                      >
+                        <span className="leave-policies-table__description">
+                          {type.description || '—'}
+                        </span>
                       </td>
                       <td data-label="Status">
                         <StatusBadge active={type.isActive} />

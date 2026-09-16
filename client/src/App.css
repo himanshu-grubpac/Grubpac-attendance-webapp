@@ -1353,6 +1353,47 @@ textarea:disabled {
   table-layout: fixed;
 }
 
+/* Sticky bottom horizontal-scrollbar proxy for long tables (audit,
+   employee directory). Pins to the viewport bottom while its section is in
+   view and mirrors the target wrapper's scroll (see StickyHScrollBar). It
+   stays hidden until the target actually overflows, so mobile card layout
+   and fitting tables are untouched. */
+.table-hscroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.table-hscroll__spacer {
+  height: 1px;
+}
+
+/* Exactly one horizontal scrollbar: while the sticky proxy is active, hide
+   the target wrapper's native bar (it stays scrollable via touch, keyboard,
+   and the proxy itself). */
+.table-wrap--proxy {
+  scrollbar-width: none;
+}
+
+.table-wrap--proxy::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tablet (769–960px): tables keep desktop layout while the fixed bottom
+   nav is visible — lift the sticky bar above it. (Mobile card layout has
+   no overflow, so the bar stays hidden there regardless.) */
+@media (max-width: 960px) {
+  .table-hscroll {
+    bottom: calc(var(--bottom-nav-height) + 1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 .table,
 .data-table {
   width: 100%;
@@ -7303,6 +7344,67 @@ body::-webkit-scrollbar-thumb {
     gap: var(--space-2) var(--space-4);
   }
 
+  /* Audit Logs: module / event / date dropdowns share one line. The search
+     box takes the row above (it grows to full width). min-widths are lifted
+     so the four fields + checkbox + actions squeeze onto one line instead of
+     wrapping; labels truncate inside their shrunken selects. */
+  .audit-logs-toolbar__control-row {
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 0.75rem 1rem;
+    min-width: 0;
+  }
+
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__field .select-field,
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__field .date-field,
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__field select,
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__field input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .audit-logs-toolbar__control-row > .filter-checkbox,
+  .audit-logs-toolbar__control-row > .audit-logs-toolbar__actions {
+    flex: 0 0 auto;
+  }
+
+  /* Conflicts checkbox + export buttons hug the right edge of the card,
+     whether they share the dropdown line (wide) or wrap below it. */
+  .audit-logs-toolbar__control-row > .filter-checkbox {
+    margin-left: auto;
+  }
+
+  /* Employee List: Edit columns + Add Employee hug the right edge — same
+     line as the dropdowns when space allows, otherwise a right-aligned
+     wrapped line. flex-wrap stays on so narrow widths wrap instead of
+     overlapping; mobile/tablet rules elsewhere are untouched. */
+  .employees-toolbar__filters {
+    flex: 1 1 auto;
+  }
+
+  /* Edit columns + Add Employee share the filter line (right side), like
+     the salary audit's inline download button; they wrap to a right-aligned
+     line when the viewport is too narrow to fit everything. */
+  .employees-toolbar__editcol {
+    margin-left: auto;
+    flex: 0 0 auto;
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .employees-toolbar__editcol .btn {
+    white-space: nowrap;
+  }
+
   .toast-stack {
     top: calc(var(--header-height) + 0.5rem);
     left: var(--sidebar-width);
@@ -8294,6 +8396,42 @@ body::-webkit-scrollbar-thumb {
   display: flex;
   align-items: flex-end;
   align-self: flex-end;
+}
+
+/* Desktop (≥961px): every approval filter dropdown sits in one line —
+   Queue / Employee / Leave period / actions share the row proportionally.
+   Tablet and mobile wrapping/stacking rules elsewhere are untouched. */
+@media (min-width: 961px) {
+  .approvals-toolbar__filters {
+    flex-wrap: nowrap;
+  }
+
+  .approvals-toolbar__filters > .approvals-toolbar__field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .approvals-toolbar__filters > .approvals-toolbar__field .select-field {
+    min-width: 0;
+  }
+
+  .approvals-toolbar__filters > .approvals-toolbar__field--period {
+    flex: 2 1 0;
+    min-width: 0;
+  }
+
+  .approvals-toolbar__field--period > .approvals-toolbar__period {
+    flex-wrap: nowrap;
+  }
+
+  .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .approvals-toolbar__filters > .approvals-toolbar__clear {
+    flex: 0 0 auto;
+  }
 }
 
 .approvals-panel .alert {
@@ -11182,7 +11320,8 @@ body::-webkit-scrollbar-thumb {
 
 .employees-panel {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
+  clip-path: inset(0 round var(--radius-lg));
 }
 
 .employees-panel.card--table > .card__toolbar {
@@ -11597,6 +11736,20 @@ body::-webkit-scrollbar-thumb {
   }
 
   .employees-toolbar__actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Mobile keeps the old stacked rhythm: full-width Edit columns on its own
+     line, then the full-width Add Employee button. */
+  .employees-toolbar__editcol {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .employees-toolbar__editcol .btn {
     width: 100%;
     justify-content: center;
   }
@@ -12314,6 +12467,13 @@ body::-webkit-scrollbar-thumb {
   border-bottom: none;
 }
 
+/* Presentational wrapper only: children lay out as direct flex items of the
+   filter bar, so tablet/mobile wrapping is pixel-identical to before. The
+   desktop media query below turns it into a single-line row. */
+.audit-logs-toolbar__control-row {
+  display: contents;
+}
+
 .audit-logs-toolbar__search {
   flex: 1 1 16rem;
   max-width: none;
@@ -12389,39 +12549,47 @@ body::-webkit-scrollbar-thumb {
 }
 
 .audit-logs-table__col-time {
-  width: 11%;
+  width: 10%;
 }
 
 .audit-logs-table__col-action {
   width: 8%;
 }
 
+.audit-logs-table__col-module {
+  width: 8%;
+}
+
 .audit-logs-table__col-email {
-  width: 22%;
+  width: 16%;
+}
+
+.audit-logs-table__col-record {
+  width: 11%;
 }
 
 .audit-logs-table__col-role {
-  width: 8%;
+  width: 6%;
 }
 
 .audit-logs-table__col-status {
-  width: 9%;
+  width: 8%;
 }
 
 .audit-logs-table__col-reason {
-  width: 14%;
+  width: 11%;
 }
 
 .audit-logs-table__col-device {
-  width: 7%;
+  width: 6%;
 }
 
 .audit-logs-table__col-ip {
-  width: 13%;
+  width: 9%;
 }
 
 .audit-logs-table__col-conflict {
-  width: 8%;
+  width: 7%;
 }
 
 .audit-logs-table .cell-ellipsis {
@@ -12431,6 +12599,16 @@ body::-webkit-scrollbar-thumb {
 .audit-logs-table__time {
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
+}
+
+.audit-logs-archive-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  /* Bottom breathing room: the Archive button is taller than the note text
+     and otherwise sits flush against the table header row. */
+  margin: 0.65rem 0 0.75rem;
 }
 
 .audit-logs-table__action {
@@ -13360,6 +13538,23 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.35;
 }
 
+/* Code chip on top, full name below — identical stacking for every row. */
+.leave-policies-table__identity {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.leave-policies-table__description {
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
 .leave-policies-table__num {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -14246,7 +14441,8 @@ body::-webkit-scrollbar-thumb {
 
 .salary-panel {
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
+  clip-path: inset(0 round var(--radius-lg));
 }
 
 /* Bare section titles sit directly in the zero-padding panel: inset them
@@ -14479,42 +14675,21 @@ body::-webkit-scrollbar-thumb {
   margin: 0;
 }
 
-.salary-detail-modal {
-  width: min(100%, 44rem);
-}
-
-.salary-detail-modal__header {
-  position: relative;
-  padding-right: 2.5rem;
-}
-
-.salary-detail-modal .modal__close {
-  position: absolute;
-  top: 0.7rem;
-  right: 0.9rem;
-  width: 2rem;
-  height: 2rem;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 1.35rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.salary-detail-modal .modal__close:hover {
-  background: var(--surface-2);
-  color: var(--text-h);
-}
-
 .salary-detail-modal__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+/*
+ * The balances table wrap is a scroll container (overflow-x) inside a grid
+ * (.modal__body). Scroll containers compute to minimum size 0, so without a
+ * floor the wrap absorbs all shrinkage and collapses — hiding the table on
+ * desktop and mobile alike. This guarantees a usable viewport; the modal
+ * body keeps scrolling vertically, the wrap horizontally.
+ */
+.salary-detail-modal__body > .table-wrap {
+  min-height: 12rem;
 }
 
 .salary-detail__lop-dates {
@@ -14543,7 +14718,7 @@ body::-webkit-scrollbar-thumb {
 }
 
 @media (min-width: 769px) {
-  .salary-detail-modal .salary-detail__lop-row {
+  .salary-detail-modal__body .salary-detail__lop-row {
     grid-column: 1 / -1;
   }
 }

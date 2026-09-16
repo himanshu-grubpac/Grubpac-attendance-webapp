@@ -344,6 +344,12 @@ export default function EmployeeDashboard() {
 
   const isCheckedIn = Boolean(today?.checkIn) && !today?.checkOut;
   const primaryAction = isCheckedIn ? 'check_out' : 'check_in';
+  // Holidays/weekends allow check-in only with an approved comp-off covering
+  // the day — mirrors the server-side comp-off gate.
+  const isCheckInBlockedForNonWorkingDay =
+    primaryAction === 'check_in' &&
+    (today?.isWeekend === true || today?.isHoliday === true) &&
+    today?.compOffApprovedToday !== true;
   const todayModeLabel = buildTodayAttendanceModeLabel({
     wfhApprovedToday: today?.wfhApprovedToday,
     wfhApprovalPendingToday: today?.wfhApprovalPendingToday,
@@ -430,7 +436,7 @@ export default function EmployeeDashboard() {
             className="btn btn-lg dash-hero__cta btn-primary"
             disabled={
               (primaryAction === 'check_in'
-                ? !today?.canCheckIn
+                ? !today?.canCheckIn || isCheckInBlockedForNonWorkingDay
                 : !today?.canCheckOut) ||
               actionLoading ||
               geoLoading
@@ -455,11 +461,16 @@ export default function EmployeeDashboard() {
           </button>
         </div>
 
-        {primaryAction === 'check_in' && !today?.canCheckIn && !actionLoading && !geoLoading ? (
+        {primaryAction === 'check_in' &&
+        (!today?.canCheckIn || isCheckInBlockedForNonWorkingDay) &&
+        !actionLoading &&
+        !geoLoading ? (
           <p className="dash-action-hint muted small" role="status">
             {today?.checkOut
               ? 'You have completed your attendance for today. Check in will be available tomorrow.'
-              : 'Check-in is not available right now (approved leave covers today).'}
+              : isCheckInBlockedForNonWorkingDay
+                ? 'Check-in is unavailable on holidays and weekends. Prior approval is required to work on these days.'
+                : 'Check-in is not available right now (approved leave covers today).'}
           </p>
         ) : null}
 

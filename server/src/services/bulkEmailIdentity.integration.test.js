@@ -129,6 +129,8 @@ test('update path is keyed by email and applies mutable changes', async () => {
   assert.equal(refreshed.designation, 'New Title');
 });
 
+
+
 test('unknown email creates with auto code and Firstname@Code password', async () => {
   const { results } = await importEmployeesFromRowsUpsert([row(6, baseCreate())], createdBy());
 
@@ -381,17 +383,18 @@ test('role change on update is applied (only role is mutable)', async () => {
   assert.equal(refreshed.roleId.toString(), roles.hr._id.toString());
 });
 
-test('update to reporting-manager role is rejected with guidance', async () => {
+test('update to reporting-manager role succeeds without managed departments', async () => {
   const existing = await seedUser();
   const { results } = await importEmployeesFromRowsUpsert(
     [row(6, { email: existing.email, lastName: 'User', role: 'Reporting Manager' })],
     createdBy(),
   );
 
-  assert.equal(results[0].status, 'validation_error');
-  assert.match(results[0].message, /managed departments/);
+  assert.equal(results[0].status, 'updated');
+  assert.ok(results[0].changedFields.some((change) => change.field === 'role'));
   const refreshed = await User.findById(existing._id).lean();
-  assert.equal(refreshed.roleId.toString(), roles.employee._id.toString());
+  assert.equal(refreshed.roleId.toString(), roles.rm._id.toString());
+  assert.equal(refreshed.role, 'admin');
 });
 
 test('update to employee role without a manager is rejected', async () => {

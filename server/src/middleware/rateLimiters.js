@@ -40,3 +40,11 @@ export const leaveDecisionLimiter = rateLimit({
   legacyHeaders: false,
   message: { message: 'Too many leave decision attempts. Please try again later.' },
 });
+
+export const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: devBypass(120),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many session refresh attempts. Please try again later.' },
+});

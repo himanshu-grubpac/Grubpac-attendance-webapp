@@ -159,7 +159,7 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['• There are NO password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.'],
     ['• NEW employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail.'],
     ['• Pick "role" from the dropdown list in the role column.'],
-    ['• "role" changes apply to existing employees too (admin accounts excluded). Reporting-manager needs managed departments — assign it from the user edit page.'],
+    ['• "role" changes apply to existing employees too (admin accounts excluded). Reporting-manager works on direct-reports scope; assign managed departments from the user edit page for wider team visibility.'],
     ['• Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, ...). A filled code is kept if valid and unused.'],
     ['• "isActive" must be TRUE or FALSE.'],
     ['• Dates must use YYYY-MM-DD format.'],
@@ -1256,19 +1256,11 @@ async function upsertExistingEmployee(row, user, options = {}) {
   }
 
   // Role changes must leave the record in a valid org state (mirrors the
-  // create-time rules: employees need a manager; RMs need managed departments,
-  // which bulk cannot set, so that promotion stays in the edit UI).
+  // create-time rules: employees need a manager. Promoting to
+  // reporting-manager is allowed without managed departments — the RM works
+  // on direct-reports scope until departments are assigned from the edit
+  // page for wider team visibility.
   if (updatedRole) {
-    if (updatedRole.slug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'validation_error',
-        message:
-          'Reporting-manager role needs managed departments. Assign it from the user edit page instead of bulk import.',
-      };
-    }
     if (updatedRole.slug === SYSTEM_ROLE_SLUGS.EMPLOYEE && !user.reportingManagerId) {
       return {
         rowNumber: row.rowNumber,

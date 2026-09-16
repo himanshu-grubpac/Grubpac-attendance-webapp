@@ -154,6 +154,41 @@ test('deliberate manual entitled tweaks survive ensure', async () => {
   assert.equal(after.entitled, 5);
 });
 
+test('stale non-quota unlocked rows heal to the computed value on ensure', async () => {
+  // Regression: rows frozen at an older quota era (e.g. SL 2.5 against a
+  // quota of 7) used to be skipped forever because the guard assumed any
+  // non-quota value was deliberate. Only entitledLocked protects a row now.
+  const user = await createUser('Stale Era', {
+    joiningDate: new Date(`${YEAR}-01-01T00:00:00Z`),
+  });
+  await ensureBalancesForUser(user._id, YEAR);
+  await LeaveBalance.updateOne(
+    { userId: user._id, year: YEAR },
+    { $set: { entitled: 2.5, entitledLocked: false } },
+  );
+  const balances = await getBalancesForUser(user._id, YEAR);
+  const cl = balances.find((item) => item.leaveTypeCode === 'CL');
+  assert.equal(cl.entitled, 7);
+});
+
+test('accrual policies grant the full quota upfront regardless of month', async () => {
+  const elType = await LeaveType.findOne({ code: 'EL' });
+  await LeavePolicy.updateOne(
+    { leaveTypeId: elType._id, year: YEAR },
+    { $set: { annualQuota: 365, accrualPerMonth: 30 } },
+  );
+  const user = await createUser('Upfront Accrual', {
+    joiningDate: new Date(`${YEAR}-01-01T00:00:00Z`),
+  });
+  await ensureBalancesForUser(user._id, YEAR);
+  const balance = await LeaveBalance.findOne({
+    userId: user._id,
+    leaveTypeId: elType._id,
+    year: YEAR,
+  }).lean();
+  assert.equal(balance.entitled, 365);
+});
+
 test('policy edit recomputes unlocked rows and skips locked ones', async () => {
   const mid = await createUser('Recompute Mid', {
     joiningDate: new Date(`${YEAR}-08-27T00:00:00Z`),

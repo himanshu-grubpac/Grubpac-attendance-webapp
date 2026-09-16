@@ -1063,7 +1063,6 @@ export default function AdminTeamLeaveCalendar() {
                       { value: '3', label: '3rd' },
                       { value: '4', label: '4th' },
                       { value: '5', label: '5th' },
-                      { value: '-1', label: 'Last' },
                     ]}
                     aria-label="Occurrence"
                   />
@@ -1116,7 +1115,7 @@ export default function AdminTeamLeaveCalendar() {
                     </button>
                   </>
                 ) : (
-                  <button type="submit" className="btn btn-ghost btn-sm">
+                  <button type="submit" className="btn btn-primary btn-sm" style={{ flex: '1 1 auto' }}>
                     Add rule
                   </button>
                 )}

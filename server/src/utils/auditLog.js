@@ -3,6 +3,66 @@ import { User } from '../models/User.js';
 import { logError } from './logger.js';
 
 const LOGIN_ACTIONS = new Set(['login_success', 'login_failed']);
+
+/**
+ * Canonical module taxonomy for the audit viewer + export. First match wins;
+ * entries are action prefixes except exact names listed without a trailing _.
+ * Kept in one place so the filter, the export fallback and the UI stay aligned.
+ */
+export const AUDIT_MODULES = [
+  { value: 'authentication', label: 'Authentication', match: ['login_', 'logout', 'password_reset_requested', 'password_reset_completed', 'profile_updated', 'password_changed', 'pin_changed', 'pin_set', 'pin_removed'] },
+  { value: 'employees', label: 'Employees', match: ['employee_', 'password_reset_by_admin', 'pin_reset_by_admin', 'quarter_warnings_reset'] },
+  { value: 'organization', label: 'Organization', match: ['department_', 'office_'] },
+  { value: 'roles', label: 'Roles & Permissions', match: ['role_'] },
+  { value: 'leave', label: 'Leave', match: ['leave_', 'holiday_', 'recurring_'] },
+  { value: 'comp-off', label: 'Comp Off', match: ['comp_off_'] },
+  { value: 'attendance', label: 'Attendance', match: ['attendance_', 'week_attendance_'] },
+  { value: 'helpdesk', label: 'Helpdesk', match: ['help_'] },
+  { value: 'salary', label: 'Salary & Payroll', match: ['salary_', 'lop_', 'month_'] },
+  { value: 'faq', label: 'FAQ & Demo', match: ['demo_faq_'] },
+  { value: 'audit', label: 'Audit Logs', match: ['audit_'] },
+];
+
+export function resolveAuditModule(action) {
+  const name = String(action ?? '');
+  for (const module of AUDIT_MODULES) {
+    if (module.match.some((prefix) => name.startsWith(prefix))) return module.value;
+  }
+  return 'other';
+}
+
+export function auditActionMatchers(moduleValue) {
+  const module = AUDIT_MODULES.find((entry) => entry.value === moduleValue);
+  return module ? [...module.match] : [];
+}
+
+/**
+ * Display fallbacks shared by the audit viewer and exports — no field
+ * renders blank. Failed logins store the attempted credential under
+ * metadata.identifier; system/job actions have no actor at all.
+ */
+export function hasAuditActor(log) {
+  const identifier = log?.metadata?.identifier;
+  return Boolean(
+    log?.userId ||
+      log?.email ||
+      (identifier !== undefined && identifier !== null && String(identifier).trim() !== ''),
+  );
+}
+
+export function resolveAuditDisplayEmail(log) {
+  if (log?.email) return log.email;
+  const identifier = log?.metadata?.identifier;
+  if (identifier !== undefined && identifier !== null && String(identifier).trim() !== '') {
+    return String(identifier);
+  }
+  return hasAuditActor(log) ? 'Unknown user' : 'System';
+}
+
+export function resolveAuditDisplayRole(log) {
+  if (log?.role) return log.role;
+  return hasAuditActor(log) ? 'Not recorded' : 'System';
+}
 // Never persist secrets or credential-adjacent values inside audit metadata.
 const SENSITIVE_KEYS = new Set([
   'password',

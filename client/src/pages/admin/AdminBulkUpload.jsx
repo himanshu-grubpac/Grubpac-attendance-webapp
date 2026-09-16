@@ -17,7 +17,7 @@ const BULK_REGULATIONS = [
   'To change email or mobile, use the individual employee edit page instead.',
   'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in. Passwords remain visible in the sync results for any email that fails delivery.',
   'New employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail. Pick the role from the dropdown list in the role column.',
-  '"role" changes apply to existing employees too (admin accounts are never touched by bulk import). Assigning the reporting-manager role needs managed departments — do that from the user edit page.',
+  '"role" changes apply to existing employees too (admin accounts are never touched by bulk import). Reporting-manager works on direct-reports scope; assign managed departments from the user edit page for wider team visibility.',
   'Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, …). A filled-in code is kept when valid and unused.',
   `employeeCode format: ${EMPLOYEE_CODE_FORMAT_HINT}`,
   'First name must be 2–50 characters; last name is optional and must be at most 50 characters.',
