@@ -65,9 +65,9 @@ function inclusiveDaySpan(fromKey, toKey) {
 }
 
 /**
- * Daily-slice joining-date proration, applied to EVERY leave type for EVERY
- * employee: quota × (calendar days from joining to Dec 31 ÷ days in year),
- * rounded to the nearest half day.
+ * Monthly-eligible joining-date proration, applied to EVERY leave type for
+ * EVERY employee: (annualQuota / 12) × eligibleMonths, where eligibleMonths
+ * counts the joining month through December inclusive.
  * - No joining date (or joined on/before Jan 1) → full quota.
  * - Joined after Dec 31 → 0.
  * - Accrual types keep their monthly cap, applied on the prorated quota.
@@ -88,9 +88,10 @@ export function computeProratedEntitled({
       return 0;
     }
     if (joiningDateKey > yearStartKey) {
-      const daysInYear = isLeapYear(year) ? 366 : 365;
-      const remaining = inclusiveDaySpan(joiningDateKey, yearEndKey);
-      proratedQuota = roundToHalfDay((quota * remaining) / daysInYear);
+      const joinDate = parseDateInputAsISTDay(joiningDateKey);
+      const joinMonth = getISTMonth(joinDate);
+      const eligibleMonths = 12 - joinMonth + 1;
+      proratedQuota = Math.min(quota, Math.ceil((quota * eligibleMonths) / 12));
     }
   }
   if (accrualPerMonth > 0 && year === getISTYear(asOfDate)) {
@@ -333,6 +334,9 @@ export async function recalculateAllBalancesForPolicy(policy) {
     );
     const existing = existingByUser.get(userId.toString());
     if (existing) {
+      if (existing.entitledLocked) {
+        continue;
+      }
       updates.push({
         updateOne: {
           filter: { _id: existing._id },

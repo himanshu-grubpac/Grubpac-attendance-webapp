@@ -1783,7 +1783,6 @@ export async function adminUpsertAttendanceForDay({
     }
   }
 
-  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode ?? 'P');
   const office = await getOfficeSettings();
   const geoFields = buildAdminSyntheticGeoFields(office);
   const wfhRequestForDay = await findWfhRequestForIstDate(userId, dayKey);
@@ -1791,8 +1790,11 @@ export async function adminUpsertAttendanceForDay({
     wfhRequestForDay?.status === 'approved'
     && isLeaveDecisionAwaitingFinalization(wfhRequestForDay.notifyAfter);
 
-  // Recalculate warning based on the actual check-in time
   const recalculatedPolicy = await evaluateCheckInPolicy(userId, newCheckInTs, office);
+  const manualPolicyFields = payload.statusCode
+    ? parseStatusCodeToPolicyFields(payload.statusCode)
+    : null;
+  const policyFields = manualPolicyFields ?? recalculatedPolicy;
 
   const checkInRecord = await AttendanceRecord.create({
     userId,
@@ -1807,7 +1809,9 @@ export async function adminUpsertAttendanceForDay({
         ? 'pending'
         : 'approved',
     leaveRequestId: wfhRequestForDay?._id ?? null,
-    ...policyFields,
+    attendanceTag: policyFields.attendanceTag,
+    warningIssued: policyFields.warningIssued,
+    quarterWarningIndex: policyFields.quarterWarningIndex,
     ...geoFields,
   });
 
