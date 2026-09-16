@@ -564,7 +564,7 @@ export default function AdminLeavePolicies() {
                       <td data-label="Leave type" className="leave-policies-table__name">
                         <span className="leave-policies-table__identity">
                           <code className="leave-policies-table__code">{type.code}</code>
-                          <span>{type.name}</span>
+                          <span className="leave-policies-table__name">{type.name}</span>
                         </span>
                       </td>
                       <td
