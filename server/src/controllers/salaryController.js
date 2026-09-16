@@ -286,7 +286,11 @@ export async function exportLopSingleHandler(req, res) {
 
   const summary = await computeMonthlySalarySummary(subject, month, { asOfDate: asOf });
   const exportRows = lopDeductionRowsToExportRows(summary);
-  const buffer = buildLopExportWorkbook(exportRows);
+  const codeSuffix = summary.employeeCode ? ` (${summary.employeeCode})` : '';
+  const buffer = await buildLopExportWorkbook(exportRows, {
+    sheetName: 'LOP Deductions',
+    subtitle: `LOP Deduction Log — ${summary.userName}${codeSuffix} — ${summary.month} as of ${summary.asOfDate}`,
+  });
 
   auditLog('lop_exported', {
     adminId: req.user._id.toString(),
@@ -311,10 +315,12 @@ export async function exportLopSingleHandler(req, res) {
 export async function exportLopBulkHandler(req, res) {
   const { month, asOf } = lopExportQuerySchema.parse(req.query);
   const summaries = await listAllLopSummariesForMonth(month, asOf);
-  const exportRows = summaries.flatMap((summary) =>
-    lopDeductionRowsToExportRows(summary, { bulk: true }),
-  );
-  const buffer = buildLopExportWorkbook(exportRows, { bulk: true, sheetName: 'LOP Bulk Export' });
+  const exportRows = summaries.flatMap((summary) => lopDeductionRowsToExportRows(summary));
+  const asOfLabel = asOf ?? summaries[0]?.asOfDate ?? month;
+  const buffer = await buildLopExportWorkbook(exportRows, {
+    sheetName: 'LOP Bulk Export',
+    subtitle: `LOP Bulk Export — ${month} as of ${asOfLabel} — ${exportRows.length} deduction row${exportRows.length === 1 ? '' : 's'}`,
+  });
 
   auditLog('lop_bulk_exported', {
     adminId: req.user._id.toString(),

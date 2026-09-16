@@ -9,6 +9,7 @@ import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import LopDetailModal from '../../components/LopDetailModal.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import './AdminLopCalculation.css';
 
 const PAGE_SIZE = 20;
 
@@ -256,7 +257,7 @@ export default function AdminLopCalculation() {
         ) : (
           <>
             <div className="table-wrap table-wrap--responsive salary-table-wrap">
-              <table className="table data-table salary-table">
+              <table className="table data-table salary-table salary-table--lop">
                 <thead>
                   <tr>
                     <th scope="col" className="salary-table__col-row-num">

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
@@ -1084,32 +1085,36 @@ export async function getLopDetailForUser(actor, permissions, userId, month, asO
   return mapLopDetail(summary);
 }
 
-export function lopDeductionRowsToExportRows(summary, { bulk = false } = {}) {
+export function lopDeductionRowsToExportRows(summary) {
   const rows = [];
   for (const row of summary.lopDeductionRows ?? []) {
-    if (bulk) {
-      rows.push({
-        'Employee Name': summary.userName,
-        'Employee Code': summary.employeeCode ?? '',
-        Month: summary.month,
-        'As Of Date': summary.asOfDate,
-        Date: row.date,
-        Reason: row.reason,
-        'Amount Deducted (INR)': row.amount,
-      });
-    } else {
-      rows.push({
-        Date: row.date,
-        Reason: row.reason,
-        'Amount Deducted (INR)': row.amount,
-      });
-    }
+    rows.push({
+      'Employee Name': summary.userName,
+      'Employee Code': summary.employeeCode ?? '',
+      Month: summary.month,
+      'As Of Date': summary.asOfDate,
+      Date: row.date,
+      Reason: row.reason,
+      'Amount Deducted (INR)': row.amount,
+    });
   }
   return rows;
 }
 
-const LOP_EXPORT_HEADERS = ['Date', 'Reason', 'Amount Deducted (INR)'];
-const LOP_BULK_EXPORT_HEADERS = [
+const LOP_EXPORT_COMPANY_NAME = 'Grubpac Technologies';
+const LOP_EXPORT_BRAND_ORANGE = 'FFE85D04';
+const LOP_EXPORT_HEADER_DARK = 'FF1F2937';
+const LOP_EXPORT_WHITE = 'FFFFFFFF';
+const LOP_EXPORT_ROW_EVEN = 'FFF9FAFB';
+const LOP_EXPORT_ROW_ODD = 'FFFFFFFF';
+const LOP_EXPORT_INSTRUCTION_FILL = 'FFFFF7ED';
+const LOP_EXPORT_INSTRUCTION_TEXT = 'FF9A3412';
+const LOP_EXPORT_BORDER_COLOR = 'FFE5E7EB';
+
+export const LOP_EXPORT_SHEET_HEADER_ROW = 5;
+const LOP_EXPORT_DATA_START_ROW = 6;
+
+export const LOP_EXPORT_HEADERS = [
   'Employee Name',
   'Employee Code',
   'Month',
@@ -1119,15 +1124,116 @@ const LOP_BULK_EXPORT_HEADERS = [
   'Amount Deducted (INR)',
 ];
 
-export function buildLopExportWorkbook(exportRows, { bulk = false, sheetName = 'LOP Deductions' } = {}) {
-  const headers = bulk ? LOP_BULK_EXPORT_HEADERS : LOP_EXPORT_HEADERS;
-  const workbook = XLSX.utils.book_new();
-  const sheet =
-    exportRows.length > 0
-      ? XLSX.utils.json_to_sheet(exportRows, { header: headers })
-      : XLSX.utils.aoa_to_sheet([headers]);
-  XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+const LOP_EXPORT_COLUMN_WIDTHS = [24, 14, 10, 12, 12, 20, 22];
+
+function lopExportThinBorder() {
+  return {
+    top: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    left: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    bottom: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    right: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+  };
+}
+
+function applyLopExportHeaderStyle(row, colCount) {
+  row.height = 22;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.font = { bold: true, color: { argb: LOP_EXPORT_WHITE }, size: 11, name: 'Calibri' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_HEADER_DARK } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = lopExportThinBorder();
+  }
+}
+
+function styleLopExportDataRow(row, rowIndex, colCount) {
+  const fill = rowIndex % 2 === 0 ? LOP_EXPORT_ROW_EVEN : LOP_EXPORT_ROW_ODD;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+    cell.border = lopExportThinBorder();
+    cell.alignment = { vertical: 'middle', wrapText: false };
+    cell.font = { size: 10, name: 'Calibri' };
+    if (column === LOP_EXPORT_HEADERS.length) {
+      cell.alignment = { vertical: 'middle', horizontal: 'right' };
+    }
+  }
+}
+
+export async function buildLopExportWorkbook(
+  exportRows,
+  {
+    sheetName = 'LOP Deductions',
+    subtitle = 'LOP Deduction Export',
+    instructionText = 'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30).',
+  } = {},
+) {
+  const colCount = LOP_EXPORT_HEADERS.length;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = LOP_EXPORT_COMPANY_NAME;
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet(sheetName.slice(0, 31), {
+    views: [{ state: 'frozen', ySplit: LOP_EXPORT_SHEET_HEADER_ROW }],
+    properties: { defaultRowHeight: 18 },
+  });
+
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = LOP_EXPORT_COMPANY_NAME;
+  titleCell.font = { bold: true, size: 16, name: 'Calibri', color: { argb: LOP_EXPORT_WHITE } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_BRAND_ORANGE } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(1).height = 30;
+
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = subtitle;
+  subtitleCell.font = { bold: true, size: 11, name: 'Calibri', color: { argb: LOP_EXPORT_HEADER_DARK } };
+  subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_ROW_EVEN } };
+  subtitleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(2).height = 22;
+
+  sheet.mergeCells(3, 1, 3, colCount);
+  const instructionCell = sheet.getCell(3, 1);
+  instructionCell.value = instructionText;
+  instructionCell.font = {
+    italic: true,
+    size: 10,
+    name: 'Calibri',
+    color: { argb: LOP_EXPORT_INSTRUCTION_TEXT },
+  };
+  instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_INSTRUCTION_FILL } };
+  instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
+  sheet.getRow(3).height = 20;
+
+  sheet.getRow(4).height = 6;
+
+  const headerRow = sheet.getRow(LOP_EXPORT_SHEET_HEADER_ROW);
+  LOP_EXPORT_HEADERS.forEach((header, index) => {
+    headerRow.getCell(index + 1).value = header;
+  });
+  applyLopExportHeaderStyle(headerRow, colCount);
+
+  exportRows.forEach((rowObject, rowIndex) => {
+    const row = sheet.getRow(LOP_EXPORT_DATA_START_ROW + rowIndex);
+    LOP_EXPORT_HEADERS.forEach((header, columnIndex) => {
+      row.getCell(columnIndex + 1).value = rowObject[header] ?? '';
+    });
+    styleLopExportDataRow(row, rowIndex, colCount);
+  });
+
+  LOP_EXPORT_COLUMN_WIDTHS.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
+
+  sheet.autoFilter = {
+    from: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: 1 },
+    to: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: colCount },
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 export function buildSalaryExportWorkbook(summaries, month) {

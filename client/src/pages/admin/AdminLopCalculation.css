@@ -1,0 +1,12 @@
+.salary-table--lop th.cell-actions-col--text,
+.salary-table--lop td.cell-actions {
+  min-width: 11.5rem;
+  width: auto;
+  white-space: nowrap;
+}
+
+.salary-table--lop .cell-actions__group {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+}

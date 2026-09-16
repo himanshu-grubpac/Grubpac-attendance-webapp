@@ -24,6 +24,8 @@ import {
   buildLopExportWorkbook,
   lopDeductionRowsToExportRows,
   computeMonthlySalarySummary,
+  LOP_EXPORT_HEADERS,
+  LOP_EXPORT_SHEET_HEADER_ROW,
 } from '../services/salaryService.js';
 import {
   exportLopBulkHandler,
@@ -33,6 +35,19 @@ import {
 } from './salaryController.js';
 
 const MONTH = '2026-06';
+
+function readLopExportSheetRows(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(sheet, { range: LOP_EXPORT_SHEET_HEADER_ROW - 1 });
+}
+
+function readLopExportHeaderRow(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+  return rows[LOP_EXPORT_SHEET_HEADER_ROW - 1];
+}
 const AS_OF_MID = '2026-06-10';
 const ABSENT_DAY = '2026-06-03';
 let memoryServer;
@@ -283,12 +298,11 @@ test('exportLopSingleHandler returns xlsx matching on-screen deductions', async 
     MONTH,
     '2026-06-30',
   );
-  const workbook = XLSX.read(res.ended, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet);
+  const rows = readLopExportSheetRows(res.ended);
 
   assert.equal(rows.length, detail.deductions.length);
   for (let index = 0; index < detail.deductions.length; index += 1) {
+    assert.equal(rows[index]['Employee Name'], detail.name);
     assert.equal(rows[index].Date, detail.deductions[index].date);
     assert.equal(rows[index].Reason, detail.deductions[index].reason);
     assert.equal(rows[index]['Amount Deducted (INR)'], detail.deductions[index].amountDeducted);
@@ -310,22 +324,21 @@ test('exportLopBulkHandler returns xlsx for all employees', async () => {
   assert.ok(Buffer.isBuffer(res.ended));
 
   const summaries = await listAllLopSummariesForMonth(MONTH, '2026-06-30');
-  const expectedRows = summaries.flatMap((summary) =>
-    lopDeductionRowsToExportRows(summary, { bulk: true }),
-  );
-  const workbook = XLSX.read(res.ended, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet);
+  const expectedRows = summaries.flatMap((summary) => lopDeductionRowsToExportRows(summary));
+  const rows = readLopExportSheetRows(res.ended);
 
   assert.equal(rows.length, expectedRows.length);
+  if (rows.length > 0) {
+    assert.ok(rows[0]['Employee Name']);
+    assert.ok(rows[0]['Employee Code'] !== undefined);
+    assert.ok(rows[0].Month);
+    assert.ok(rows[0]['As Of Date']);
+  }
 });
 
-test('buildLopExportWorkbook produces valid empty sheet headers', () => {
-  const buffer = buildLopExportWorkbook([]);
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-  assert.deepEqual(rows[0], ['Date', 'Reason', 'Amount Deducted (INR)']);
+test('buildLopExportWorkbook produces valid empty sheet headers', async () => {
+  const buffer = await buildLopExportWorkbook([]);
+  assert.deepEqual(readLopExportHeaderRow(buffer), LOP_EXPORT_HEADERS);
 });
 
 async function seedZeroBalanceUnpaidLeave({ code, dayKey }) {
@@ -462,9 +475,7 @@ test('exportLopSingleHandler includes unpaid leave rows matching detail', async 
     res,
   );
 
-  const workbook = XLSX.read(res.ended, { type: 'buffer' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet);
+  const rows = readLopExportSheetRows(res.ended);
   const exportedUnpaid = rows.find((row) => row.Reason === 'Unpaid SL' && row.Date === '2026-06-08');
 
   assert.ok(exportedUnpaid);
