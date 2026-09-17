@@ -79,6 +79,20 @@ export async function prepareEmployeeReferences(data, context = {}) {
   }
 
   if (
+    context.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER
+    && prepared.departmentId
+    && !(prepared.managedDepartmentIds?.length)
+  ) {
+    // An RM's own department counts as one of their managed departments.
+    // Bulk sheets carry no managed-departments column, so without this every
+    // new RM fails the at-least-one-managed-department rule. Explicitly
+    // provided lists are left untouched; an RM with neither department nor
+    // managed list still fails validation downstream, as before.
+    const ownId = prepared.departmentId.toString();
+    prepared.managedDepartmentIds = [ownId];
+  }
+
+  if (
     !prepared.reportingManagerId
     && (prepared.reportingManagerEmail || prepared.reportingManagerCode)
   ) {

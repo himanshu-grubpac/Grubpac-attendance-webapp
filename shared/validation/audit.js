@@ -27,16 +27,19 @@ const auditLogFilterFields = {
   entityId: z.string().trim().max(100).optional(),
 };
 
+const conflictsOnlyField = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((value) => value === 'true');
+
 export const auditLogQuerySchema = paginationSchema.extend({
   ...auditLogFilterFields,
-  conflictsOnly: z
-    .enum(['true', 'false'])
-    .optional()
-    .transform((value) => value === 'true'),
+  conflictsOnly: conflictsOnlyField,
 });
 
 export const auditLogExportSchema = z.object({
   ...auditLogFilterFields,
+  conflictsOnly: conflictsOnlyField,
   format: z.enum(['xlsx', 'csv']).optional().default('xlsx'),
 });
 

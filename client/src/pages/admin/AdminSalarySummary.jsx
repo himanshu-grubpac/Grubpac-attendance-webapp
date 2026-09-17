@@ -347,6 +347,10 @@ function MonthlyPayrollTab({
     [summaries, selectedId],
   );
 
+  const closeDetail = useCallback(() => setSelectedId(null), [setSelectedId]);
+  useEscapeKey(Boolean(selectedSummary), closeDetail);
+  const detailTitleId = 'monthly-payroll-detail-title';
+
   const hasActiveFilters = Boolean(debouncedSearch.trim());
 
   const emptyTitle = useMemo(() => {
@@ -376,7 +380,7 @@ function MonthlyPayrollTab({
   const dynamicHints = {
     nextPayrollHint: meta?.payrollDayOfMonth
       ? `Scheduled on day ${meta.payrollDayOfMonth} each month`
-      : 'Set payroll day in Settings',
+      : 'Month-end default — set a payroll day in Settings',
   };
 
   return (
@@ -483,14 +487,10 @@ function MonthlyPayrollTab({
                   {pageRows.map((item, index) => {
                     const deduction = computeLopDeduction(item);
                     const status = payStatusBadge(item);
-                    const isSelected = selectedId === item.userId;
                     const rowNumber = (page - 1) * PAGE_SIZE + index + 1;
 
                     return (
-                      <tr
-                        key={item.userId}
-                        className={isSelected ? 'table-row--selected' : undefined}
-                      >
+                      <tr key={item.userId}>
                         <td
                           data-label="#"
                           className="salary-table__row-num"
@@ -529,13 +529,9 @@ function MonthlyPayrollTab({
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            onClick={() =>
-                              setSelectedId((current) =>
-                                current === item.userId ? null : item.userId,
-                              )
-                            }
+                            onClick={() => setSelectedId(item.userId)}
                           >
-                            {isSelected ? 'Hide' : 'Details'}
+                            Details
                           </button>
                         </td>
                       </tr>
@@ -572,55 +568,73 @@ function MonthlyPayrollTab({
         )}
       </section>
 
-      {selectedSummary ? (
-        <section className="salary-detail card" aria-label="Employee pay estimate details">
-          <div className="salary-detail__head">
-            <div>
-              <h2 className="salary-detail__title">{selectedSummary.userName}</h2>
-              {selectedSummary.employeeCode ? (
-                <p className="muted small">{selectedSummary.employeeCode}</p>
-              ) : null}
-            </div>
-            <Link to={`/admin/users/${selectedSummary.userId}`} className="btn btn-ghost btn-sm">
-              View profile
-            </Link>
-          </div>
-          <dl className="detail-list detail-list--grid salary-detail__grid">
-            <div>
-              <dt>Monthly salary (INR)</dt>
-              <dd>{formatINRCurrency(selectedSummary.monthlySalary)}</dd>
-            </div>
-            <div>
-              <dt>Working days</dt>
-              <dd>{selectedSummary.workingDaysInMonth}</dd>
-            </div>
-            <div>
-              <dt>Present days</dt>
-              <dd>{selectedSummary.presentDays}</dd>
-            </div>
-            <div>
-              <dt>Paid leave days</dt>
-              <dd>{selectedSummary.paidLeaveDays}</dd>
-            </div>
-            <div>
-              <dt>Payable days</dt>
-              <dd>{selectedSummary.payableDays}</dd>
-            </div>
-            <div>
-              <dt>LOP days</dt>
-              <dd>{selectedSummary.lopDays}</dd>
-            </div>
-            <div>
-              <dt>Per day (INR)</dt>
-              <dd>{formatINRCurrency(selectedSummary.perDaySalary)}</dd>
-            </div>
-            <div>
-              <dt>Net estimate (INR)</dt>
-              <dd>{formatINRCurrency(selectedSummary.payableEstimate)}</dd>
-            </div>
-          </dl>
-        </section>
-      ) : null}
+      {selectedSummary
+        ? createPortal(
+            <div className="modal__backdrop" role="presentation" onClick={closeDetail}>
+              <div
+                className="modal modal--compact"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={detailTitleId}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <header className="modal__header">
+                  <h2 id={detailTitleId} className="modal__title">
+                    {selectedSummary.userName}
+                  </h2>
+                  {selectedSummary.employeeCode ? (
+                    <p className="modal__lead muted">{selectedSummary.employeeCode}</p>
+                  ) : null}
+                </header>
+                <div className="modal__body">
+                  <dl className="detail-list detail-list--grid salary-detail__grid">
+                    <div>
+                      <dt>Monthly salary (INR)</dt>
+                      <dd>{formatINRCurrency(selectedSummary.monthlySalary)}</dd>
+                    </div>
+                    <div>
+                      <dt>Working days</dt>
+                      <dd>{selectedSummary.workingDaysInMonth}</dd>
+                    </div>
+                    <div>
+                      <dt>Present days</dt>
+                      <dd>{selectedSummary.presentDays}</dd>
+                    </div>
+                    <div>
+                      <dt>Paid leave days</dt>
+                      <dd>{selectedSummary.paidLeaveDays}</dd>
+                    </div>
+                    <div>
+                      <dt>Payable days</dt>
+                      <dd>{selectedSummary.payableDays}</dd>
+                    </div>
+                    <div>
+                      <dt>LOP days</dt>
+                      <dd>{selectedSummary.lopDays}</dd>
+                    </div>
+                    <div>
+                      <dt>Per day (INR)</dt>
+                      <dd>{formatINRCurrency(selectedSummary.perDaySalary)}</dd>
+                    </div>
+                    <div>
+                      <dt>Net estimate (INR)</dt>
+                      <dd>{formatINRCurrency(selectedSummary.payableEstimate)}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <footer className="modal__footer">
+                  <Link to={`/admin/users/${selectedSummary.userId}`} className="btn btn-ghost">
+                    View profile
+                  </Link>
+                  <button type="button" className="btn btn-primary" onClick={closeDetail}>
+                    Close
+                  </button>
+                </footer>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

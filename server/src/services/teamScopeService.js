@@ -1,26 +1,16 @@
-import mongoose from 'mongoose';
 import { hasPermission } from '../../../shared/permissions.js';
 import { User } from '../models/User.js';
-
-export async function getActorManagedDepartmentIds(actor) {
-  if (!actor?._id) return [];
-  if (Array.isArray(actor.managedDepartmentIds) && actor.managedDepartmentIds.length > 0) {
-    return actor.managedDepartmentIds.map((id) => id.toString());
-  }
-  const doc = await User.findById(actor._id).select('managedDepartmentIds').lean();
-  return (doc?.managedDepartmentIds ?? []).map((id) => id.toString());
-}
 
 /**
  * Returns null when unscoped (read-all), [] when team scope applies but no employees match,
  * or an array of user ObjectIds.
  *
- * Role model: there is NO separate department-lead role. Dept-lead =
- * reporting-manager + `managedDepartmentIds` flag, and ONLY that flag may
- * widen scope to full departments (below). A plain RM without the flag is
- * confined to direct reports by the caller (leave paths MUST use
- * resolveLeaveApprovalUserIds/resolveLeaveTeamUserIds instead, which never
- * consult managed departments).
+ * Team visibility = DIRECT REPORTS + DELEGATE CHAIN ONLY — the exact same
+ * membership as the leave approval queue. Managed departments deliberately do
+ * NOT widen visibility anywhere: an RM sees precisely the people under them
+ * (dashboard, employee list, attendance, today strip, salary audit), no more.
+ * (The `managedDepartmentIds` field stays stored for org records; single-record
+ * salary checks may still consult it, but no listing does.)
  */
 export async function resolveTeamScopedUserIds(
   actor,
@@ -35,15 +25,7 @@ export async function resolveTeamScopedUserIds(
     return [];
   }
 
-  const managedIds = await getActorManagedDepartmentIds(actor);
-  if (managedIds.length > 0) {
-    const objectIds = managedIds.map((id) => new mongoose.Types.ObjectId(id));
-    const users = await User.find({ departmentId: { $in: objectIds }, isActive: true }).select('_id');
-    return users.map((user) => user._id);
-  }
-
-  const reports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id');
-  return reports.map((user) => user._id);
+  return resolveLeaveApprovalUserIds(actor);
 }
 
 export async function applyTeamScopeToEmployeeQuery(
@@ -60,15 +42,8 @@ export async function applyTeamScopeToEmployeeQuery(
     return query;
   }
 
-  const managedIds = await getActorManagedDepartmentIds(actor);
-  if (managedIds.length > 0) {
-    query.departmentId = {
-      $in: managedIds.map((id) => new mongoose.Types.ObjectId(id)),
-    };
-    return query;
-  }
-
-  query.reportingManagerId = actor._id;
+  const scopedIds = await resolveLeaveApprovalUserIds(actor);
+  query._id = { $in: scopedIds };
   return query;
 }
 
@@ -101,8 +76,8 @@ export async function isUserInTeamScope(
  * Leave visibility scope: direct reports + delegate chain ONLY.
  * Managed departments deliberately do NOT widen leave visibility — a
  * reporting manager sees leave requests of employees under them and nobody
- * else. (The generic resolveTeamScopedUserIds keeps its department branch
- * for attendance/salary callers; leave paths must use this resolver.)
+ * else. (The generic team-scope resolvers above now share this exact
+ * membership, so every page agrees on who "the team" is.)
  */
 export async function resolveLeaveApprovalUserIds(actor) {
   const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id');

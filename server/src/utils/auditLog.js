@@ -36,6 +36,11 @@ export function auditActionMatchers(moduleValue) {
   return module ? [...module.match] : [];
 }
 
+/** Every taxonomy prefix, flattened — used to match the untaxonomied `other` bucket. */
+export function auditAllActionMatchers() {
+  return [...new Set(AUDIT_MODULES.flatMap((entry) => entry.match))];
+}
+
 /**
  * Display fallbacks shared by the audit viewer and exports — no field
  * renders blank. Failed logins store the attempted credential under

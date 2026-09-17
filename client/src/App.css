@@ -14978,7 +14978,7 @@ body::-webkit-scrollbar-thumb {
 /* ── Admin: Today Present ── */
 .today-present-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
@@ -15046,6 +15046,10 @@ body::-webkit-scrollbar-thumb {
   color: var(--info, #2563eb);
 }
 
+.today-present-summary__card--inactive .today-present-summary__value {
+  color: var(--muted-foreground, #6b7280);
+}
+
 .card__header {
   display: flex;
   align-items: center;
@@ -15095,6 +15099,11 @@ body::-webkit-scrollbar-thumb {
 .today-present-table__badge--leave {
   background: var(--warning-bg);
   color: var(--warning);
+}
+
+.today-present-table__badge--inactive {
+  background: color-mix(in srgb, var(--muted-foreground, #6b7280) 15%, transparent);
+  color: var(--muted-foreground, #4b5563);
 }
 
 .today-present-table__time {

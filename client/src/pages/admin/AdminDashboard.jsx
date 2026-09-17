@@ -10,7 +10,12 @@ const KPI_CARDS = [
     label: 'View Leave Requests',
     icon: '✓',
     to: '/admin/leave/approvals',
-    getValue: (summary) => summary.pendingLeaveRequests,
+    // Total comes from the same pending-counts endpoint as the hint below,
+    // so the number always equals its own breakdown (leave + WFH + comp off
+    // + awaiting assessment). The reports summary counts LeaveRequests only
+    // (no comp-off, no year filter) and is just the fallback.
+    getValue: (summary, counts) =>
+      typeof counts?.total === 'number' ? counts.total : summary.pendingLeaveRequests,
     getHint: (_, counts) => {
       if (!counts) return 'Awaiting your decision';
       const parts = [];
@@ -138,7 +143,7 @@ export default function AdminDashboard() {
                   </span>
                   <span className="admin-home__card-label">{card.label}</span>
                 </div>
-                <strong className="admin-home__card-value">{card.getValue(reports)}</strong>
+                <strong className="admin-home__card-value">{card.getValue(reports, counts)}</strong>
                 {hint ? <span className="admin-home__card-hint muted small">{hint}</span> : null}
               </Link>
             );

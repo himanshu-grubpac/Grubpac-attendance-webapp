@@ -155,6 +155,7 @@ test('bulk create flags forced password change and emails credentials', async ()
   assert.match(results[0].message, /emailed/);
   const stored = await User.findOne({ email: results[0].email }).lean();
   assert.equal(stored.mustChangePassword, true);
+  assert.equal(stored.forcePasswordChange, true, 'new bulk accounts gate via both flags');
   assert.equal(testEmailOutbox.length, 1);
   assert.equal(testEmailOutbox[0].to, results[0].email);
   assert.equal(testEmailOutbox[0].tag, 'welcome-credentials');
@@ -493,4 +494,36 @@ test('directory export has the new 14-column layout with role and no secrets', a
     String(entry.formulae?.[0] ?? '').includes('Employee'),
   );
   assert.ok(hasRoleList, 'role column should carry the dropdown validation list');
+});
+
+test('bulk create stores a resolvable department ref (no blank department downstream)', async () => {
+  const { results } = await importEmployeesFromRowsUpsert([row(6, baseCreate())], createdBy());
+  assert.equal(results[0].status, 'created');
+
+  // Ref-only by design (legacy text is not stored); the UI resolves the
+  // name from the Department master, so assert that exact read path.
+  const stored = await User.findOne({ email: results[0].email })
+    .populate('departmentId', 'name code')
+    .lean();
+  assert.equal(String(stored.departmentId?._id ?? stored.departmentId), department._id.toString());
+  assert.equal(stored.departmentId?.name ?? stored.department ?? null, 'Development');
+});
+
+test('bulk update switching department keeps the ref resolvable', async () => {
+  const { results: created } = await importEmployeesFromRowsUpsert([row(6, baseCreate())], createdBy());
+  assert.equal(created[0].status, 'created');
+  const UiUx = await Department.create({ name: 'UI/UX Designing', code: 'DES', isActive: true });
+
+  const { results } = await importEmployeesFromRowsUpsert(
+    [row(7, { email: created[0].email, department: 'UI/UX Designing' })],
+    createdBy(),
+  );
+  assert.equal(results[0].status, 'updated');
+  assert.ok(results[0].changedFields.some((change) => change.field === 'department'));
+
+  const stored = await User.findOne({ email: created[0].email })
+    .populate('departmentId', 'name code')
+    .lean();
+  assert.equal(String(stored.departmentId?._id ?? stored.departmentId), UiUx._id.toString());
+  assert.equal(stored.departmentId?.name ?? stored.department ?? null, 'UI/UX Designing');
 });

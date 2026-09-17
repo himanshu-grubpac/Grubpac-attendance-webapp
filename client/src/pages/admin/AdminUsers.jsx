@@ -130,12 +130,15 @@ const STAT_CARDS = [
 ];
 
 function formatJoinedSinceHint(monthKey) {
-  if (!monthKey) return 'Joined since month start';
+  // Registration-based (createdAt), matching the stat + list predicate —
+  // deliberately "registered", not "joined": bulk-imported employees carry
+  // historical joining dates but were registered this month.
+  if (!monthKey) return 'Registered since month start';
   const [year, month] = monthKey.split('-').map(Number);
   const monthAbbr = new Intl.DateTimeFormat('en-IN', { month: 'short' }).format(
     new Date(year, month - 1, 1),
   );
-  return `Joined since ${monthAbbr} 1st`;
+  return `Registered since ${monthAbbr} 1st`;
 }
 
 function departmentLabel(employee) {
@@ -328,9 +331,11 @@ export default function AdminUsers() {
     try {
       const data = await adminApi.getEmployeeStats();
       setStats(data.stats ?? null);
+      return data.stats ?? null;
     } catch (err) {
       setStats(null);
       setStatsError(getErrorMessage(err));
+      return null;
     } finally {
       setStatsLoading(false);
     }
@@ -392,7 +397,6 @@ export default function AdminUsers() {
 
   useEffect(() => {
     loadColumnPreferences();
-    loadStats();
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
@@ -407,14 +411,21 @@ export default function AdminUsers() {
       .listManagers()
       .then((data) => setManagers(data.managers ?? []))
       .catch(() => { });
-    loadEmployees({
-      query: search,
-      nextPage: 1,
-      nextStatus: statusFilter,
-      nextDepartment: departmentFilter,
-      nextRole: roleFilter,
-      nextNewThisMonth: newThisMonthFilter,
-    });
+    // Stats first: the persisted month filter needs monthKey, which only
+    // the stats response provides. Loading employees before it resolves
+    // would silently drop the month predicate.
+    (async () => {
+      const monthStats = await loadStats();
+      loadEmployees({
+        query: search,
+        nextPage: 1,
+        nextStatus: statusFilter,
+        nextDepartment: departmentFilter,
+        nextRole: roleFilter,
+        nextNewThisMonth: newThisMonthFilter,
+        monthKey: monthStats?.monthKey ?? null,
+      });
+    })();
     // Intentionally runs once: restores the persisted filter set (if any).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadColumnPreferences, loadEmployees, loadStats]);
@@ -555,13 +566,22 @@ export default function AdminUsers() {
   function handleStatCardClick(key) {
     switch (key) {
       case 'total':
-        // clear all employee filters
+        // Clear all employee filters (state AND request): leaving stale
+        // status/department/role/search state behind desyncs the dropdowns
+        // from the rows, and the infinite-scroll observer would then append
+        // with the old status and clobber pagination ("Showing 10 of 5").
+        setSearch('');
+        setStatusFilter('');
+        setDepartmentFilter('');
+        setRoleFilter('');
         setNewThisMonthFilter(false);
+        skipDebouncedSearchRef.current = true;
         loadEmployees({
-          query: search,
+          query: '',
           nextPage: 1,
           nextStatus: '',
           nextDepartment: '',
+          nextRole: '',
           nextNewThisMonth: false,
         });
         break;
@@ -713,6 +733,10 @@ export default function AdminUsers() {
     search || statusFilter || departmentFilter || roleFilter || newThisMonthFilter,
   );
   const newThisMonthHint = formatJoinedSinceHint(stats?.monthKey);
+  // Filters combine (AND): with e.g. Status=Inactive also active, the table
+  // is the intersection — spell that out so the stat count (116) vs the
+  // table count (4) never looks like a data bug again.
+  const hasOtherFilters = Boolean(search || statusFilter || departmentFilter || roleFilter);
   const pageSize = pagination?.limit ?? EMPLOYEE_PAGE_SIZE;
 
   return (
@@ -858,7 +882,9 @@ export default function AdminUsers() {
 
         {newThisMonthFilter ? (
           <p className="employees-filter-notice muted small" role="status">
-            Showing employees {newThisMonthHint.toLowerCase()}.
+            {hasOtherFilters && pagination && stats?.newThisMonth != null
+              ? `Showing ${pagination.total} of ${stats.newThisMonth} employees ${newThisMonthHint.toLowerCase()} — other filters applied.`
+              : `Showing employees ${newThisMonthHint.toLowerCase()}.`}
           </p>
         ) : null}
 

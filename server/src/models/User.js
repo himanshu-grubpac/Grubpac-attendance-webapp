@@ -64,8 +64,13 @@ const userSchema = new mongoose.Schema(
     monthlySalary: { type: Number, default: null, min: 0 },
     salaryEffectiveFrom: { type: Date, default: null },
     isActive: { type: Boolean, default: true },
-    /** When true the employee must change their password before accessing the portal. Set on creation; cleared on first password change. */
-    forcePasswordChange: { type: Boolean, default: true },
+    /**
+     * When true the employee must change their password before accessing the portal.
+     * Defaults to false so pre-existing/legacy accounts are never gated: every
+     * creation path sets it explicitly true for new employees; cleared on first
+     * password change.
+     */
+    forcePasswordChange: { type: Boolean, default: false },
     /** Incremented to invalidate outstanding JWT sessions (logout / password change). */
     tokenVersion: { type: Number, default: 0, min: 0 },
     lastLoginAt: { type: Date, default: null },

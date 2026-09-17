@@ -14,7 +14,7 @@ import { LeaveType } from '../models/LeaveType.js';
 import { User } from '../models/User.js';
 import { flushAuditLogs } from '../utils/auditLog.js';
 import { updateHoliday, updateLeaveType } from '../controllers/leaveController.js';
-import { listAuditLogs } from '../controllers/adminController.js';
+import { exportAuditLogs, listAuditLogs } from '../controllers/adminController.js';
 import { runAuditArchiveJob } from './auditArchiveService.js';
 
 let memoryServer;
@@ -50,13 +50,20 @@ after(async () => {
 });
 
 function mockRes() {
-  const res = { statusCode: 200, body: null };
+  const res = { statusCode: 200, body: null, headers: {}, ended: null };
   res.status = (code) => {
     res.statusCode = code;
     return res;
   };
   res.json = (body) => {
     res.body = body;
+    return res;
+  };
+  res.setHeader = (name, value) => {
+    res.headers[name] = value;
+  };
+  res.end = (body) => {
+    res.ended = body;
     return res;
   };
   return res;
@@ -241,6 +248,104 @@ test('unified q search matches email, user id, and record id with OR semantics',
   // Non-hex garbage matches nothing and never throws a CastError.
   const byGarbage = await query({ q: 'not-an-id-at-all', limit: 20 });
   assert.equal(byGarbage.pagination.total, 0);
+});
+
+test('unified q search matches action text, stored module text, and date fragments', async () => {
+  const admin = await createAdmin();
+  const septStamp = new Date('2026-09-17T10:00:00.000Z'); // 15:30 IST, same day
+  const augStamp = new Date('2026-08-05T10:00:00.000Z');
+  await AuditLog.create([
+    {
+      action: 'login_success',
+      userId: admin._id,
+      email: 'a@test.example',
+      timestamp: septStamp,
+      metadata: {},
+    },
+    {
+      action: 'custom_gamma',
+      userId: admin._id,
+      email: 'b@test.example',
+      timestamp: septStamp,
+      metadata: { module: 'payroll' },
+    },
+    {
+      action: 'attendance_marked',
+      userId: admin._id,
+      email: 'c@test.example',
+      timestamp: augStamp,
+      metadata: {},
+    },
+  ]);
+
+  async function query(query) {
+    const res = mockRes();
+    await listAuditLogs(mockReq(admin, { query }), res);
+    assert.equal(res.statusCode, 200);
+    return res.body;
+  }
+
+  // Action text, case-insensitive.
+  const byAction = await query({ q: 'LOGIN', limit: 20 });
+  assert.equal(byAction.pagination.total, 1);
+  assert.equal(byAction.logs[0].action, 'login_success');
+
+  // Stored module text (no action contains 'payroll').
+  const byModuleText = await query({ q: 'payroll', limit: 20 });
+  assert.equal(byModuleText.pagination.total, 1);
+  assert.equal(byModuleText.logs[0].action, 'custom_gamma');
+
+  // Full-day fragment (IST).
+  const byDay = await query({ q: '2026-09-17', limit: 20 });
+  assert.equal(byDay.pagination.total, 2);
+
+  // Month fragment.
+  const byMonth = await query({ q: '2026-09', limit: 20 });
+  assert.equal(byMonth.pagination.total, 2);
+  const byOtherMonth = await query({ q: '2026-08', limit: 20 });
+  assert.equal(byOtherMonth.pagination.total, 1);
+
+  // Impossible dates fall through to text matching: no crash, no rows.
+  const byImpossible = await query({ q: '2026-13-45', limit: 20 });
+  assert.equal(byImpossible.pagination.total, 0);
+});
+
+test("module filter 'other' returns only untaxonomied actions", async () => {
+  const admin = await createAdmin();
+  const stamp = new Date('2026-09-17T10:00:00.000Z');
+  await AuditLog.create([
+    { action: 'leave_request_approved', userId: admin._id, email: 'a@test.example', timestamp: stamp, metadata: {} },
+    { action: 'custom_xyz', userId: admin._id, email: 'b@test.example', timestamp: stamp, metadata: {} },
+  ]);
+
+  const res = mockRes();
+  await listAuditLogs(mockReq(admin, { query: { module: 'other', limit: 20 } }), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.pagination.total, 1);
+  assert.equal(res.body.logs[0].action, 'custom_xyz');
+  assert.equal(res.body.logs[0].module, 'other');
+});
+
+test('export honors conflictsOnly without crashing on conflict-free data', async () => {
+  const admin = await createAdmin();
+  const stamp = new Date('2026-09-17T10:00:00.000Z');
+  await AuditLog.create({
+    action: 'login_success',
+    userId: admin._id,
+    email: 'a@test.example',
+    timestamp: stamp,
+    metadata: {},
+  });
+
+  const res = mockRes();
+  await exportAuditLogs(
+    mockReq(admin, { query: { conflictsOnly: 'true', format: 'csv' } }),
+    res,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.headers['Content-Type'].includes('text/csv'));
+  // Header row only: the lone entry has no conflict.
+  assert.equal(String(res.ended).trim().split('\n').length, 1);
 });
 
 test('archive job archives months, prunes only verified old entries', async () => {

@@ -6,6 +6,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { User } from '../models/User.js';
+import { previewFirstLoginFlags, clearAllFirstLoginFlags } from '../migrateFirstLoginFlags.js';
 import { resetEmployeePassword } from '../controllers/adminController.js';
 import { resetPassword } from '../controllers/passwordResetController.js';
 import { changePassword } from '../controllers/authController.js';
@@ -100,7 +101,7 @@ test('forgot-password completion on an existing account does not force a change'
   assert.equal(flags.force, false, 'forcePasswordChange stays false');
 });
 
-test('new accounts still start flagged (schema default)', async () => {
+test('schema default no longer gates accounts', async () => {
   sequence += 1;
   const fresh = await User.create({
     firstName: 'Brand',
@@ -113,12 +114,56 @@ test('new accounts still start flagged (schema default)', async () => {
     role: 'employee',
     isActive: true,
   });
-  assert.equal(fresh.forcePasswordChange, true, 'new accounts gate on first login');
+  assert.equal(fresh.forcePasswordChange, false, 'default is ungated');
   assert.equal(
     fresh.toSafeJSON().mustChangePassword,
-    true,
+    false,
     'login and /me agree through the unified flag',
   );
+});
+
+test('legacy accounts missing both flag fields read ungated', async () => {
+  sequence += 1;
+  const email = `legacy-${sequence}@test.example`;
+  // Raw insert bypasses Mongoose defaults — the pre-feature document shape.
+  await User.collection.insertOne({
+    firstName: 'Legacy',
+    lastName: 'User',
+    name: 'Legacy User',
+    email,
+    mobile: `8${String(sequence).padStart(9, '0')}`,
+    employeeCode: `L${String(sequence).padStart(8, '0')}`,
+    passwordHash: await bcrypt.hash('Old@123', 12),
+    role: 'employee',
+    isActive: true,
+  });
+  const reloaded = await User.findOne({ email });
+  assert.equal(
+    reloaded.toSafeJSON().mustChangePassword,
+    false,
+    'pre-feature accounts never gate',
+  );
+});
+
+test('migration preview counts and clear-all ungates every account', async () => {
+  const flagged = await createEmployee();
+  await User.updateOne(
+    { _id: flagged._id },
+    { $set: { mustChangePassword: true, forcePasswordChange: true } },
+  );
+  await createEmployee();
+
+  const preview = await previewFirstLoginFlags();
+  assert.equal(preview.total, 2);
+  assert.equal(preview.flagged, 1);
+
+  const result = await clearAllFirstLoginFlags();
+  assert.equal(result.remaining, 0);
+
+  const again = await previewFirstLoginFlags();
+  assert.equal(again.flagged, 0, 're-run is a no-op');
+  const reloaded = await User.findById(flagged._id);
+  assert.equal(reloaded.toSafeJSON().mustChangePassword, false);
 });
 
 test('changing the password clears both flags', async () => {

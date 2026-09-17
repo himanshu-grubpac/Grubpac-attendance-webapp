@@ -78,7 +78,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
     field: 'endingDate',
   };
 }
-import { auditActionMatchers, auditRequest, auditRequestSync, getRequestAuditContext, resolveAuditDisplayEmail, resolveAuditDisplayRole, resolveAuditModule } from '../utils/auditLog.js';
+import { auditActionMatchers, auditAllActionMatchers, auditRequest, auditRequestSync, getRequestAuditContext, resolveAuditDisplayEmail, resolveAuditDisplayRole, resolveAuditModule } from '../utils/auditLog.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 const attendanceQuerySchema = paginationSchema
@@ -1167,17 +1167,27 @@ function buildAuditLogQuery({ action, search, date, entityType, actionType, user
   }
 
   if (module) {
-    const matchers = auditActionMatchers(module);
-    if (matchers.length > 0) {
+    // The untaxonomied `other` bucket is never stored — match actions that
+    // carry none of the taxonomy prefixes (mirrors resolveAuditModule).
+    if (module === 'other') {
+      const all = auditAllActionMatchers();
       query.$and = query.$and ?? [];
       query.$and.push({
-        $or: [
-          { 'metadata.module': module },
-          ...matchers.map((prefix) => ({ action: new RegExp(`^${escapeRegex(prefix)}`) })),
-        ],
+        action: { $not: new RegExp(`^(${all.map((prefix) => escapeRegex(prefix)).join('|')})`) },
       });
     } else {
-      query['metadata.module'] = module;
+      const matchers = auditActionMatchers(module);
+      if (matchers.length > 0) {
+        query.$and = query.$and ?? [];
+        query.$and.push({
+          $or: [
+            { 'metadata.module': module },
+            ...matchers.map((prefix) => ({ action: new RegExp(`^${escapeRegex(prefix)}`) })),
+          ],
+        });
+      } else {
+        query['metadata.module'] = module;
+      }
     }
   }
 
@@ -1209,18 +1219,28 @@ function buildAuditLogQuery({ action, search, date, entityType, actionType, user
 
   if (q) {
     // Unified search box: one input matched with OR semantics across actor
-    // email (partial, case-insensitive), user ObjectId, and record ids
-    // (top-level entityId + metadata id family, exact). ObjectId-typed paths
+    // email (partial, case-insensitive), user ObjectId, record ids
+    // (top-level entityId + metadata id family, exact), action text and
+    // stored module text (partial, case-insensitive), and IST date fragments
+    // (YYYY-MM-DD for a day, YYYY-MM for a month). ObjectId-typed paths
     // are only queried for 24-hex input so other strings can never throw a
     // CastError out of the query.
     const trimmed = q.trim();
-    const clauses = [{ email: { $regex: escapeRegex(trimmed), $options: 'i' } }];
+    const clauses = [
+      { email: { $regex: escapeRegex(trimmed), $options: 'i' } },
+      { action: { $regex: escapeRegex(trimmed), $options: 'i' } },
+      { 'metadata.module': { $regex: escapeRegex(trimmed), $options: 'i' } },
+    ];
     if (/^[a-f\d]{24}$/i.test(trimmed)) {
       clauses.push({ userId: trimmed });
       clauses.push({ entityId: trimmed });
     }
     for (const key of AUDIT_RECORD_ID_KEYS) {
       clauses.push({ [`metadata.${key}`]: trimmed });
+    }
+    const dateRange = auditSearchDateRange(trimmed);
+    if (dateRange) {
+      clauses.push({ timestamp: dateRange });
     }
     query.$and = query.$and ?? [];
     query.$and.push({ $or: clauses });
@@ -1243,6 +1263,39 @@ function buildAuditLogQuery({ action, search, date, entityType, actionType, user
   }
 
   return query;
+}
+
+/**
+ * IST date fragments typed into the unified search box: `YYYY-MM-DD` matches
+ * that calendar day, `YYYY-MM` matches the whole month. Returns null for
+ * anything else (including impossible dates like month 13) so the fragment
+ * falls through to plain text matching.
+ */
+function auditSearchDateRange(trimmed) {
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dayMatch) {
+    const year = Number(dayMatch[1]);
+    const month = Number(dayMatch[2]);
+    const day = Number(dayMatch[3]);
+    if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) {
+      return null;
+    }
+    const istDay = parseDateInputAsISTDay(trimmed);
+    if (!istDay) return null;
+    return { $gte: startOfDayIST(istDay), $lte: endOfDayIST(istDay) };
+  }
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(trimmed);
+  if (monthMatch) {
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (month < 1 || month > 12) return null;
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const start = parseDateInputAsISTDay(`${monthMatch[1]}-${monthMatch[2]}-01`);
+    const end = parseDateInputAsISTDay(`${monthMatch[1]}-${monthMatch[2]}-${String(lastDay).padStart(2, '0')}`);
+    if (!start || !end) return null;
+    return { $gte: startOfDayIST(start), $lte: endOfDayIST(end) };
+  }
+  return null;
 }
 
 function flattenAuditMetadata(metadata) {
@@ -1279,10 +1332,14 @@ export function auditLogExportRows(logs) {
 export async function exportAuditLogs(req, res) {
   const parsed = auditLogExportSchema.parse(req.query);
   const query = buildAuditLogQuery(parsed);
-  const logs = await AuditLog.find(query)
+  let logs = await AuditLog.find(query)
     .sort({ timestamp: -1, _id: -1 })
     .limit(AUDIT_LOG_EXPORT_MAX_ROWS)
     .lean();
+  if (parsed.conflictsOnly) {
+    const conflictMap = await enrichAuditLogsWithConflicts(logs);
+    logs = logs.filter((log) => conflictMap.get(log._id.toString())?.ipConflict);
+  }
   const rows = auditLogExportRows(logs);
   const stamp = getISTDateInputValue().slice(0, 10);
 
@@ -1300,6 +1357,7 @@ export async function exportAuditLogs(req, res) {
       module: parsed.module ?? null,
       employee: parsed.employee ?? null,
       entityId: parsed.entityId ?? null,
+      conflictsOnly: parsed.conflictsOnly ?? false,
     },
   });
 

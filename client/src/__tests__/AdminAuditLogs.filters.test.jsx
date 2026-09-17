@@ -91,6 +91,32 @@ describe('AdminAuditLogs filters', () => {
     );
   });
 
+  it('advertises action, module, and date coverage in the search box', async () => {
+    setup();
+    await screen.findByRole('table');
+    expect(screen.getByPlaceholderText(/action, module, or date/i)).toBeInTheDocument();
+  });
+
+  it('passes conflictsOnly through to the export call', async () => {
+    const user = userEvent.setup();
+    setup();
+    await screen.findByRole('table');
+
+    await user.click(screen.getByRole('checkbox', { name: /conflicts only/i }));
+    await waitFor(() => {
+      expect(adminApi.listAuditLogs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ conflictsOnly: 'true' }),
+      );
+    });
+    await user.click(screen.getByRole('button', { name: 'Excel' }));
+
+    await waitFor(() => {
+      expect(adminApi.exportAuditLogs).toHaveBeenCalledWith(
+        expect.objectContaining({ conflictsOnly: true, format: 'xlsx' }),
+      );
+    });
+  });
+
   it('passes active filters to the export call', async () => {
     const user = userEvent.setup();
     setup();

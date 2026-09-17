@@ -159,7 +159,7 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['• There are NO password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.'],
     ['• NEW employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail.'],
     ['• Pick "role" from the dropdown list in the role column.'],
-    ['• "role" changes apply to existing employees too (admin accounts excluded). Reporting-manager works on direct-reports scope; assign managed departments from the user edit page for wider team visibility.'],
+    ['• "role" changes apply to existing employees too (admin accounts excluded). New reporting managers automatically manage their own department; assign further managed departments from the user edit page for wider team visibility.'],
     ['• Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, ...). A filled code is kept if valid and unused.'],
     ['• "isActive" must be TRUE or FALSE.'],
     ['• Dates must use YYYY-MM-DD format.'],

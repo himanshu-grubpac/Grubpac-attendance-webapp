@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
@@ -369,7 +370,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
   const searchNeedle = String(options.search ?? '').trim().toLowerCase();
 
-  const emptySummary = { present: 0, absent: 0, onLeave: 0, total: 0 };
+  const emptySummary = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
   const todayStart = startOfDayIST();
   const todayEnd = endOfDayIST();
@@ -381,43 +382,46 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
   let userIds = [];
   if (canReadAll) {
-    const employees = await User.find({ isActive: true }).select('_id').lean();
-    userIds = employees.map((e) => e._id);
+    // Directory parity: the Employee List directory counts non-admin
+    // accounts of all statuses, so the board shows the same roster (inactive
+    // members render as inactive rows, never as absent) and both totals
+    // reconcile.
+    const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
+    const rosterQuery = adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+    const roster = await User.find(rosterQuery).select('_id').lean();
+    userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Team strip scope: direct reports + other RMs in the same department.
-    const actorDoc = await User.findById(actor._id).select('departmentId').lean();
-    const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
-
-    const query = { reportingManagerId: actor._id, isActive: true };
-    if (actorDeptId) {
-      query.departmentId = new mongoose.Types.ObjectId(actorDeptId);
-    }
-
-    const directReports = await User.find(query).select('_id').lean();
-    userIds = directReports.map((u) => u._id);
-
-    // Also include all other RMs across the organization.
-    const { Role } = await import('../models/Role.js');
-    const rmRole = await Role.findOne({ slug: 'reporting-manager' }).select('_id').lean();
-    if (rmRole) {
-      const siblingRms = await User.find({
-        _id: { $ne: actor._id },
-        roleId: rmRole._id,
-        isActive: true,
-      }).select('_id').lean();
-      for (const rm of siblingRms) {
-        if (!userIds.some((id) => String(id) === String(rm._id))) {
-          userIds.push(rm._id);
-        }
-      }
-    }
+    // Canonical team scope: ACTIVE direct reports + delegate chain only.
+    // Inactive ex-reports are hidden (unlike the admin board, which keeps
+    // inactive rows). Managed departments do NOT widen visibility: an RM sees
+    // precisely the active people under them, matching every other team view.
+    const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id').lean();
+    const delegatedManagers = await User.find({ delegateApproverId: actor._id, isActive: true }).select('_id').lean();
+    const delegatedReports =
+      delegatedManagers.length > 0
+        ? await User.find({
+            reportingManagerId: { $in: delegatedManagers.map((manager) => manager._id) },
+            isActive: true,
+          })
+            .select('_id')
+            .lean()
+        : [];
+    const seen = new Set();
+    userIds = [...directReports, ...delegatedReports]
+      .map((member) => member._id)
+      .filter((id) => {
+        const key = String(id);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
     const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
     let teamIds = [];
     if (managerId) {
-      const q = { reportingManagerId: managerId, isActive: true };
+      const q = { reportingManagerId: managerId };
       if (actorDeptId) q.departmentId = new mongoose.Types.ObjectId(actorDeptId);
       const teamMembers = await User.find(q).select('_id').lean();
       teamIds = teamMembers.map((member) => member._id);
@@ -514,8 +518,10 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   }
 
   // Alphabetical by name so team tables render A–Z (UI shows no manual sort).
-  const users = await User.find({ _id: { $in: userIds }, isActive: true })
-    .select('firstName lastName name email employeeCode departmentId roleId')
+  // Inactive roster members are included (directory parity) and mapped to an
+  // explicit inactive status further below — never counted absent.
+  const users = await User.find({ _id: { $in: userIds } })
+    .select('firstName lastName name email employeeCode departmentId roleId isActive')
     .populate('departmentId', 'name code')
     .populate('roleId', 'name slug')
     .sort({ name: 1, _id: 1 })
@@ -530,7 +536,11 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
     let status = 'not_checked_in';
     let attendanceMode = 'office';
-    if (checkIn) {
+    if (!user.isActive) {
+      // Off-boarded members stay visible for headcount parity but never read
+      // as present/absent/on-leave, even with stale same-day records.
+      status = 'inactive';
+    } else if (checkIn) {
       status = 'checked_in';
       attendanceMode = checkIn.attendanceMode ?? 'office';
     } else if (wfhApproved) {
@@ -578,6 +588,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const statusRank = (member) => {
     if (member.status === 'checked_in' || member.status === 'wfh') return 0;
     if (member.status === 'on_leave') return 1;
+    if (member.status === 'inactive') return 3;
     return 2;
   };
   const sorted = [...teamStatus].sort((a, b) => {
@@ -598,6 +609,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   for (const member of sorted) {
     if (member.status === 'on_leave') summary.onLeave += 1;
     else if (member.status === 'checked_in' || member.status === 'wfh') summary.present += 1;
+    else if (member.status === 'inactive') summary.inactive += 1;
     else summary.absent += 1;
   }
 
@@ -1104,8 +1116,14 @@ export async function getAdminAttendance({
   const skip = (page - 1) * limit;
   const [allRecords, total] = await Promise.all([
     AttendanceRecord.find(query)
-      .populate('userId', 'name email mobile employeeCode department departmentId')
-      .populate({ path: 'userId.departmentId', select: 'name code' })
+      .populate({
+        path: 'userId',
+        select: 'name email mobile employeeCode department departmentId',
+        // Nested-inside form: the chained `path: 'userId.departmentId'`
+        // form silently leaves the ref unpopulated, blanking the
+        // department for ref-only (bulk-uploaded) users.
+        populate: { path: 'departmentId', select: 'name code' },
+      })
       // _id tiebreaker keeps offset pagination stable when timestamps tie.
       .sort({ timestamp: -1, _id: -1 })
       .skip(skip)

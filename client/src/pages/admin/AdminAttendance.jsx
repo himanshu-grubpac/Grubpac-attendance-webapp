@@ -566,6 +566,49 @@ function indexRecordsByUserAndDay(records) {
   return map;
 }
 
+/**
+ * Week-grid totals behind the stat cards. Counts day-cells (one per
+ * employee per working day), not history records — a check-in and its
+ * check-out are a single present cell. `dayKey` narrows to one day;
+ * empty means the whole week.
+ */
+export function summarizeAttendanceCells(rows, weekDays, dayKey) {
+  let present = 0;
+  let absent = 0;
+  let late = 0;
+  let halfDay = 0;
+  let workingSlots = 0;
+
+  for (const row of rows) {
+    row.cells.forEach((cell, cellIndex) => {
+      if (dayKey && weekDays[cellIndex] !== dayKey) return;
+      if (cell.kind === 'weekend' || cell.kind === 'holiday' || cell.kind === 'future') return;
+      if (cell.kind === 'leave') return;
+      if (cell.kind === 'pending') return;
+      workingSlots += 1;
+      if (cell.kind === 'present') {
+        present += 1;
+        if (cell.warningTag) late += 1;
+        if (cell.statusTag === 'HD') halfDay += 1;
+      } else if (cell.kind === 'absent') {
+        absent += 1;
+      }
+    });
+  }
+
+  return { present, absent, late, halfDay, workingSlots };
+}
+
+function formatScopeDayLabel(dayKey) {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  if (!year || !month || !day) return String(dayKey);
+  return new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
 function classifyDayCell({
   dayKey,
   userId,
@@ -1715,28 +1758,17 @@ export default function AdminAttendance() {
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [filterOpen]);
 
+  // Cards follow the history day filter so they always reconcile with the
+  // visible records: a picked day scopes every card to that day, while
+  // "Whole week" keeps the previous week totals untouched.
   const summary = useMemo(() => {
-    let present = 0;
-    let absent = 0;
-    let late = 0;
-    let halfDay = 0;
-    let workingSlots = 0;
-
-    for (const row of filteredGridRows) {
-      for (const cell of row.cells) {
-        if (cell.kind === 'weekend' || cell.kind === 'holiday' || cell.kind === 'future') continue;
-        if (cell.kind === 'leave') continue;
-        if (cell.kind === 'pending') continue;
-        workingSlots += 1;
-        if (cell.kind === 'present') {
-          present += 1;
-          if (cell.warningTag) late += 1;
-          if (cell.statusTag === 'HD') halfDay += 1;
-        } else if (cell.kind === 'absent') {
-          absent += 1;
-        }
-      }
-    }
+    const scopeDay = historyDay || null;
+    const scopeLabel = scopeDay ? formatScopeDayLabel(scopeDay) : null;
+    const { present, absent, late, halfDay, workingSlots } = summarizeAttendanceCells(
+      filteredGridRows,
+      weekDays,
+      scopeDay,
+    );
 
     const activePct = workingSlots > 0 ? Math.round((present / workingSlots) * 100) : 0;
     const absentPct = workingSlots > 0 ? Math.round((absent / workingSlots) * 100) : 0;
@@ -1746,12 +1778,40 @@ export default function AdminAttendance() {
       absent,
       late,
       halfDay,
-      presentHint: workingSlots > 0 ? `${activePct}% active days logged` : 'No working days in range',
-      absentHint: workingSlots > 0 ? `${absentPct}% unplanned absences` : 'No working days in range',
-      lateHint: late > 0 ? 'Check-ins with warnings this week' : 'No late marks this week',
-      halfDayHint: halfDay > 0 ? 'Per office half-day threshold' : 'No half-day marks this week',
+      presentHint:
+        workingSlots > 0
+          ? scopeLabel
+            ? `${present} of ${workingSlots} logged on ${scopeLabel}`
+            : `${activePct}% active days logged`
+          : scopeLabel
+            ? `No working slots on ${scopeLabel}`
+            : 'No working days in range',
+      absentHint:
+        workingSlots > 0
+          ? scopeLabel
+            ? `${absent} of ${workingSlots} absent on ${scopeLabel}`
+            : `${absentPct}% unplanned absences`
+          : scopeLabel
+            ? `No working slots on ${scopeLabel}`
+            : 'No working days in range',
+      lateHint:
+        late > 0
+          ? scopeLabel
+            ? `Check-ins with warnings on ${scopeLabel}`
+            : 'Check-ins with warnings this week'
+          : scopeLabel
+            ? `No late marks on ${scopeLabel}`
+            : 'No late marks this week',
+      halfDayHint:
+        halfDay > 0
+          ? scopeLabel
+            ? `Half-day marks on ${scopeLabel}`
+            : 'Per office half-day threshold'
+          : scopeLabel
+            ? `No half-day marks on ${scopeLabel}`
+            : 'No half-day marks this week',
     };
-  }, [filteredGridRows]);
+  }, [filteredGridRows, weekDays, historyDay]);
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
   const statusOptions = useMemo(
@@ -2612,7 +2672,14 @@ export default function AdminAttendance() {
           </p>
         </section>
 
-        <div className="attendance-summary__grid" aria-label="Weekly attendance summary">
+        <div
+          className="attendance-summary__grid"
+          aria-label={
+            historyDay
+              ? `Attendance summary for ${formatScopeDayLabel(historyDay)}`
+              : 'Weekly attendance summary'
+          }
+        >
           {SUMMARY_CARDS.map((card) => (
             <article key={card.key} className={`attendance-summary card attendance-summary--${card.tone}`}>
               <div className="attendance-summary__head">

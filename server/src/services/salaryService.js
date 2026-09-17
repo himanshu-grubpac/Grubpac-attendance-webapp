@@ -426,6 +426,22 @@ export function computeNextPayrollDateIst(payrollDayOfMonth, referenceDate = new
   return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`;
 }
 
+/**
+ * Next payroll date with a month-end fallback: when no payroll day is
+ * configured, the last day of the current IST month is used so payroll
+ * surfaces always show a date instead of an empty state. Today can never
+ * pass the last day of its own month, so the fallback is always ahead.
+ */
+export function resolveNextPayrollDateIst(payrollDayOfMonth, referenceDate = new Date()) {
+  const configured = computeNextPayrollDateIst(payrollDayOfMonth, referenceDate);
+  if (configured) return { date: configured, isDefault: false };
+  const todayKey = getISTDateInputValue(referenceDate);
+  const [year, month] = todayKey.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthKey = String(month).padStart(2, '0');
+  return { date: `${year}-${monthKey}-${String(lastDay).padStart(2, '0')}`, isDefault: true };
+}
+
 export function computeSalaryTransferStatsFromRows(rows) {
   let pendingCount = 0;
   let paidCount = 0;
@@ -606,9 +622,11 @@ export async function getOrCreateSalarySettings() {
 }
 
 export function salarySettingsToJSON(settings) {
+  const resolved = resolveNextPayrollDateIst(settings.payrollDayOfMonth);
   return {
     payrollDayOfMonth: settings.payrollDayOfMonth ?? null,
-    nextPayrollDate: computeNextPayrollDateIst(settings.payrollDayOfMonth),
+    nextPayrollDate: resolved.date,
+    payrollDayIsDefault: resolved.isDefault,
     updatedAt: settings.updatedAt ?? null,
   };
 }
@@ -649,14 +667,16 @@ export async function buildSalaryMonthMeta(month, summaries) {
   const totalPayroll = withEstimate.reduce((sum, item) => sum + item.payableEstimate, 0);
   const settings = await getOrCreateSalarySettings();
   const transferStats = await getSalaryTransferStats(month);
+  const resolvedPayroll = resolveNextPayrollDateIst(settings.payrollDayOfMonth);
 
   return {
     totalPayroll: roundMoney(totalPayroll),
     employeesWithEstimate: withEstimate.length,
     employeesConfigured: configuredCount,
     pendingTransfers: transferStats.pendingCount,
-    nextPayrollDate: computeNextPayrollDateIst(settings.payrollDayOfMonth),
+    nextPayrollDate: resolvedPayroll.date,
     payrollDayOfMonth: settings.payrollDayOfMonth ?? null,
+    payrollDayIsDefault: resolvedPayroll.isDefault,
   };
 }
 

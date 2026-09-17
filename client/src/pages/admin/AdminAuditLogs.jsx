@@ -443,6 +443,7 @@ export default function AdminAuditLogs() {
         dateTo: dateTo || undefined,
         action: action || undefined,
         module: module || undefined,
+        conflictsOnly: conflictsOnly || undefined,
         format,
       });
       const stamp = new Date().toISOString().slice(0, 10);
@@ -484,7 +485,7 @@ export default function AdminAuditLogs() {
               className="filter-bar__search audit-logs-toolbar__search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search email, user ID, or record ID…"
+              placeholder="Search email, user ID, record ID, action, module, or date…"
               ariaLabel="Search audit logs"
             />
 

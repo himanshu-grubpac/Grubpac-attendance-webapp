@@ -5,6 +5,7 @@ import {
   computeDailyCappedPayableDays,
   computeNextPayrollDateIst,
   computeSalaryTransferStatsFromRows,
+  resolveNextPayrollDateIst,
   unionWfhLeaveTypeId,
 } from './salaryService.js';
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
@@ -80,6 +81,26 @@ test('computeNextPayrollDateIst clamps payroll day to month length', () => {
   assert.equal(computeNextPayrollDateIst(28, reference), '2026-01-28');
   const febReference = parseDateInputAsISTDay('2026-02-01');
   assert.equal(computeNextPayrollDateIst(28, febReference), '2026-02-28');
+});
+
+test('resolveNextPayrollDateIst passes a configured day through as non-default', () => {
+  const reference = parseDateInputAsISTDay('2026-07-10');
+  assert.deepEqual(resolveNextPayrollDateIst(25, reference), { date: '2026-07-25', isDefault: false });
+});
+
+test('resolveNextPayrollDateIst falls back to month-end when unconfigured', () => {
+  assert.deepEqual(
+    resolveNextPayrollDateIst(null, parseDateInputAsISTDay('2026-09-16')),
+    { date: '2026-09-30', isDefault: true },
+  );
+  assert.deepEqual(
+    resolveNextPayrollDateIst(undefined, parseDateInputAsISTDay('2026-02-01')),
+    { date: '2026-02-28', isDefault: true },
+  );
+  assert.deepEqual(
+    resolveNextPayrollDateIst(null, parseDateInputAsISTDay('2026-12-20')),
+    { date: '2026-12-31', isDefault: true },
+  );
 });
 
 test('unionWfhLeaveTypeId always includes WFH leave type in payable set', () => {

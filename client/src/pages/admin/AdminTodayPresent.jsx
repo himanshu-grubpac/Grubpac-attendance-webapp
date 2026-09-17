@@ -20,7 +20,7 @@ const TODAY_PRESENT_COLUMNS = [
 ];
 
 const TODAY_PRESENT_DEFAULT_COLUMNS = ['name', 'department', 'role', 'status'];
-const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, total: 0 };
+const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
 function isPresent(member) {
   return member.status === 'checked_in' || member.status === 'wfh';
@@ -28,6 +28,10 @@ function isPresent(member) {
 
 function isOnLeave(member) {
   return member.status === 'on_leave';
+}
+
+function isInactive(member) {
+  return member.status === 'inactive';
 }
 
 export default function AdminTodayPresent() {
@@ -154,6 +158,10 @@ export default function AdminTodayPresent() {
           <span className="today-present-summary__value">{summary.onLeave}</span>
           <span className="today-present-summary__label">On Leave</span>
         </div>
+        <div className="today-present-summary__card today-present-summary__card--inactive">
+          <span className="today-present-summary__value">{summary.inactive ?? 0}</span>
+          <span className="today-present-summary__label">Inactive</span>
+        </div>
         <div className="today-present-summary__card">
           <span className="today-present-summary__value">{summary.total}</span>
           <span className="today-present-summary__label">Total</span>
@@ -221,6 +229,7 @@ export default function AdminTodayPresent() {
                     teamStatus.map((member, index) => {
                       const present = isPresent(member);
                       const onLeave = !present && isOnLeave(member);
+                      const inactive = !present && !onLeave && isInactive(member);
                       // Note: kept as if/else (not nested ternary) — oxlint's
                       // parser rejects nested ternaries with a false error.
                       let badgeTone = 'absent';
@@ -231,6 +240,9 @@ export default function AdminTodayPresent() {
                       } else if (onLeave) {
                         badgeTone = 'leave';
                         badgeLabel = 'On Leave';
+                      } else if (inactive) {
+                        badgeTone = 'inactive';
+                        badgeLabel = 'Inactive';
                       }
                       // Fall back to a positional key: rows without a userId must
                       // never share a key (or mergeAppendUnique would drop them).
