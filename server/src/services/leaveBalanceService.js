@@ -55,26 +55,16 @@ export function roundToHalfDay(value) {
   return Math.round((Number(value) ?? 0) * 2) / 2;
 }
 
-function isLeapYear(year) {
-  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-}
-
-function inclusiveDaySpan(fromKey, toKey) {
-  const spanMs = Date.parse(`${toKey}T00:00:00Z`) - Date.parse(`${fromKey}T00:00:00Z`);
-  return Math.floor(spanMs / 86_400_000) + 1;
-}
-
 /**
- * Daily-slice joining-date proration, applied to EVERY leave type for EVERY
- * employee: quota × (calendar days from joining to Dec 31 ÷ days in year),
- * rounded to the nearest half day.
- * - No joining date (or joined on/before Jan 1) → full quota, granted upfront.
+ * Monthly-eligible joining-date proration, applied to EVERY leave type for
+ * EVERY employee: (annualQuota / 12) × eligibleMonths, where eligibleMonths
+ * counts the joining month through December inclusive.
+ * - No joining date (or joined on/before Jan 1) → full quota.
  * - Joined after Dec 31 → 0.
- * - NOTE: accrualPerMonth is accepted for signature compatibility but no
- *   longer gates the math — entitlements vest upfront for the whole year
- *   (pro-rated by joining date). The field stays stored on the policy for
- *   reference. A monthly cap made quotas unreachable (e.g. 30/mo can never
- *   reach a 365 quota: 12 × 30 = 360).
+ * - NOTE: accrualPerMonth / asOfDate are accepted for signature compatibility
+ *   but no longer gate the math — entitlements vest upfront for the whole year
+ *   (pro-rated by joining month). A monthly cap made quotas unreachable
+ *   (e.g. 30/mo can never reach a 365 quota: 12 × 30 = 360).
  */
 export function computeProratedEntitled({
   annualQuota,
@@ -94,9 +84,10 @@ export function computeProratedEntitled({
       return 0;
     }
     if (joiningDateKey > yearStartKey) {
-      const daysInYear = isLeapYear(year) ? 366 : 365;
-      const remaining = inclusiveDaySpan(joiningDateKey, yearEndKey);
-      proratedQuota = roundToHalfDay((quota * remaining) / daysInYear);
+      const joinDate = parseDateInputAsISTDay(joiningDateKey);
+      const joinMonth = getISTMonth(joinDate);
+      const eligibleMonths = 12 - joinMonth + 1;
+      proratedQuota = Math.min(quota, Math.ceil((quota * eligibleMonths) / 12));
     }
   }
   return proratedQuota;
@@ -333,6 +324,9 @@ export async function recalculateAllBalancesForPolicy(policy) {
     );
     const existing = existingByUser.get(userId.toString());
     if (existing) {
+      if (existing.entitledLocked) {
+        continue;
+      }
       updates.push({
         updateOne: {
           filter: { _id: existing._id },
