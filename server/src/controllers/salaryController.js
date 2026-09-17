@@ -336,7 +336,7 @@ export async function exportLopSingleHandler(req, res) {
     subtitle: `LOP Deduction Log — ${summary.userName}${codeSuffix} — ${summary.month} as of ${summary.asOfDate}`,
   });
 
-  auditLog('lop_exported', {
+  auditRequest(req, 'lop_exported', {
     adminId: req.user._id.toString(),
     employeeId: userId,
     month,
@@ -366,7 +366,7 @@ export async function exportLopBulkHandler(req, res) {
     subtitle: `LOP Bulk Export — ${month} as of ${asOfLabel} — ${exportRows.length} deduction row${exportRows.length === 1 ? '' : 's'}`,
   });
 
-  auditLog('lop_bulk_exported', {
+  auditRequest(req, 'lop_bulk_exported', {
     adminId: req.user._id.toString(),
     month,
     employeeCount: summaries.length,
