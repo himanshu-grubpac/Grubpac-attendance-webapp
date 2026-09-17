@@ -153,6 +153,9 @@ export async function resetPassword(body, auditContext = {}) {
   user.passwordHash = await bcrypt.hash(newPassword, 12);
   // A password reset revokes the alternative PIN credential too — the PIN is a
   // stand-in for the password, so it must not outlive a reset.
+  // NOTE: no forced-change flag — the employee chose this password themselves
+  // via a verified email link, so first-login gating applies to new accounts
+  // only, never to existing ones.
   user.pin4Hash = null;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();

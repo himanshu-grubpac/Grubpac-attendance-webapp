@@ -193,6 +193,9 @@ async function upsertSampleEmployee(roleMap, departmentMap) {
       departmentId: devDepartment?._id ?? null,
       department: devDepartment?.name ?? undefined,
       passwordHash: await bcrypt.hash(samplePassword, 12),
+      // Seeded demo accounts gate on first login like any new employee.
+      mustChangePassword: true,
+      forcePasswordChange: true,
       isActive: true,
     });
     console.log(
@@ -262,6 +265,9 @@ async function upsertTeamLead(roleMap, departmentMap) {
       department: devDepartment?.name ?? undefined,
       managedDepartmentIds: devDepartment?._id ? [devDepartment._id] : [],
       passwordHash: await bcrypt.hash(password, 12),
+      // Seeded demo accounts gate on first login like any new employee.
+      mustChangePassword: true,
+      forcePasswordChange: true,
       isActive: true,
     });
     console.log(`Seeded team lead: ${email} / ${password}`);
@@ -309,6 +315,9 @@ async function upsertTeamMembers(teamLead, roleMap, departmentMap) {
         department: devDepartment?.name ?? undefined,
         reportingManagerId: teamLead._id,
         passwordHash: await bcrypt.hash('Employee@12345', 12),
+        // Seeded demo accounts gate on first login like any new employee.
+        mustChangePassword: true,
+        forcePasswordChange: true,
         isActive: true,
       });
       console.log(`Seeded team member: ${seed.email}`);
@@ -919,6 +928,9 @@ export async function seedDatabase({ wipe = false } = {}) {
       joiningDate: new Date(),
       passwordHash: await bcrypt.hash(env.adminPassword, 12),
       pin4Hash: await bcrypt.hash(env.adminPin, 12),
+      // Fresh admin gates on first login like any new account.
+      mustChangePassword: true,
+      forcePasswordChange: true,
       isActive: true,
     });
     console.log(`Seeded admin: ${adminEmail}`);

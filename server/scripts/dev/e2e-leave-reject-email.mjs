@@ -5,7 +5,7 @@ import { User } from '../../src/models/User.js';
 import { LeaveRequest } from '../../src/models/LeaveRequest.js';
 import { Notification } from '../../src/models/Notification.js';
 import { decideLeaveRequest, runLeaveDecisionNotifyJob } from '../../src/services/leaveService.js';
-import { renderLeaveApplicantEmail } from '../../src/services/emailService.js';
+import { renderLeaveApplicantEmail, testEmailOutbox, clearTestEmailOutbox } from '../../src/services/emailService.js';
 import bcrypt from 'bcryptjs';
 
 if (!process.env.USE_MEMORY_DB) process.env.USE_MEMORY_DB = 'true';
@@ -60,6 +60,9 @@ try {
   const consoleOutput = [];
   const origLog = console.log;
   console.log = (...args) => { consoleOutput.push(args.join(' ')); origLog(...args); };
+  // Under NODE_ENV=test (this harness) sendEmail writes to the in-memory
+  // outbox instead of logging `email:sent` — assert on the outbox directly.
+  clearTestEmailOutbox();
 
   let result;
   let error;
@@ -94,8 +97,9 @@ try {
   check('notifyAfter is null', savedRequest.notifyAfter === null);
 
   const emailLogged = consoleOutput.some((line) => line.includes('email:sent') && line.includes(employee.email));
+  const emailOutboxed = testEmailOutbox.some((mail) => mail.to === employee.email && mail.tag === 'leave-status');
   console.log = origLog;
-  check('rejection email sent', emailLogged);
+  check('rejection email sent', emailLogged || emailOutboxed);
 
   const notif = await Notification.findOne({ userId: employee._id, type: 'leave.rejected' }).sort({ createdAt: -1 }).lean();
   check('notification body contains comment', notif && notif.body.includes('Not enough coverage'));

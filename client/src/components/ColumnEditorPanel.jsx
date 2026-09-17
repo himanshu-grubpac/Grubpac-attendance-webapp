@@ -9,21 +9,25 @@ export default function ColumnEditorPanel({
   onToggle,
   loading = false,
   onClose,
+  onCancel,
 }) {
+  // Backdrop / ✕ / Escape discard the draft; only Done applies it.
+  // Callers that omit onCancel keep the legacy close-only behavior.
+  const handleCancel = onCancel ?? onClose;
   if (!open) return null;
   return (
     <>
       <div
         className="slide-panel-backdrop"
-        onClick={onClose}
-        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+        onClick={handleCancel}
+        onKeyDown={(e) => e.key === 'Escape' && handleCancel()}
       />
       <div
         className="slide-panel"
         role="dialog"
         aria-label="Edit columns"
         style={{ width: '20rem' }}
-        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+        onKeyDown={(e) => e.key === 'Escape' && handleCancel()}
       >
         <div className="slide-panel__header">
           <div className="slide-panel__titles">
@@ -35,7 +39,7 @@ export default function ColumnEditorPanel({
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            onClick={onClose}
+            onClick={handleCancel}
             aria-label="Close"
           >
             ✕

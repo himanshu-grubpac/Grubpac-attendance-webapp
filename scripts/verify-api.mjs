@@ -638,6 +638,12 @@ async function main() {
   assert(addCheckout.data.record?.checkOutTime === '18:00', 'Admin-added checkout time is persisted');
   assert(addCheckout.data.record?.checkOutRecordId, 'Admin-added checkout record id is returned');
 
+  // Skip seeded holidays too: the seed plants a demo holiday on a recent
+  // working day, and the zero-working-days guard (correctly) rejects it.
+  const upsertHolidayList = await request('/leave/holidays', { method: 'GET' });
+  const upsertHolidayKeys = new Set(
+    (upsertHolidayList.data.holidays ?? []).map((h) => String(h.dateInput ?? h.date ?? '').slice(0, 10)),
+  );
   const pastWorkingDayKeys = [];
   for (let offset = 1; offset <= 14; offset += 1) {
     const probe = new Date(Date.now() - offset * 86_400_000);
@@ -646,7 +652,9 @@ async function main() {
       weekday: 'short',
     }).format(probe);
     if (weekday === 'Sat' || weekday === 'Sun') continue;
-    pastWorkingDayKeys.push(getISTDateInputValue(probe));
+    const key = getISTDateInputValue(probe);
+    if (upsertHolidayKeys.has(key)) continue;
+    pastWorkingDayKeys.push(key);
   }
   assert(pastWorkingDayKeys.length >= 1, 'Past working day available for admin leave upsert test');
   const leaveTypesList = await request('/leave/types', { method: 'GET' });

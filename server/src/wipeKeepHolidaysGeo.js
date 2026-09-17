@@ -166,6 +166,9 @@ async function seedSingleAdmin(roleMap) {
     designation: 'System Administrator',
     joiningDate: new Date(),
     passwordHash,
+    // Fresh admin gates on first login like any new account.
+    mustChangePassword: true,
+    forcePasswordChange: true,
     isActive: true,
   });
 

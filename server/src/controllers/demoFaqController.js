@@ -4,7 +4,7 @@ import {
   createDemoFaqSchema,
   updateDemoFaqSchema,
 } from '../../../shared/validation/demoFaq.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditRequest } from '../utils/auditLog.js';
 
 /**
  * Resolve the caller's role slug from the populated roleId document.
@@ -54,7 +54,7 @@ export async function createItem(req, res) {
     createdBy: req.user._id,
   });
 
-  auditLog('demo_faq_created', {
+  auditRequest(req, 'demo_faq_created', {
     adminId: req.user._id.toString(),
     itemId: item._id.toString(),
     type: item.type,
@@ -103,7 +103,7 @@ export async function updateItem(req, res) {
 
   await item.save();
 
-  auditLog('demo_faq_updated', {
+  auditRequest(req, 'demo_faq_updated', {
     adminId: req.user._id.toString(),
     itemId: item._id.toString(),
     previous,
@@ -140,7 +140,7 @@ export async function deleteItem(req, res) {
 
   await item.deleteOne();
 
-  auditLog('demo_faq_deleted', {
+  auditRequest(req, 'demo_faq_deleted', {
     adminId: req.user._id.toString(),
     itemId: id,
     type: item.type,

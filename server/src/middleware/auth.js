@@ -67,6 +67,10 @@ export async function authenticate(req, res, next) {
       return res.status(401).json({ message: 'Invalid or inactive account.' });
     }
 
+    if (user.endingDate && new Date(user.endingDate) < new Date()) {
+      return res.status(401).json({ message: 'Your employment has ended. Contact your administrator.' });
+    }
+
     const tokenVersion = payload.tv ?? 0;
     if (tokenVersion !== (user.tokenVersion ?? 0)) {
       return res.status(401).json({ message: 'Session has been revoked.' });

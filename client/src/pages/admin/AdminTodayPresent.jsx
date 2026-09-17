@@ -5,6 +5,7 @@ import { useTableColumns } from '../../hooks/useTableColumns.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
+import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 
 const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
 const TODAY_PRESENT_PAGE_SIZE = 25;
@@ -19,7 +20,7 @@ const TODAY_PRESENT_COLUMNS = [
 ];
 
 const TODAY_PRESENT_DEFAULT_COLUMNS = ['name', 'department', 'role', 'status'];
-const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, total: 0 };
+const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
 function isPresent(member) {
   return member.status === 'checked_in' || member.status === 'wfh';
@@ -27,6 +28,10 @@ function isPresent(member) {
 
 function isOnLeave(member) {
   return member.status === 'on_leave';
+}
+
+function isInactive(member) {
+  return member.status === 'inactive';
 }
 
 export default function AdminTodayPresent() {
@@ -41,6 +46,7 @@ export default function AdminTodayPresent() {
   const [query, setQuery] = useState('');
   const debouncedSearch = useDebouncedValue(query, 350);
   const loadMoreRef = useRef(null);
+  const tableWrapRef = useRef(null);
   const requestKeyRef = useRef('');
   const skipDebouncedSearchRef = useRef(true);
   const {
@@ -48,9 +54,12 @@ export default function AdminTodayPresent() {
     columnsLoading,
     columnsError,
     editorOpen,
-    setEditorOpen,
+    openColumnEditor,
+    cancelColumnEdit,
     isColumnVisible,
-    handleColumnToggle,
+    isDraftColumnVisible,
+    handleDraftColumnToggle,
+    applyColumnPreferences,
   } = useTableColumns({
     tableKey: TODAY_PRESENT_TABLE_KEY,
     allColumns: TODAY_PRESENT_COLUMNS,
@@ -149,6 +158,10 @@ export default function AdminTodayPresent() {
           <span className="today-present-summary__value">{summary.onLeave}</span>
           <span className="today-present-summary__label">On Leave</span>
         </div>
+        <div className="today-present-summary__card today-present-summary__card--inactive">
+          <span className="today-present-summary__value">{summary.inactive ?? 0}</span>
+          <span className="today-present-summary__label">Inactive</span>
+        </div>
         <div className="today-present-summary__card">
           <span className="today-present-summary__value">{summary.total}</span>
           <span className="today-present-summary__label">Total</span>
@@ -176,7 +189,7 @@ export default function AdminTodayPresent() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => setEditorOpen(true)}
+              onClick={openColumnEditor}
             >
               Edit columns
             </button>
@@ -194,7 +207,7 @@ export default function AdminTodayPresent() {
           </div>
         ) : (
           <>
-            <div className="table-wrap table-wrap--responsive today-present-table-wrap">
+            <div ref={tableWrapRef} className="table-wrap table-wrap--responsive today-present-table-wrap">
               <table className="table data-table today-present-table">
                 <thead>
                   <tr>
@@ -216,6 +229,7 @@ export default function AdminTodayPresent() {
                     teamStatus.map((member, index) => {
                       const present = isPresent(member);
                       const onLeave = !present && isOnLeave(member);
+                      const inactive = !present && !onLeave && isInactive(member);
                       // Note: kept as if/else (not nested ternary) — oxlint's
                       // parser rejects nested ternaries with a false error.
                       let badgeTone = 'absent';
@@ -226,6 +240,9 @@ export default function AdminTodayPresent() {
                       } else if (onLeave) {
                         badgeTone = 'leave';
                         badgeLabel = 'On Leave';
+                      } else if (inactive) {
+                        badgeTone = 'inactive';
+                        badgeLabel = 'Inactive';
                       }
                       // Fall back to a positional key: rows without a userId must
                       // never share a key (or mergeAppendUnique would drop them).
@@ -266,6 +283,7 @@ export default function AdminTodayPresent() {
                 </tbody>
               </table>
             </div>
+            <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />
 
             {pagination && teamStatus.length > 0 ? (
               <p className="employees-scroll-hint muted small" role="status">
@@ -281,10 +299,11 @@ export default function AdminTodayPresent() {
       <ColumnEditorPanel
         open={editorOpen}
         columns={TODAY_PRESENT_COLUMNS}
-        isColumnVisible={isColumnVisible}
-        onToggle={handleColumnToggle}
+        isColumnVisible={isDraftColumnVisible}
+        onToggle={handleDraftColumnToggle}
         loading={columnsLoading}
-        onClose={() => setEditorOpen(false)}
+        onClose={applyColumnPreferences}
+        onCancel={cancelColumnEdit}
       />
     </div>
   );

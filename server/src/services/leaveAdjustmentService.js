@@ -4,13 +4,17 @@ import {
   DEFAULT_LEAVE_ADJUSTMENT_REASON,
   leaveAdjustmentBatchSchema,
   leaveAdjustmentGridQuerySchema,
+  leaveAdjustmentHistoryQuerySchema,
 } from '../../../shared/validation/leaveAdjustment.js';
+import { getISTYear } from '../utils/istDate.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
+import { Department } from '../models/Department.js';
 import { LeaveType } from '../models/LeaveType.js';
+import { LeavePolicy } from '../models/LeavePolicy.js';
 import { LeaveBalance, LEAVE_BALANCE_POPULATE } from '../models/LeaveBalance.js';
-import { adjustBalance, resolvePolicyForLeaveType } from './leaveBalanceService.js';
+import { adjustBalance, ensureBalancesForUser, getPolicyMapForYear, resolvePolicyForLeaveType } from './leaveBalanceService.js';
 import {
   applyTeamScopeToEmployeeQuery,
   isUserInTeamScope,
@@ -27,7 +31,7 @@ async function buildEmployeeDirectoryQuery() {
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-function applyEmployeeFilters(query, { search, departmentId }) {
+async function applyEmployeeFilters(query, { search, departmentId }) {
   query.isActive = true;
 
   if (departmentId) {
@@ -36,10 +40,17 @@ function applyEmployeeFilters(query, { search, departmentId }) {
 
   if (search) {
     const regex = new RegExp(escapeRegex(search), 'i');
+    // Resolve department names via the Department master so renames keep
+    // working; legacy text field kept as a fallback for old rows.
+    const { Department } = await import('../models/Department.js');
+    const matchingDepartments = await Department.find({ name: regex }).select('_id').lean();
     query.$or = [
       { name: regex },
       { email: regex },
       { employeeCode: regex },
+      ...(matchingDepartments.length > 0
+        ? [{ departmentId: { $in: matchingDepartments.map((dept) => dept._id) } }]
+        : []),
       { department: regex },
     ];
   }
@@ -48,7 +59,7 @@ function applyEmployeeFilters(query, { search, departmentId }) {
 }
 
 async function buildScopedEmployeeQuery(actor, permissions, filters) {
-  let query = applyEmployeeFilters(await buildEmployeeDirectoryQuery(), filters);
+  let query = await applyEmployeeFilters(await buildEmployeeDirectoryQuery(), filters);
   query = await applyTeamScopeToEmployeeQuery(
     query,
     actor,
@@ -72,12 +83,26 @@ async function assertEmployeeInScope(actor, permissions, userId) {
   }
 }
 
+/**
+ * When the requested year has no active policies, balances resolve against
+ * the current year's policies (see resolvePoliciesForYear). Callers surface
+ * this so the UI can say so instead of silently mixing years.
+ */
+async function resolvePolicyFallbackFlag(year) {
+  const hasOwnPolicies = await LeavePolicy.exists({ year, isActive: true });
+  if (hasOwnPolicies) return null;
+  const currentYear = getISTYear();
+  if (year === currentYear) return null;
+  return { requestedYear: year, resolvedYear: currentYear };
+}
+
 export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
   const parsed = leaveAdjustmentGridQuerySchema.parse(rawQuery);
   const query = await buildScopedEmployeeQuery(actor, permissions, {
     search: parsed.search,
     departmentId: parsed.departmentId,
   });
+  const policyFallback = await resolvePolicyFallbackFlag(parsed.year);
 
   const skip = (parsed.page - 1) * parsed.limit;
   const [employees, total, leaveTypes] = await Promise.all([
@@ -91,6 +116,15 @@ export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
   ]);
 
   const userIds = employees.map((employee) => employee._id);
+  // Materialize pro-rated balances for page employees so the grid always
+  // shows live current entitlements (new joiners included), not zeros.
+  for (const employee of employees) {
+    try {
+      await ensureBalancesForUser(employee._id, parsed.year);
+    } catch {
+      // A single user's failure must not break the whole grid page.
+    }
+  }
   const balances =
     userIds.length > 0
       ? await LeaveBalance.find({
@@ -122,6 +156,11 @@ export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
         carried: balance?.carried ?? 0,
         entitled: balance?.entitled ?? 0,
         used: balance?.used ?? 0,
+        // Extra components of the available formula so the UI can show the
+        // full breakdown (additive — existing clients ignore unknown fields).
+        pending: balance?.pending ?? 0,
+        compOffEarned: balance?.compOffEarned ?? 0,
+        encashed: balance?.encashed ?? 0,
         available: balance?.available ?? 0,
       };
     }
@@ -131,18 +170,24 @@ export async function getLeaveAdjustmentGrid(actor, permissions, rawQuery) {
       name: employee.name,
       employeeCode: employee.employeeCode ?? null,
       departmentId: employee.departmentId?._id?.toString() ?? employee.departmentId?.toString() ?? null,
-      departmentName: employee.departmentId?.name ?? employee.department ?? null,
+      departmentName: employee.departmentId?.name ?? null,
       carriedByLeaveType,
     };
   });
 
+  const policyMap = await getPolicyMapForYear(parsed.year);
   return {
     year: parsed.year,
-    leaveTypes: leaveTypes.map((leaveType) => ({
-      id: leaveType._id.toString(),
-      code: leaveType.code,
-      name: leaveType.name,
-    })),
+    policyFallback,
+    leaveTypes: leaveTypes.map((leaveType) => {
+      const typeId = leaveType._id.toString();
+      return {
+        id: typeId,
+        code: leaveType.code,
+        name: leaveType.name,
+        annualQuota: policyMap.get(typeId)?.annualQuota ?? null,
+      };
+    }),
     rows,
     pagination: {
       page: parsed.page,
@@ -208,5 +253,72 @@ export async function batchAdjustLeaveCarried(actor, permissions, rawBody) {
       error: parsed.adjustments.length - successCount,
     },
     results,
+  };
+}
+
+/**
+ * Per-employee balance history for the carry-forward drawer: full per-type
+ * snapshots for exactly the requested balance year. The year is materialized
+ * via ensureBalancesForUser (same as every other balance read path) so it
+ * always shows live numbers; a type with no row (no policy for it that year)
+ * is flagged via hasRecord rather than zero-filled.
+ */
+export async function getLeaveAdjustmentHistory(actor, permissions, userId, rawQuery = {}) {
+  const parsed = leaveAdjustmentHistoryQuerySchema.parse(rawQuery ?? {});
+  await assertEmployeeInScope(actor, permissions, userId);
+
+  const employee = await User.findById(userId).populate(USER_POPULATE_FIELDS);
+  if (!employee) {
+    throwError('Employee not found.', 404);
+  }
+
+  const endYear = parsed.year ?? getISTYear();
+  const years = [endYear];
+  const policyFallback = await resolvePolicyFallbackFlag(endYear);
+  await ensureBalancesForUser(employee._id, endYear);
+  const leaveTypes = await LeaveType.find({ isActive: true }).sort({ code: 1 });
+  const balances = await LeaveBalance.find({
+    userId: employee._id,
+    year: { $in: years },
+  }).populate(LEAVE_BALANCE_POPULATE);
+
+  const snapshotByYearType = new Map();
+  for (const balance of balances) {
+    const json = balance.toSafeJSON();
+    const typeId = json.leaveTypeId;
+    if (!typeId) continue;
+    snapshotByYearType.set(`${balance.year}|${typeId}`, json);
+  }
+
+  const contractStart = employee.salaryEffectiveFrom ?? employee.joiningDate ?? null;
+  return {
+    policyFallback,
+    user: {
+      id: employee._id.toString(),
+      name: employee.name,
+      employeeCode: employee.employeeCode ?? null,
+      joiningDate: employee.joiningDate ? new Date(employee.joiningDate).toISOString() : null,
+      contractStartDate: contractStart ? new Date(contractStart).toISOString() : null,
+    },
+    years: years.map((year) => ({
+      year,
+      balances: leaveTypes.map((leaveType) => {
+        const typeId = leaveType._id.toString();
+        const snapshot = snapshotByYearType.get(`${year}|${typeId}`);
+        return {
+          leaveTypeId: typeId,
+          leaveTypeCode: leaveType.code,
+          leaveTypeName: leaveType.name,
+          hasRecord: snapshot != null,
+          entitled: snapshot?.entitled ?? 0,
+          carried: snapshot?.carried ?? 0,
+          used: snapshot?.used ?? 0,
+          pending: snapshot?.pending ?? 0,
+          compOffEarned: snapshot?.compOffEarned ?? 0,
+          encashed: snapshot?.encashed ?? 0,
+          available: snapshot?.available ?? 0,
+        };
+      }),
+    })),
   };
 }

@@ -56,6 +56,8 @@ export default function ChangePassword() {
     try {
       const result = await authApi.changePassword(validation.data);
       setPasswordForm(emptyPasswordForm);
+      // Refresh so a cleared mustChangePassword flag lifts the forced-change gate.
+      await refreshUser();
       showSuccess(result.message || 'Password changed successfully.');
     } catch (err) {
       setPasswordError(getErrorMessage(err));
@@ -135,6 +137,13 @@ export default function ChangePassword() {
 
   return (
     <div className="page page--form">
+      {user?.mustChangePassword ? (
+        <div className="page-alerts">
+          <div className="alert alert--warning">
+            You are signing in with a temporary password. Please set a new password to continue.
+          </div>
+        </div>
+      ) : null}
       <div className="card card--form">
         <p className="card__section-title">Update password</p>
         <form className="form-grid" onSubmit={handlePasswordSubmit}>

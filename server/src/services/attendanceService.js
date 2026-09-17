@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
@@ -39,6 +40,8 @@ import {
 import { buildAdminSyntheticGeoFields } from '../utils/geoFields.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
+import { WeekAttendanceConfirmation } from '../models/WeekAttendanceConfirmation.js';
+import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { createNotification } from './notificationService.js';
 import { materializeRecurringHolidaysForYear } from './recurringHolidayService.js';
 
@@ -48,6 +51,32 @@ function throwError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   throw error;
+}
+
+/** IST Monday (YYYY-MM-DD) of the week containing a YYYY-MM-DD day key. */
+function mondayOfDayKey(dayKey) {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+/**
+ * Confirmed weeks are read-only: edits require Undo Confirmation first.
+ * Throws 409 when a WeekAttendanceConfirmation covers (userId, dayKey).
+ */
+async function assertWeekNotConfirmed(userId, dayKey) {
+  const weekStart = mondayOfDayKey(dayKey);
+  const confirmation = await WeekAttendanceConfirmation.findOne({ userId, weekStart })
+    .select('_id')
+    .lean();
+  if (confirmation) {
+    throwError(
+      'This week is confirmed. Undo the confirmation before editing attendance.',
+      409,
+    );
+  }
 }
 
 async function getTodayRecords(userId, session = null) {
@@ -192,15 +221,22 @@ export function isLeaveDecisionAwaitingFinalization(decisionUndoExpiresAt, now =
  * Only meaningful on weekends/holidays (the comp-off gate's domain) — on
  * working days an approved comp-off never changes check-in behavior.
  */
-async function hasApprovedCompOffForToday(userId, office, istToday, session = null) {
+/**
+ * Weekend/holiday identity for an IST day key, mirroring the comp-off
+ * check-in gate exactly (a holiday falling on a weekend reports weekend).
+ */
+async function getTodayNonWorkingInfo(office, istToday) {
   const ref = parseDateInputAsISTDay(istToday) ?? new Date();
-  if (!isWeekendIST(ref, office.weekendDays)) {
-    await materializeRecurringHolidaysForYear(getISTYear(ref), userId);
-  }
-  const nonWorkingDay =
-    isWeekendIST(ref, office.weekendDays) ||
-    (await getHolidayMapForYear(getISTYear(ref))).has(istToday);
-  if (!nonWorkingDay) return false;
+  const isWeekend = isWeekendIST(ref, office.weekendDays);
+  const holiday = isWeekend
+    ? null
+    : (await getHolidayMapForYear(getISTYear(ref))).get(istToday) ?? null;
+  return { isWeekend, isHoliday: Boolean(holiday), holidayName: holiday?.name ?? null };
+}
+
+async function hasApprovedCompOffForToday(userId, office, istToday, session = null, dayInfo = null) {
+  const info = dayInfo ?? (await getTodayNonWorkingInfo(office, istToday));
+  if (!info.isWeekend && !info.isHoliday) return false;
   const compOff = await findCompOffForIstDate(userId, istToday, ['approved', 'worked'], session);
   return Boolean(compOff);
 }
@@ -279,7 +315,8 @@ export async function getTodayStatus(userId) {
   const wfhPendingToday = wfhRequestToday?.status === 'pending';
   const wfhApprovalPendingToday =
     wfhApprovedToday && isLeaveDecisionAwaitingFinalization(wfhRequestToday?.notifyAfter);
-  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday);
+  const dayInfo = await getTodayNonWorkingInfo(office, istToday);
+  const compOffApprovedToday = await hasApprovedCompOffForToday(userId, office, istToday, null, dayInfo);
   const status = buildTodayStatus(
     records,
     office,
@@ -290,6 +327,9 @@ export async function getTodayStatus(userId) {
     wfhApprovalPendingToday,
     compOffApprovedToday,
   );
+  status.isWeekend = dayInfo.isWeekend;
+  status.isHoliday = dayInfo.isHoliday;
+  status.holidayName = dayInfo.holidayName;
   status.undo = await getUndoAvailability(userId);
   return status;
 }
@@ -330,7 +370,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
   const searchNeedle = String(options.search ?? '').trim().toLowerCase();
 
-  const emptySummary = { present: 0, absent: 0, onLeave: 0, total: 0 };
+  const emptySummary = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
   const todayStart = startOfDayIST();
   const todayEnd = endOfDayIST();
@@ -342,43 +382,46 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
   let userIds = [];
   if (canReadAll) {
-    const employees = await User.find({ isActive: true }).select('_id').lean();
-    userIds = employees.map((e) => e._id);
+    // Directory parity: the Employee List directory counts non-admin
+    // accounts of all statuses, so the board shows the same roster (inactive
+    // members render as inactive rows, never as absent) and both totals
+    // reconcile.
+    const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
+    const rosterQuery = adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+    const roster = await User.find(rosterQuery).select('_id').lean();
+    userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Team strip scope: direct reports + other RMs in the same department.
-    const actorDoc = await User.findById(actor._id).select('departmentId').lean();
-    const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
-
-    const query = { reportingManagerId: actor._id, isActive: true };
-    if (actorDeptId) {
-      query.departmentId = new mongoose.Types.ObjectId(actorDeptId);
-    }
-
-    const directReports = await User.find(query).select('_id').lean();
-    userIds = directReports.map((u) => u._id);
-
-    // Also include all other RMs across the organization.
-    const { Role } = await import('../models/Role.js');
-    const rmRole = await Role.findOne({ slug: 'reporting-manager' }).select('_id').lean();
-    if (rmRole) {
-      const siblingRms = await User.find({
-        _id: { $ne: actor._id },
-        roleId: rmRole._id,
-        isActive: true,
-      }).select('_id').lean();
-      for (const rm of siblingRms) {
-        if (!userIds.some((id) => String(id) === String(rm._id))) {
-          userIds.push(rm._id);
-        }
-      }
-    }
+    // Canonical team scope: ACTIVE direct reports + delegate chain only.
+    // Inactive ex-reports are hidden (unlike the admin board, which keeps
+    // inactive rows). Managed departments do NOT widen visibility: an RM sees
+    // precisely the active people under them, matching every other team view.
+    const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id').lean();
+    const delegatedManagers = await User.find({ delegateApproverId: actor._id, isActive: true }).select('_id').lean();
+    const delegatedReports =
+      delegatedManagers.length > 0
+        ? await User.find({
+            reportingManagerId: { $in: delegatedManagers.map((manager) => manager._id) },
+            isActive: true,
+          })
+            .select('_id')
+            .lean()
+        : [];
+    const seen = new Set();
+    userIds = [...directReports, ...delegatedReports]
+      .map((member) => member._id)
+      .filter((id) => {
+        const key = String(id);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
     const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
     let teamIds = [];
     if (managerId) {
-      const q = { reportingManagerId: managerId, isActive: true };
+      const q = { reportingManagerId: managerId };
       if (actorDeptId) q.departmentId = new mongoose.Types.ObjectId(actorDeptId);
       const teamMembers = await User.find(q).select('_id').lean();
       teamIds = teamMembers.map((member) => member._id);
@@ -475,8 +518,10 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   }
 
   // Alphabetical by name so team tables render A–Z (UI shows no manual sort).
-  const users = await User.find({ _id: { $in: userIds }, isActive: true })
-    .select('firstName lastName name email employeeCode departmentId roleId')
+  // Inactive roster members are included (directory parity) and mapped to an
+  // explicit inactive status further below — never counted absent.
+  const users = await User.find({ _id: { $in: userIds } })
+    .select('firstName lastName name email employeeCode departmentId roleId isActive')
     .populate('departmentId', 'name code')
     .populate('roleId', 'name slug')
     .sort({ name: 1, _id: 1 })
@@ -491,7 +536,11 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
     let status = 'not_checked_in';
     let attendanceMode = 'office';
-    if (checkIn) {
+    if (!user.isActive) {
+      // Off-boarded members stay visible for headcount parity but never read
+      // as present/absent/on-leave, even with stale same-day records.
+      status = 'inactive';
+    } else if (checkIn) {
       status = 'checked_in';
       attendanceMode = checkIn.attendanceMode ?? 'office';
     } else if (wfhApproved) {
@@ -534,7 +583,17 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   }
 
   // Stable sort so offset pages are deterministic across scroll fetches.
+  // Present members first, then on-leave, then absent; alphabetical (then
+  // userId) within each group.
+  const statusRank = (member) => {
+    if (member.status === 'checked_in' || member.status === 'wfh') return 0;
+    if (member.status === 'on_leave') return 1;
+    if (member.status === 'inactive') return 3;
+    return 2;
+  };
   const sorted = [...teamStatus].sort((a, b) => {
+    const rankDelta = statusRank(a) - statusRank(b);
+    if (rankDelta !== 0) return rankDelta;
     const nameA = (a.name || a.firstName || '').toLowerCase();
     const nameB = (b.name || b.firstName || '').toLowerCase();
     if (nameA < nameB) return -1;
@@ -550,6 +609,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   for (const member of sorted) {
     if (member.status === 'on_leave') summary.onLeave += 1;
     else if (member.status === 'checked_in' || member.status === 'wfh') summary.present += 1;
+    else if (member.status === 'inactive') summary.inactive += 1;
     else summary.absent += 1;
   }
 
@@ -644,8 +704,11 @@ async function handleCompOffCheckout(userId, checkoutRecord) {
   if (!request || request.status === 'worked') return;
   if (!checkoutRecord?._id) return;
 
+  // Never flip a request carrying a staged approver cancellation — the
+  // finalizer owns it. The employee keeps their attendance record; only the
+  // comp-off credit path stands down.
   const claimed = await CompOffRequest.findOneAndUpdate(
-    { _id: request._id, status: 'approved' },
+    { _id: request._id, status: 'approved', pendingAction: null },
     { $set: { status: 'worked', checkoutRecordId: checkoutRecord._id } },
   );
   if (!claimed) return;
@@ -654,6 +717,8 @@ async function handleCompOffCheckout(userId, checkoutRecord) {
     userId: userId.toString(),
     requestId: request._id.toString(),
     attendanceRecordId: checkoutRecord._id.toString(),
+    previous: { status: 'approved' },
+    next: { status: 'worked' },
   });
 
   try {
@@ -729,6 +794,10 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         wfhApprovalPendingToday,
         compOffApprovedToday,
       );
+      const markDayInfo = await getTodayNonWorkingInfo(office, istToday);
+      today.isWeekend = markDayInfo.isWeekend;
+      today.isHoliday = markDayInfo.isHoliday;
+      today.holidayName = markDayInfo.holidayName;
       const existingCheckIn = records.find((record) => record.type === 'check_in') ?? null;
       let attendanceMode;
       if (type === 'check_out' && existingCheckIn) {
@@ -951,6 +1020,9 @@ export async function getAdminAttendance({
   userId,
   date,
   weekStart,
+  search,
+  type,
+  status,
   page = 1,
   limit = 20,
   actor,
@@ -959,6 +1031,26 @@ export async function getAdminAttendance({
   const query = {};
   if (userId) {
     query.userId = userId;
+  }
+  if (type) {
+    query.type = type;
+  }
+  if (status) {
+    query.status = status;
+  }
+
+  // Name / employee-code search: resolve matching users first, then filter
+  // records to them (intersected with team scope below when applicable).
+  let searchUserIds = null;
+  const needle = String(search ?? '').trim();
+  if (needle) {
+    const regex = new RegExp(escapeRegex(needle), 'i');
+    const matched = await User.find({
+      $or: [{ name: regex }, { employeeCode: regex }],
+    })
+      .select('_id')
+      .lean();
+    searchUserIds = matched.map((user) => user._id);
   }
 
   const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
@@ -985,6 +1077,23 @@ export async function getAdminAttendance({
     }
   }
 
+  if (searchUserIds !== null) {
+    if (query.userId && query.userId.$in) {
+      const allowed = new Set(query.userId.$in.map((id) => id.toString()));
+      query.userId = { $in: searchUserIds.filter((id) => allowed.has(id.toString())) };
+    } else if (query.userId) {
+      const match = searchUserIds.some((id) => id.toString() === query.userId.toString());
+      if (!match) {
+        return {
+          records: [],
+          pagination: { page, limit, total: 0, totalPages: 1 },
+        };
+      }
+    } else {
+      query.userId = { $in: searchUserIds };
+    }
+  }
+
   if (weekStart) {
     const weekStartDay = parseDateInputAsISTDay(weekStart);
     if (weekStartDay) {
@@ -1007,7 +1116,14 @@ export async function getAdminAttendance({
   const skip = (page - 1) * limit;
   const [allRecords, total] = await Promise.all([
     AttendanceRecord.find(query)
-      .populate('userId', 'name email mobile employeeCode department')
+      .populate({
+        path: 'userId',
+        select: 'name email mobile employeeCode department departmentId',
+        // Nested-inside form: the chained `path: 'userId.departmentId'`
+        // form silently leaves the ref unpopulated, blanking the
+        // department for ref-only (bulk-uploaded) users.
+        populate: { path: 'departmentId', select: 'name code' },
+      })
       // _id tiebreaker keeps offset pagination stable when timestamps tie.
       .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
@@ -1015,7 +1131,11 @@ export async function getAdminAttendance({
     AttendanceRecord.countDocuments(query),
   ]);
 
-  const records = filterOrphanCheckOuts(allRecords).slice(0, limit).map(serializeAdminAttendanceListRecord);
+  // The orphan filter pairs check-outs against same-day check-ins in the
+  // result set — but a check-out-only type filter removes every check-in, so
+  // it must be skipped there or the list wrongly comes back empty.
+  const pairable = type !== 'check_out' ? filterOrphanCheckOuts(allRecords) : allRecords;
+  const records = pairable.slice(0, limit).map(serializeAdminAttendanceListRecord);
 
   return {
     records,
@@ -1411,6 +1531,8 @@ function appendAttendanceEditHistory(record, { actor, changes }) {
 
 function serializeAdminAttendanceListRecord(record) {
   const populatedUser = record.userId?._id != null ? record.userId : null;
+  // Live department name from the Department master; legacy text fallback.
+  const liveDeptName = populatedUser?.departmentId?.name ?? populatedUser?.department ?? null;
   return {
     id: record._id.toString(),
     _id: record._id.toString(),
@@ -1418,6 +1540,8 @@ function serializeAdminAttendanceListRecord(record) {
       ? {
         ...(populatedUser.toObject?.() ?? populatedUser),
         id: populatedUser._id.toString(),
+        department: liveDeptName,
+        departmentName: liveDeptName,
       }
       : record.userId?.toString?.() ?? record.userId,
     type: record.type,
@@ -1520,6 +1644,7 @@ export async function adminEditAttendanceRecord({
   if (!istDay) {
     throwError('Invalid attendance day on record.');
   }
+  await assertWeekNotConfirmed(checkInRecord.userId, dayKey);
 
   if (payload.leaveTypeId) {
     await adminApplyLeaveForEmployeeDay({
@@ -1575,9 +1700,19 @@ export async function adminEditAttendanceRecord({
       ? 'pending'
       : 'approved';
   checkInRecord.leaveRequestId = wfhRequestForDay?._id ?? null;
-  checkInRecord.attendanceTag = policyFields.attendanceTag;
-  checkInRecord.warningIssued = policyFields.warningIssued;
-  checkInRecord.quarterWarningIndex = policyFields.quarterWarningIndex;
+
+  // Recalculate warning based on the actual new check-in time
+  const office = await getOfficeSettings();
+  const recalculatedPolicy = await evaluateCheckInPolicy(checkInRecord.userId, newCheckInTs, office);
+  checkInRecord.attendanceTag = payload.statusCode
+    ? policyFields.attendanceTag
+    : recalculatedPolicy.attendanceTag;
+  checkInRecord.warningIssued = payload.statusCode
+    ? policyFields.warningIssued
+    : recalculatedPolicy.warningIssued;
+  checkInRecord.quarterWarningIndex = payload.statusCode
+    ? policyFields.quarterWarningIndex
+    : recalculatedPolicy.quarterWarningIndex;
   checkInRecord.lateNote = payload.lateNote ?? null;
   if (checkInRecord.status === 'rejected') {
     checkInRecord.status = 'allowed';
@@ -1698,6 +1833,7 @@ export async function adminUpsertAttendanceForDay({
   if (!istDay) {
     throwError('Invalid attendance day.');
   }
+  await assertWeekNotConfirmed(userId, dayKey);
 
   const dayStart = startOfDayIST(istDay);
   const dayEnd = endOfDayIST(istDay);
@@ -1768,13 +1904,18 @@ export async function adminUpsertAttendanceForDay({
     }
   }
 
-  const policyFields = parseStatusCodeToPolicyFields(payload.statusCode ?? 'P');
   const office = await getOfficeSettings();
   const geoFields = buildAdminSyntheticGeoFields(office);
   const wfhRequestForDay = await findWfhRequestForIstDate(userId, dayKey);
   const wfhDecisionPending =
     wfhRequestForDay?.status === 'approved'
     && isLeaveDecisionAwaitingFinalization(wfhRequestForDay.notifyAfter);
+
+  const recalculatedPolicy = await evaluateCheckInPolicy(userId, newCheckInTs, office);
+  const manualPolicyFields = payload.statusCode
+    ? parseStatusCodeToPolicyFields(payload.statusCode)
+    : null;
+  const policyFields = manualPolicyFields ?? recalculatedPolicy;
 
   const checkInRecord = await AttendanceRecord.create({
     userId,
@@ -1789,7 +1930,9 @@ export async function adminUpsertAttendanceForDay({
         ? 'pending'
         : 'approved',
     leaveRequestId: wfhRequestForDay?._id ?? null,
-    ...policyFields,
+    attendanceTag: policyFields.attendanceTag,
+    warningIssued: policyFields.warningIssued,
+    quarterWarningIndex: policyFields.quarterWarningIndex,
     ...geoFields,
   });
 
@@ -1922,6 +2065,8 @@ export async function undoAttendance(
         deviceId: auditContext.deviceId,
         ip: auditContext.ip,
         userAgent: auditContext.userAgent,
+        previous: { status: attendanceRecord.status ?? 'allowed' },
+        next: { status: 'undone' },
       });
 
       // 6. Delete ONLY last attendance

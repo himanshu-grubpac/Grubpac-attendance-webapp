@@ -105,7 +105,7 @@ export default function EmployeeLeaveBalances() {
             {policies.map((policy) => (
               <li key={policy.id}>
                 <strong>{policy.leaveTypeCode}</strong>: {policy.annualQuota}/year
-                {policy.accrualPerMonth > 0 ? ` (${policy.accrualPerMonth}/month accrual)` : ''}
+                {policy.accrualPerMonth > 0 ? ` (reference accrual rate ${policy.accrualPerMonth}/month; granted upfront)` : ''}
                 {policy.requireDocAfterConsecutiveDays
                   ? ` · Medical cert if >${policy.requireDocAfterConsecutiveDays} consecutive days`
                   : ''}

@@ -6,7 +6,9 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import { singleFileUpload } from '../middleware/upload.js';
 import {
   bulkUploadEmployees,
+  previewBulkUploadEmployees,
   downloadEmployeeTemplate,
+  exportAuditLogs,
   getOfficeSettingsHandler,
   getTeamTodayStatusAdmin,
   listAttendance,
@@ -18,6 +20,8 @@ import {
   confirmWeekAttendance,
   unconfirmWeekAttendance,
   listAuditLogs,
+  runAuditArchiveHandler,
+  getAuditArchiveStatusHandler,
   getEmployee,
   getEmployeeStats,
   listEmployees,
@@ -128,6 +132,12 @@ router.post(
   singleFileUpload(upload),
   asyncHandler(bulkUploadEmployees),
 );
+router.post(
+  '/users/bulk-preview',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  singleFileUpload(upload),
+  asyncHandler(previewBulkUploadEmployees),
+);
 router.get('/users/:id', requirePermission(PERMISSIONS.USERS_READ), asyncHandler(getEmployee));
 
 router.get(
@@ -185,6 +195,9 @@ router.delete(
   asyncHandler(unconfirmWeekAttendance),
 );
 router.get('/audit-logs', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(listAuditLogs));
+router.get('/audit-logs/export', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(exportAuditLogs));
+router.get('/audit-logs/archive/status', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(getAuditArchiveStatusHandler));
+router.post('/audit-logs/archive', requirePermission(PERMISSIONS.AUDIT_READ), asyncHandler(runAuditArchiveHandler));
 router.get(
   '/reports/summary',
   requirePermission(PERMISSIONS.USERS_READ),

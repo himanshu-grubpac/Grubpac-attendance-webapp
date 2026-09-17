@@ -3,11 +3,13 @@ import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
 import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
 import { buildEmployeeInputSchema } from '../../../shared/validation/employee.js';
 import {
+  indianMobileSchema,
   MAX_BULK_UPLOAD_ROWS,
   normalizeMobile,
   passwordSchema,
@@ -25,25 +27,24 @@ import {
   allocateNextEmployeeCode,
   duplicateFieldMessage,
   enrichDuplicateKeyError,
-  isValidEmployeeCodeFormat,
   MAX_CREATE_ATTEMPTS,
   normalizeEmployeeCode,
   resolveEmployeeCodeForCreate,
 } from './employeeCodeService.js';
 import { getISTDateInputValue, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { COMPANY_START_DATE } from '../config/company.js';
+import { sendWelcomeEmail } from './emailService.js';
 
 export { normalizeMobile };
 
+const ID_COLUMN_FILL = 'FFFFFBF0';
 const BULK_EXPORT_HEADERS = [
-  'id',
   'firstName',
   'lastName',
   'email',
   'mobile',
-  'password',
-  'pin4Digite',
   'employeeCode',
+  'role',
   'department',
   'designation',
   'reportingManagerEmail',
@@ -63,7 +64,6 @@ const ROW_ODD = 'FFFFFFFF';
 const BORDER_COLOR = 'FFE5E7EB';
 const INSTRUCTION_FILL = 'FFFFF7ED';
 const INSTRUCTION_TEXT = 'FF9A3412';
-const ID_COLUMN_FILL = 'FFFEF3C7';
 
 const TEMPLATE_COMPANY_ROW = 1;
 const TEMPLATE_SUBTITLE_ROW = 2;
@@ -85,18 +85,30 @@ function thinBorder() {
  * Pure row builder for the directory export — values must align 1:1 with
  * BULK_EXPORT_HEADERS (the caller throws otherwise).
  */
+/**
+ * Best-effort dot-free display of a stored mobile number: strips every
+ * non-digit (dots, spaces, +) so the export never shows values like
+ * "96909.8452". Prefers the plain digit string; falls back to the
+ * +91-tolerant normalization when that yields a valid number.
+ */
+export function displayMobileForExport(raw) {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (/^[6-9]\d{9}$/.test(digits)) return digits;
+  const normalized = normalizeMobile(raw);
+  if (/^[6-9]\d{9}$/.test(normalized)) return normalized;
+  return digits;
+}
+
 export function buildDirectoryExportRow(user) {
   const manager = user.reportingManagerId;
   return [
-    user._id.toString(),
     user.firstName || '',
     user.lastName || '',
     user.email || '',
-    user.mobile || '',
-    // Two blanks: password + pin4Digite (leave blank — never export secrets).
-    '',
-    '',
+    displayMobileForExport(user.mobile),
     user.employeeCode || '',
+    user.roleId?.name || user.role || '',
     user.departmentId?.name || user.department || '',
     user.designation || '',
     manager?.email || '',
@@ -114,14 +126,18 @@ export async function buildEmployeeDirectoryWorkbook() {
 
   const users = await User.find(directoryQuery)
     .select(
-      'firstName lastName email mobile employeeCode department designation departmentId reportingManagerId joiningDate dateOfBirth endingDate isActive',
+      'firstName lastName email mobile employeeCode roleId department designation departmentId reportingManagerId joiningDate dateOfBirth endingDate isActive',
     )
     .populate([
+      { path: 'roleId', select: 'name slug' },
       { path: 'departmentId', select: 'name code isActive' },
       { path: 'reportingManagerId', select: 'name email employeeCode' },
     ])
     .sort({ employeeCode: 1, name: 1 })
     .lean();
+
+  const roleOptions = await Role.find({}).select('name slug').sort({ name: 1 }).lean();
+  const roleNames = [...new Set(roleOptions.map((role) => String(role.name || '').trim()).filter(Boolean))];
 
   const colCount = BULK_EXPORT_HEADERS.length;
   const workbook = new ExcelJS.Workbook();
@@ -134,21 +150,21 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['Employee Directory Export — Bulk Import Template'],
     [''],
     ['IMPORTANT RULES:'],
-    ['• The "id" column (column A) is the unique employee identifier. Do NOT edit or delete id values.'],
-    ['• Rows with an "id" value will UPDATE the existing employee record.'],
-    ['• Rows with a BLANK "id" will CREATE a new employee.'],
-    ['• The "email" and "mobile" columns are IMMUTABLE via bulk import. Any changes to these fields will be IGNORED.'],
+    ['• The "email" column is the unique employee identifier. Do NOT edit email values.'],
+    ['• Rows whose email matches an existing employee will UPDATE that record.'],
+    ['• Rows with a NEW email will CREATE a new employee.'],
+    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE via bulk import. Any change to mobile or employeeCode fails that row with a validation error naming the employee.'],
+    ['• Exception: a malformed stored mobile (not a valid 10-digit number) can be healed by entering a valid 10-digit mobile in the file.'],
     ['• To change email or mobile, use the individual employee edit form.'],
-    ['• The "password" and "pin" columns: leave BLANK to keep the existing password/pin.'],
-    ['  Fill them in ONLY if you want to set a new password/pin for that employee.'],
-    ['• NEW employees (blank "id") REQUIRE a typed password: 8+ characters with uppercase, lowercase, and a number.'],
-    ['• NEW employees also require: firstName, email, mobile, designation, joiningDate, department, and reportingManagerEmail.'],
-    ['• "pin4Digite" sets the 4-digit login PIN (new and existing employees).'],
+    ['• There are NO password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.'],
+    ['• NEW employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail.'],
+    ['• Pick "role" from the dropdown list in the role column.'],
+    ['• "role" changes apply to existing employees too (admin accounts excluded). New reporting managers automatically manage their own department; assign further managed departments from the user edit page for wider team visibility.'],
+    ['• Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, ...). A filled code is kept if valid and unused.'],
     ['• "isActive" must be TRUE or FALSE.'],
     ['• Dates must use YYYY-MM-DD format.'],
     ['• "reportingManagerEmail" or "reportingManagerCode" must match an active admin, HR, or reporting manager.'],
     ['• "department" must match an active department name (case-insensitive).'],
-    ['• "employeeCode" format: 2–5 letters followed by 3–6 digits (e.g. EMP001, TL001).'],
     ['• Maximum rows: 500 per upload.'],
   ];
   instructions.forEach((row) => {
@@ -182,7 +198,7 @@ export async function buildEmployeeDirectoryWorkbook() {
 
   worksheet.mergeCells(TEMPLATE_INSTRUCTION_ROW, 1, TEMPLATE_INSTRUCTION_ROW, colCount);
   const instructionCell = worksheet.getCell(TEMPLATE_INSTRUCTION_ROW, 1);
-  instructionCell.value = 'Rows with an id will UPDATE existing records. Blank id rows will CREATE new employees. Email and mobile are immutable via bulk import.';
+  instructionCell.value = 'Rows whose email matches an existing employee will UPDATE that record. New emails will CREATE employees. Email, mobile, and employee code are immutable via bulk import.';
   instructionCell.font = { italic: true, size: 10, name: 'Calibri', color: { argb: INSTRUCTION_TEXT } };
   instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INSTRUCTION_FILL } };
   instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
@@ -226,7 +242,13 @@ export async function buildEmployeeDirectoryWorkbook() {
       cell.border = thinBorder();
       cell.alignment = { vertical: 'middle' };
       cell.font = { size: 10, name: 'Calibri' };
-      if (colNumber === 1) {
+      if (colNumber === 4) {
+        // Mobile column (D): force text format so Excel never reinterprets
+        // digit strings as floats (which is how "96909.8452"-style values
+        // are born on re-import).
+        cell.numFmt = '@';
+      }
+      if (colNumber === 3) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ID_COLUMN_FILL } };
         cell.font = { color: { argb: 'FF92400E' }, size: 10, name: 'Calibri' };
         cell.alignment = { vertical: 'middle', horizontal: 'left' };
@@ -235,14 +257,12 @@ export async function buildEmployeeDirectoryWorkbook() {
   }
 
   worksheet.columns = [
-    { width: 28 },
     { width: 16 },
     { width: 16 },
-    { width: 28 },
+    { width: 30 },
     { width: 14 },
-    { width: 16 },
     { width: 14 },
-    { width: 16 },
+    { width: 20 },
     { width: 20 },
     { width: 22 },
     { width: 28 },
@@ -252,6 +272,28 @@ export async function buildEmployeeDirectoryWorkbook() {
     { width: 14 },
     { width: 10 },
   ];
+
+  // Role dropdown on the role column (F) for every possible data row, so new
+  // employee rows added below the export also get the pick list.
+  const roleColumnLetter = 'F';
+  const roleValidationLastRow = TEMPLATE_DATA_START_ROW + MAX_BULK_UPLOAD_ROWS - 1;
+  const roleFormula = `"${roleNames.map((name) => name.replace(/"/g, '""')).join(',')}"`;
+  if (roleNames.length > 0 && roleFormula.length <= 255) {
+    worksheet.dataValidations.add(
+      `${roleColumnLetter}${TEMPLATE_DATA_START_ROW}:${roleColumnLetter}${roleValidationLastRow}`,
+      {
+        type: 'list',
+        allowBlank: true,
+        formulae: [roleFormula],
+        showErrorMessage: true,
+        errorTitle: 'Invalid role',
+        error: 'Pick a role from the dropdown list.',
+        promptTitle: 'Role',
+        prompt: 'Pick the employee role from the list.',
+        showInputMessage: true,
+      },
+    );
+  }
 
   const lastDataRow = TEMPLATE_DATA_START_ROW + users.length - 1;
   worksheet.autoFilter = {
@@ -272,6 +314,8 @@ async function persistEmployee(
   manager,
   managedDepartments,
   createdBy,
+  retryOnCodeConflict = false,
+  passwordBox = null,
 ) {
   const joiningDate = parsed.joiningDate ? new Date(parsed.joiningDate) : null;
   const endingDate = parsed.endingDate ? new Date(parsed.endingDate) : null;
@@ -312,7 +356,9 @@ async function persistEmployee(
         joiningDate: parsed.joiningDate,
         dateOfBirth: parsed.dateOfBirth ? parseDateInputAsISTDay(parsed.dateOfBirth) : null,
         endingDate: parsed.endingDate ?? null,
-        department: department?.name ?? parsed.department ?? undefined,
+        // Legacy `department` text is no longer stored; the name resolves
+        // from the Department master via departmentId.
+        department: undefined,
         departmentId: department?._id ?? undefined,
         reportingManagerId: manager?._id ?? undefined,
         managedDepartmentIds: managedDepartments,
@@ -320,6 +366,7 @@ async function persistEmployee(
         pin4Hash,
         createdBy,
         isActive: true,
+        forcePasswordChange: true,
       });
 
       await user.populate([
@@ -332,8 +379,13 @@ async function persistEmployee(
     } catch (error) {
       const duplicate = enrichDuplicateKeyError(error);
       if (duplicate !== error) {
-        if (autoGenerated && duplicate.field === 'employeeCode') {
+        if ((autoGenerated || retryOnCodeConflict) && duplicate.field === 'employeeCode') {
           employeeCode = await allocateNextEmployeeCode();
+          // Bulk auto passwords embed the code — regenerate so First@Code stays true.
+          if (passwordBox) {
+            passwordBox.current = generateBulkPassword(passwordBox.firstName, employeeCode);
+            passwordHash = await bcrypt.hash(passwordBox.current, 12);
+          }
           continue;
         }
         throw duplicate;
@@ -362,7 +414,89 @@ export function parseBulkCreatePin(value) {
   return pinSchema.parse(trimmed);
 }
 
+function escapeRegexLiteral(value) {
+  return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Resolve the bulk `role` column (role name or slug, case-insensitive) to a
+ * Role document. Any role — including admin — may be assigned via bulk.
+ */
+export async function resolveRoleByNameOrSlug(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    const error = new Error('Role is required for new employees. Pick a role from the dropdown list.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const slugKey = raw.toLowerCase().replace(/\s+/g, '-');
+  const role =
+    (await Role.findOne({ slug: slugKey }).lean()) ??
+    (await Role.findOne({ name: { $regex: new RegExp(`^${escapeRegexLiteral(raw)}$`, 'i') } }).lean());
+  if (!role) {
+    const error = new Error(`Role "${raw}" not found. Pick a role from the dropdown list.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return role;
+}
+
+/**
+ * Auto password for bulk-created employees: first name (first token, first
+ * letter capitalized) + '@' + employee code, e.g. Kenny@EMP108. Pads with
+ * 'a1' until the shared password policy passes (covers short/all-caps names).
+ */
+export function generateBulkPassword(firstName, employeeCode) {
+  const token = String(firstName ?? '').split(/\s+/).filter(Boolean)[0] ?? '';
+  const capitalized = token ? token.charAt(0).toUpperCase() + token.slice(1) : 'User';
+  let candidate = `${capitalized}@${employeeCode}`;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      passwordSchema.parse(candidate);
+      return candidate;
+    } catch {
+      candidate += 'a1';
+    }
+  }
+  const error = new Error('Unable to generate a valid password for this employee.');
+  error.statusCode = 400;
+  throw error;
+}
+
 export async function createEmployee(data, createdBy, options = {}) {
+  const isBulkImport = options.bulkImport === true;
+  let bulkAutoCode = false;
+  let bulkPasswordPlaintext = null;
+  if (isBulkImport) {
+    data = { ...data };
+    // Removed template columns (id/password/PIN) are dropped by the parser;
+    // defense-in-depth in case callers bypass parsing. Identity is email,
+    // passwords auto-generate, PINs are not set via bulk.
+    delete data.id;
+    delete data.password;
+    delete data.pin4;
+    // Role is mandatory on bulk create; accepts name or slug (any role allowed).
+    const bulkRole = await resolveRoleByNameOrSlug(data.role);
+    data.roleId = bulkRole._id.toString();
+    delete data.role;
+    // Employee code: blank auto-generates; a filled code is kept when valid.
+    const givenCode = normalizeEmployeeCode(data.employeeCode);
+    if (!givenCode) {
+      const resolved = await resolveEmployeeCodeForCreate('');
+      data.employeeCode = resolved.code;
+      bulkAutoCode = true;
+    }
+    bulkPasswordPlaintext = generateBulkPassword(data.firstName, normalizeEmployeeCode(data.employeeCode));
+    data.password = bulkPasswordPlaintext;
+  }
+  let passwordBox = options.passwordBox ?? null;
+  if (isBulkImport && !passwordBox) {
+    passwordBox = { firstName: '', current: null };
+  }
+  if (passwordBox) {
+    passwordBox.firstName = String(data.firstName ?? '');
+    passwordBox.current = bulkPasswordPlaintext;
+  }
   const role = await resolveRole(data.roleId);
   const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
   const prepared = await prepareEmployeeReferences(data, {
@@ -375,10 +509,8 @@ export async function createEmployee(data, createdBy, options = {}) {
     bulkImport: options.bulkImport === true,
   }).parse(stripBulkReferenceFields(prepared));
   const passwordHash = await bcrypt.hash(parsed.password, 12);
-  // Bulk create honors the pin4 column (4-digit only). prepared.pin4 survives
-  // reference stripping; the employee schema has no pin field so it is read raw.
-  const rawCreatePin = parseBulkCreatePin(prepared.pin4);
-  const pin4Hash = rawCreatePin ? await bcrypt.hash(rawCreatePin, 12) : null;
+  // No PIN via bulk import: new employees set it up afterwards.
+  const pin4Hash = null;
   const department = await resolveDepartment(parsed);
   const manager = parsed.reportingManagerId
     ? await resolveReportingManager(parsed.reportingManagerId)
@@ -396,7 +528,103 @@ export async function createEmployee(data, createdBy, options = {}) {
     manager,
     managedDepartments,
     createdBy,
+    bulkAutoCode,
+    passwordBox,
   );
+}
+
+/**
+ * Bulk create that also hands back the auto-generated plaintext password.
+ * The password is returned ONLY here (shown once in upload results) — it is
+ * never persisted or logged anywhere.
+ */
+export async function createEmployeeAndPassword(data, createdBy) {
+  const box = { firstName: String(data.firstName ?? ''), current: null };
+  const employee = await createEmployee(data, createdBy, { bulkImport: true, passwordBox: box });
+  return { employee, generatedPassword: box.current };
+}
+
+/**
+ * Read-only mirror of the bulk-create validation inside createEmployee().
+ * Resolves role/code/department/manager, runs the same input schema, and
+ * checks uniqueness — but never hashes, never writes, never emails. Used by
+ * the preview (dry-run) step so the review table matches what sync will do.
+ * Returns `{ name, employeeCode }` for the preview row; throws on invalid.
+ */
+export async function validateNewEmployeeForPreview(data) {
+  const input = { ...data };
+  const bulkRole = await resolveRoleByNameOrSlug(input.role);
+  const role = await resolveRole(bulkRole._id.toString());
+  // Mirror the sync path: blank codes preview as auto-allocated, and the
+  // auto password (required by schema) is generated from the final code.
+  const previewGivenCode = normalizeEmployeeCode(input.employeeCode);
+  const previewCode = previewGivenCode || (await resolveEmployeeCodeForCreate('')).code;
+  input.employeeCode = previewCode;
+  input.password = generateBulkPassword(input.firstName, previewCode);
+  const hasDepartments = (await Department.countDocuments({ isActive: true })) > 0;
+  const prepared = await prepareEmployeeReferences(
+    { ...input, roleId: bulkRole._id.toString() },
+    { roleSlug: role.slug, hasDepartments },
+  );
+  const parsed = buildEmployeeInputSchema({
+    roleSlug: role.slug,
+    hasDepartments,
+    bulkImport: true,
+  }).parse(stripBulkReferenceFields(prepared));
+
+  const department = await resolveDepartment(parsed);
+  if (parsed.reportingManagerId) {
+    await resolveReportingManager(parsed.reportingManagerId);
+  }
+  if (parsed.managedDepartmentIds?.length) {
+    await resolveManagedDepartments(parsed.managedDepartmentIds);
+  }
+
+  // persistEmployee date guards (mirrored so preview agrees with sync).
+  const joiningDate = parsed.joiningDate ? new Date(parsed.joiningDate) : null;
+  const endingDate = parsed.endingDate ? new Date(parsed.endingDate) : null;
+  if (joiningDate && joiningDate < COMPANY_START_DATE) {
+    const error = new Error('Employee joining date cannot be before the company start date.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (joiningDate && endingDate && endingDate < joiningDate) {
+    const error = new Error('Employee ending date cannot be before the joining date.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Uniqueness checks (sync surfaces these as duplicate-key errors at create).
+  const email = String(parsed.email).toLowerCase();
+  const mobile = normalizeMobile(parsed.mobile);
+  const givenCode = normalizeEmployeeCode(parsed.employeeCode);
+  const { code: employeeCode } = await resolveEmployeeCodeForCreate(parsed.employeeCode);
+  if (await User.exists({ email })) {
+    const error = new Error(duplicateFieldMessage('email'));
+    error.statusCode = 409;
+    error.field = 'email';
+    error.code = 11000;
+    throw error;
+  }
+  if (mobile && (await User.exists({ mobile }))) {
+    const error = new Error(duplicateFieldMessage('mobile'));
+    error.statusCode = 409;
+    error.field = 'mobile';
+    error.code = 11000;
+    throw error;
+  }
+  if (givenCode && (await User.exists({ employeeCode: givenCode }))) {
+    const error = new Error(duplicateFieldMessage('employeeCode'));
+    error.statusCode = 409;
+    error.field = 'employeeCode';
+    error.code = 11000;
+    throw error;
+  }
+
+  return {
+    name: `${parsed.firstName} ${parsed.lastName ?? ''}`.trim(),
+    employeeCode,
+  };
 }
 
 function normalizeHeader(value) {
@@ -406,17 +634,24 @@ function normalizeHeader(value) {
     .replace(/\s+/g, '');
 }
 
+// Columns removed from the bulk template. If present in an uploaded file
+// they are ignored and reported as warnings (never applied).
+// NOTE: keys must be lowercase — normalizeHeader() lowercases + strips spaces.
+const REMOVED_COLUMNS = {
+  id: 'ID',
+  password: 'Password',
+  pin4digite: 'PIN',
+};
+
 const headerMap = {
-  id: 'id',
   firstname: 'firstName',
   lastname: 'lastName',
   email: 'email',
   mobile: 'mobile',
-  password: 'password',
   // NOTE: keys must be lowercase — normalizeHeader() lowercases + strips spaces.
-  pin4digite: 'pin4',
   employeecode: 'employeeCode',
   employeeid: 'employeeCode',
+  role: 'role',
   department: 'department',
   designation: 'designation',
   reportingmanageremail: 'reportingManagerEmail',
@@ -544,9 +779,14 @@ export function parseEmployeeWorkbook(buffer) {
     if (headerRowIndex < 0) continue;
 
     const headerCells = aoa[headerRowIndex] ?? [];
-    const columnKeys = headerCells.map(
-      (cell) => headerMap[normalizeHeader(cell)] ?? null,
-    );
+    const removedPresent = [];
+    const columnKeys = headerCells.map((cell) => {
+      const normalized = normalizeHeader(cell);
+      if (Object.hasOwn(REMOVED_COLUMNS, normalized) && !removedPresent.includes(normalized)) {
+        removedPresent.push(normalized);
+      }
+      return headerMap[normalized] ?? null;
+    });
     const dataRows = aoa.slice(headerRowIndex + 1);
 
     const mapped = [];
@@ -577,11 +817,18 @@ export function parseEmployeeWorkbook(buffer) {
       );
     }
 
+    // Non-fatal file-level warnings (attached, not thrown, so the rows array
+    // shape stays compatible with existing callers).
+    mapped.warnings = removedPresent.map(
+      (key) =>
+        `Column '${REMOVED_COLUMNS[key]}' is no longer supported and was ignored. ` +
+        `IDs are system-managed; passwords and PINs are set by the employee via Change Password.`,
+    );
     return mapped;
   }
 
   throw new Error(
-    'Could not find a header row with id, firstName, or email columns. Download a fresh employee directory export and try again.',
+    'Could not find a header row with firstName, email, or employeeCode columns. Download a fresh employee directory export and try again.',
   );
 }
 
@@ -596,7 +843,6 @@ function parseBooleanValue(value) {
 }
 
 function partitionRowsByFileDuplicates(rows) {
-  const seenId = new Map();
   const seenEmail = new Map();
   const seenMobile = new Map();
   const seenCode = new Map();
@@ -604,28 +850,11 @@ function partitionRowsByFileDuplicates(rows) {
   const uniqueRows = [];
 
   for (const row of rows) {
-    const id = String(row.data.id ?? '').trim();
     const email = String(row.data.email ?? '')
       .trim()
       .toLowerCase();
     const mobile = normalizeMobile(row.data.mobile);
     const employeeCode = normalizeEmployeeCode(row.data.employeeCode);
-
-    if (id) {
-      if (seenId.has(id)) {
-        duplicates.push({
-          rowNumber: row.rowNumber,
-          id,
-          status: 'duplicate',
-          email: row.data.email ?? '',
-          message: `Duplicate employee id within file (first seen on row ${seenId.get(id)}).`,
-        });
-        continue;
-      }
-      seenId.set(id, row.rowNumber);
-      uniqueRows.push(row);
-      continue;
-    }
 
     if (email && seenEmail.has(email)) {
       duplicates.push({
@@ -633,7 +862,7 @@ function partitionRowsByFileDuplicates(rows) {
         id: '',
         status: 'duplicate',
         email: row.data.email ?? '',
-        message: `Duplicate email within file (first seen on row ${seenEmail.get(email)}).`,
+        message: `Duplicate email within file (first seen on row ${seenEmail.get(email)}). Only the first occurrence is applied.`,
       });
       continue;
     }
@@ -644,7 +873,7 @@ function partitionRowsByFileDuplicates(rows) {
         id: '',
         status: 'duplicate',
         email: row.data.email ?? '',
-        message: `Duplicate mobile within file (first seen on row ${seenMobile.get(mobile)}).`,
+        message: `Duplicate mobile within file (first seen on row ${seenMobile.get(mobile)}). Only the first occurrence is applied.`,
       });
       continue;
     }
@@ -655,7 +884,7 @@ function partitionRowsByFileDuplicates(rows) {
         id: '',
         status: 'duplicate',
         email: row.data.email ?? '',
-        message: `Duplicate employee code within file (first seen on row ${seenCode.get(employeeCode)}).`,
+        message: `Duplicate employee code within file (first seen on row ${seenCode.get(employeeCode)}). Only the first occurrence is applied.`,
       });
       continue;
     }
@@ -707,37 +936,16 @@ function buildUpdateMessage(changedFields, ignoredFields) {
   return parts.join(' ') || 'No changes detected.';
 }
 
-async function upsertExistingEmployee(row, createdBy) {
-  const rawId = String(row.data.id ?? '').trim();
-
-  if (!/^[a-f\d]{24}$/i.test(rawId)) {
-    return {
-      rowNumber: row.rowNumber,
-      id: rawId,
-      email: row.data.email ?? '',
-      status: 'validation_error',
-      message: 'Invalid employee id format.',
-    };
-  }
-
-  const user = await User.findById(rawId).populate([
-    { path: 'roleId', select: 'name slug permissions isSystem' },
-    { path: 'departmentId', select: 'name code isActive' },
-    { path: 'reportingManagerId', select: 'name email employeeCode' },
-  ]);
-
-  if (!user) {
-    return {
-      rowNumber: row.rowNumber,
-      id: rawId,
-      email: row.data.email ?? '',
-      status: 'validation_error',
-      message: 'Employee with this id not found. It may have been deleted.',
-    };
-  }
+async function upsertExistingEmployee(row, user, options = {}) {
+  // The dispatcher already matched this row to `user` by email (the bulk
+  // identity). Email therefore cannot differ. A mismatch on a VALID stored
+  // mobile/employeeCode is a per-row validation error. A malformed stored
+  // mobile may be healed by supplying a valid 10-digit replacement.
+  const rawId = user._id.toString();
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  if (adminRole && user.roleId?.toString() === adminRole._id.toString()) {
+  const userRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString() ?? '';
+  if (adminRole && userRoleId === adminRole._id.toString()) {
     return {
       rowNumber: row.rowNumber,
       id: rawId,
@@ -750,14 +958,88 @@ async function upsertExistingEmployee(row, createdBy) {
   const changedFields = [];
   const ignoredFields = [];
 
-  const newEmail = String(row.data.email ?? '').trim().toLowerCase();
-  if (newEmail && newEmail !== user.email) {
-    ignoredFields.push({ field: 'email', from: user.email, to: newEmail });
+  const newMobile = normalizeMobile(row.data.mobile);
+  const storedMobileDigits = normalizeMobile(user.mobile);
+  const currentMobileValid = indianMobileSchema.safeParse(user.mobile ?? '').success;
+  if (!newMobile || newMobile === storedMobileDigits) {
+    // No change: empty cell, or re-upload of the same stored digits (valid or
+    // not). Corrupt stored values are fixed via the edit form or by entering
+    // a valid 10-digit replacement in the file — re-uploading never errors.
+  } else if (!currentMobileValid) {
+    // Stored number is malformed and the file proposes a different value:
+    // only a valid 10-digit replacement is accepted (heal path).
+    if (!indianMobileSchema.safeParse(newMobile).success) {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: `Mobile number on file for ${user.email} is invalid (existing ${user.mobile || '—'}). Enter a valid 10-digit mobile in the file or update it from the employee profile.`,
+      };
+    }
+    const taken = await User.findOne({ mobile: newMobile, _id: { $ne: user._id } })
+      .select('_id')
+      .lean();
+    if (taken) {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: `Mobile number ${newMobile} is already in use by another employee.`,
+      };
+    }
+    changedFields.push({ field: 'mobile', from: user.mobile || '', to: newMobile });
+    user.mobile = newMobile;
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+  } else {
+    // Stored number is valid and the file proposes a different value: blocked.
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Mobile number cannot be changed via bulk upload for ${user.email} (existing ${user.mobile}, file has ${newMobile}). Update it from the employee profile instead.`,
+    };
   }
 
-  const newMobile = normalizeMobile(row.data.mobile);
-  if (newMobile && newMobile !== user.mobile) {
-    ignoredFields.push({ field: 'mobile', from: user.mobile, to: newMobile });
+  const newFileCode = normalizeEmployeeCode(row.data.employeeCode);
+  if (newFileCode && newFileCode !== (user.employeeCode || '')) {
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Employee ID cannot be changed via bulk upload for ${user.email} (existing ${user.employeeCode || '—'}, file has ${newFileCode}).`,
+    };
+  }
+
+  const rawRole = String(row.data.role ?? '').trim();
+  let updatedRole = null;
+  if (rawRole) {
+    try {
+      updatedRole = await resolveRoleByNameOrSlug(rawRole);
+    } catch {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: `Role "${rawRole}" not found. Pick a role from the dropdown list.`,
+      };
+    }
+    const currentRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString() ?? '';
+    if (updatedRole._id.toString() !== currentRoleId) {
+      changedFields.push({
+        field: 'role',
+        from: user.roleId?.name || user.role || '',
+        to: updatedRole.name,
+      });
+      user.roleId = updatedRole._id;
+      user.role = legacyRoleFromSlug(updatedRole.slug);
+    } else {
+      updatedRole = null;
+    }
   }
 
   const newFirstName = String(row.data.firstName ?? '').trim();
@@ -899,39 +1181,6 @@ async function upsertExistingEmployee(row, createdBy) {
     }
   }
 
-  const newEmployeeCode = normalizeEmployeeCode(row.data.employeeCode);
-  if (newEmployeeCode && newEmployeeCode !== (user.employeeCode || '')) {
-    if (!isValidEmployeeCodeFormat(newEmployeeCode)) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'validation_error',
-        message:
-          'Employee code format is invalid. Must be 2–5 letters followed by 3–6 digits (e.g. EMP001).',
-      };
-    }
-    const existing = await User.findOne({
-      employeeCode: newEmployeeCode,
-      _id: { $ne: user._id },
-    }).lean();
-    if (existing) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'duplicate',
-        message: `Employee code "${newEmployeeCode}" is already in use by another employee.`,
-      };
-    }
-    changedFields.push({
-      field: 'employeeCode',
-      from: user.employeeCode || '',
-      to: newEmployeeCode,
-    });
-    user.employeeCode = newEmployeeCode;
-  }
-
   const rawDepartment = String(row.data.department ?? '').trim();
   if (rawDepartment) {
     const dept = await Department.findOne({
@@ -955,7 +1204,8 @@ async function upsertExistingEmployee(row, createdBy) {
         to: dept.name,
       });
       user.departmentId = dept._id;
-      user.department = dept.name;
+      // Legacy text no longer written; resolves from the Department master.
+      user.department = undefined;
     }
   }
 
@@ -1005,38 +1255,26 @@ async function upsertExistingEmployee(row, createdBy) {
     }
   }
 
-  const rawPassword = String(row.data.password ?? '').trim();
-  if (rawPassword) {
-    try {
-      passwordSchema.parse(rawPassword);
-    } catch (err) {
-      const msg =
-        err instanceof z.ZodError
-          ? err.issues.map((i) => i.message).join(' ')
-          : err.message;
+  // Role changes must leave the record in a valid org state (mirrors the
+  // create-time rules: employees need a manager. Promoting to
+  // reporting-manager is allowed without managed departments — the RM works
+  // on direct-reports scope until departments are assigned from the edit
+  // page for wider team visibility.
+  if (updatedRole) {
+    if (updatedRole.slug === SYSTEM_ROLE_SLUGS.EMPLOYEE && !user.reportingManagerId) {
       return {
         rowNumber: row.rowNumber,
         id: rawId,
         email: user.email,
         status: 'validation_error',
-        message: msg,
+        message:
+          'Reporting manager is required for the employee role. Provide reportingManagerEmail in the same row or set it individually.',
       };
     }
-    const passwordHash = await bcrypt.hash(rawPassword, 12);
-    user.passwordHash = passwordHash;
-    user.pin4Hash = null;
-    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-    changedFields.push({ field: 'password', from: '***', to: '***' });
   }
 
-  const rawPin4 = String(row.data.pin4 ?? '').trim();
-  if (rawPin4) {
-    user.pin4Hash = await bcrypt.hash(pinSchema.parse(rawPin4), 12);
-    if (!rawPassword) {
-      user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-    }
-    changedFields.push({ field: 'pin', from: user.pin4Hash ? '***' : '', to: '***' });
-  }
+  // Passwords and PINs are never changed via bulk import (no such columns).
+  // Use the employee edit page or reset flows for credential changes.
 
   if (changedFields.length === 0 && ignoredFields.length === 0) {
     return {
@@ -1048,8 +1286,11 @@ async function upsertExistingEmployee(row, createdBy) {
     };
   }
 
-  await user.save();
-  await user.populate(USER_POPULATE_FIELDS);
+  // Dry-run (preview) computes the identical diff/validation but persists nothing.
+  if (!options.dryRun) {
+    await user.save();
+    await user.populate(USER_POPULATE_FIELDS);
+  }
 
   return {
     rowNumber: row.rowNumber,
@@ -1103,39 +1344,106 @@ function handleCreateError(row, error) {
   };
 }
 
-export async function importEmployeesFromRowsUpsert(rows, createdBy) {
+export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {}) {
+  const dryRun = options.dryRun === true;
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);
   const results = [...fileDuplicates];
+  const createdEmployees = [];
 
   for (const row of uniqueRows) {
-    const rawId = String(row.data.id ?? '').trim();
+    const email = String(row.data.email ?? '').trim().toLowerCase();
 
-    if (rawId) {
-      try {
-        const result = await upsertExistingEmployee(row, createdBy);
+    if (!email) {
+      results.push({
+        rowNumber: row.rowNumber,
+        id: '',
+        status: 'validation_error',
+        email: row.data.email ?? '',
+        message: 'Email is required — it identifies the employee. Rows without an email are skipped.',
+      });
+      continue;
+    }
+
+    try {
+      const existing = await User.findOne({ email }).populate([
+        { path: 'roleId', select: 'name slug permissions isSystem' },
+        { path: 'departmentId', select: 'name code isActive' },
+        { path: 'reportingManagerId', select: 'name email employeeCode' },
+      ]);
+
+      if (existing) {
+        const result = await upsertExistingEmployee(row, existing, { dryRun });
         results.push(result);
-      } catch (error) {
+      } else if (dryRun) {
+        const preview = await validateNewEmployeeForPreview(row.data);
         results.push({
           rowNumber: row.rowNumber,
-          id: rawId,
-          status: 'error',
-          email: row.data.email ?? '',
-          message: error.message ?? 'Failed to update employee.',
-        });
-      }
-    } else {
-      try {
-        const employee = await createEmployee(row.data, createdBy, { bulkImport: true });
-        results.push({
-          rowNumber: row.rowNumber,
-          id: employee.id,
+          id: '',
           status: 'created',
-          email: employee.email,
-          message: 'Employee created successfully.',
+          email,
+          name: preview.name,
+          employeeCode: preview.employeeCode,
+          generatedPassword: null,
+          emailStatus: null,
+          preview: true,
+          message:
+            'Will create this employee on sync. Login credentials will be emailed and the temporary password must be changed on first sign-in.',
         });
-      } catch (error) {
-        results.push(handleCreateError(row, error));
+      } else {
+        const created = await createEmployeeAndPassword(row.data, createdBy);
+        results.push({
+          rowNumber: row.rowNumber,
+          id: created.employee.id,
+          status: 'created',
+          email: created.employee.email,
+          name: created.employee.name,
+          employeeCode: created.employee.employeeCode,
+          generatedPassword: created.generatedPassword,
+          message: 'Employee created successfully. Share the generated password securely — it is shown only here.',
+        });
       }
+    } catch (error) {
+      results.push(handleCreateError(row, error));
+    }
+  }
+
+  // Welcome emails for newly created employees (Req 7). Flag them for a
+  // forced password change first, then send one email each with a capped
+  // concurrency. Email failures are recorded per row — they never fail the
+  // import, and the generated password remains visible in the results.
+  // Skipped entirely for dry-run previews (nothing is created or sent).
+  const createdRows = dryRun
+    ? []
+    : results.filter((item) => item.status === 'created' && item.generatedPassword);
+  if (createdRows.length > 0) {
+    await User.updateMany(
+      { _id: { $in: createdRows.map((item) => item.id) } },
+      { $set: { mustChangePassword: true } },
+    );
+    const EMAIL_CONCURRENCY = 5;
+    for (let index = 0; index < createdRows.length; index += EMAIL_CONCURRENCY) {
+      const batch = createdRows.slice(index, index + EMAIL_CONCURRENCY);
+      const outcomes = await Promise.all(
+        batch.map(async (item) => {
+          try {
+            const sent = await sendWelcomeEmail({
+              to: item.email,
+              name: item.name,
+              tempPassword: item.generatedPassword,
+            });
+            return Boolean(sent?.delivered);
+          } catch {
+            return false;
+          }
+        }),
+      );
+      batch.forEach((item, batchIndex) => {
+        item.emailStatus = outcomes[batchIndex] ? 'sent' : 'failed';
+        item.message =
+          item.emailStatus === 'sent'
+            ? 'Employee created successfully. Login credentials emailed to the employee.'
+            : 'Employee created successfully. Credentials email could not be delivered — share the generated password securely, it is shown only here.';
+      });
     }
   }
 
@@ -1149,9 +1457,11 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy) {
     duplicate: results.filter((item) => item.status === 'duplicate').length,
     validation_error: results.filter((item) => item.status === 'validation_error').length,
     error: results.filter((item) => item.status === 'error').length,
+    emailsSent: results.filter((item) => item.emailStatus === 'sent').length,
+    emailsFailed: results.filter((item) => item.emailStatus === 'failed').length,
   };
 
-  return { summary, results };
+  return { summary, results, ...(dryRun ? { preview: true } : {}) };
 }
 
 export async function importEmployeesFromRows(rows, createdBy) {
@@ -1199,14 +1509,35 @@ export async function importEmployeesFromRows(rows, createdBy) {
 }
 
 export function buildEmployeeTemplateWorkbook() {
+  const workbook = XLSX.utils.book_new();
+
+  const instructionsData = [
+    ['New Employee Bulk Upload Template'],
+    [''],
+    ['IMPORTANT RULES:'],
+    ['• Each row will CREATE a new employee.'],
+    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE. Any changes will be rejected.'],
+    ['• To change email, mobile, or employeeCode later, use the individual employee edit form.'],
+    ['• A temporary password will be automatically generated and emailed to the new employee.'],
+    ['• Required fields: firstName, email, mobile, designation, joiningDate, department, reportingManagerEmail.'],
+    ['• "employeeCode" format: 2–5 letters followed by 3–6 digits (e.g. EMP001, TL001). Leave blank to auto-generate.'],
+    ['• "isActive" must be TRUE or FALSE.'],
+    ['• Dates must use YYYY-MM-DD format.'],
+    ['• "reportingManagerEmail" or "reportingManagerCode" must match an active admin, HR, or reporting manager.'],
+    ['• "department" must match an active department name (case-insensitive).'],
+    ['• Maximum rows: 500 per upload.'],
+  ];
+  const instructionsSheet = XLSX.utils.aoa_to_sheet(instructionsData);
+  instructionsSheet['!cols'] = [{ wch: 90 }];
+  XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instructions');
+
   const worksheet = XLSX.utils.aoa_to_sheet([
     [
       'firstName',
       'lastName',
       'email',
       'mobile',
-      'password',
-      'pin4Digite',
+      'role',
       'employeeCode',
       'department',
       'designation',
@@ -1221,8 +1552,7 @@ export function buildEmployeeTemplateWorkbook() {
       'Doe',
       'jane@grubpac.com',
       '9876543210',
-      'Employee@123',
-      '1234',
+      'Employee',
       'EMP001',
       'Development',
       'Software Engineer',
@@ -1233,7 +1563,6 @@ export function buildEmployeeTemplateWorkbook() {
       '',
     ],
   ]);
-  const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Employees');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }

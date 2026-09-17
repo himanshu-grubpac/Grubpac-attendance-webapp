@@ -13,7 +13,9 @@ import { logError } from '../utils/logger.js';
 import { acquireJobLock, releaseJobLock } from '../utils/jobLock.js';
 
 /**
- * Monthly leave accrual refresh for all active employees (current IST year).
+ * Monthly entitlement convergence for all active employees (current IST year).
+ * Entitlements vest upfront (no monthly cap); this pass heals any unlocked
+ * row that drifted from its computed value, then ensures balances exist.
  * Schedule via cron / EventBridge: npm run jobs:accrual
  */
 export async function runMonthlyAccrualJob(asOfDate = new Date()) {

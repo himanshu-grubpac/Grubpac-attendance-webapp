@@ -18,7 +18,7 @@ import {
   updateUserSalarySchema,
 } from '../../../shared/validation/salary.js';
 import { parseDateInputAsISTDay } from '../utils/istDate.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditRequest } from '../utils/auditLog.js';
 import {
   buildLopExportWorkbook,
   buildSalaryExportWorkbook,
@@ -61,12 +61,33 @@ export async function updateUserSalaryHandler(req, res) {
       : {}),
   };
 
+  const previous = {
+    monthlySalary: null,
+    salaryEffectiveFrom: null,
+  };
+  try {
+    const before = await loadSalarySubject(req.params.id);
+    previous.monthlySalary = before.monthlySalary ?? null;
+    previous.salaryEffectiveFrom = before.salaryEffectiveFrom
+      ? new Date(before.salaryEffectiveFrom).toISOString()
+      : null;
+  } catch {
+    // Subject load failure surfaces from updateUserSalary below.
+  }
+
   const user = await updateUserSalary(req.params.id, payload, req.user._id);
 
-  auditLog('salary_updated', {
+  auditRequest(req, 'salary_updated', {
     adminId: req.user._id.toString(),
     employeeId: user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
+    previous,
+    next: {
+      monthlySalary: user.monthlySalary ?? null,
+      salaryEffectiveFrom: user.salaryEffectiveFrom
+        ? new Date(user.salaryEffectiveFrom).toISOString()
+        : null,
+    },
   });
 
   // Route is gated by SALARY_WRITE, so the caller may view salary fields.
@@ -100,11 +121,20 @@ export async function getSalarySettingsHandler(req, res) {
 
 export async function updateSalarySettingsHandler(req, res) {
   const parsed = updateSalarySettingsSchema.parse(req.body);
+  let previous = null;
+  try {
+    const before = await getSalarySettingsPayload();
+    previous = { payrollDayOfMonth: before?.settings?.payrollDayOfMonth ?? null };
+  } catch {
+    // Settings load failure surfaces from updateSalarySettings below.
+  }
   const result = await updateSalarySettings(parsed, req.user._id);
 
-  auditLog('salary_settings_updated', {
+  auditRequest(req, 'salary_settings_updated', {
     adminId: req.user._id.toString(),
     fieldsUpdated: Object.keys(parsed),
+    previous,
+    next: { payrollDayOfMonth: result?.settings?.payrollDayOfMonth ?? null },
   });
 
   res.json(result);
@@ -165,7 +195,7 @@ export async function generateSalaryTransfersHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await generatePendingSalaryTransfers(parsed.month, req.user._id);
 
-  auditLog('salary_transfers_generated', {
+  auditRequest(req, 'salary_transfers_generated', {
     adminId: req.user._id.toString(),
     month: parsed.month,
     created: result.created,
@@ -191,10 +221,12 @@ export async function updateSalaryTransferHandler(req, res) {
   const parsed = updateSalaryTransferStatusSchema.parse(req.body);
   const transfer = await updateSalaryTransferStatus(req.params.id, parsed, req.user._id);
 
-  auditLog('salary_transfer_updated', {
+  auditRequest(req, 'salary_transfer_updated', {
     adminId: req.user._id.toString(),
     transferId: transfer.id,
     status: transfer.status,
+    previous: { status: transfer.previousStatus ?? null },
+    next: { status: transfer.status },
   });
 
   res.json({ transfer });
@@ -203,6 +235,18 @@ export async function updateSalaryTransferHandler(req, res) {
 export async function settleMonthHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await settleMonthPayroll(parsed.month, req.user._id);
+  auditRequest(req, 'month_settled', {
+    adminId: req.user._id.toString(),
+    periodKey: parsed.month,
+    settled: result.settled ?? false,
+    alreadySettled: result.alreadySettled ?? false,
+    employeesProcessed: result.employeesProcessed ?? 0,
+    employeesWithLop: result.employeesWithLop ?? 0,
+    totalLopDays: result.totalLopDays ?? 0,
+    totalLopRecords: result.totalLopRecords ?? 0,
+    transfersCreated: result.transfersCreated ?? 0,
+    transfersSkipped: result.transfersSkipped ?? 0,
+  });
   res.json(result);
 }
 
@@ -248,7 +292,7 @@ export async function exportSalaryAuditHandler(req, res) {
     { departmentId },
   );
 
-  auditLog('salary_audit_exported', {
+  auditRequest(req, 'salary_audit_exported', {
     adminId: req.user._id.toString(),
     periodKey,
   });

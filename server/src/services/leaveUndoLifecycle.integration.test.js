@@ -659,3 +659,59 @@ test('employee self-cancel still notifies the approver as by-employee', async ()
   assert.equal(approverNotice.title, 'Leave cancelled by employee');
   assert.match(approverNotice.body, /cancelled their approved/, 'existing employee wording preserved');
 });
+
+// ── 19. Approver can cancel past approved leave; employee self-cancel cannot ──
+test('approver cancel works on past approved leave, self-cancel stays blocked', async () => {
+  const { manager, applicant, leaveType } = await seedLeaveSetup();
+  const pastDay = parseDateInputAsISTDay(getISTDateInputValue());
+  const pastKey = getISTDateInputValue(new Date(pastDay.getTime() - 5 * 24 * 60 * 60 * 1000));
+  const pastYear = getISTYear(parseDateInputAsISTDay(pastKey));
+  await LeaveBalance.create({
+    userId: applicant._id,
+    leaveTypeId: leaveType._id,
+    year: pastYear,
+    entitled: 12,
+    used: 2,
+    pending: 0,
+    carried: 0,
+    encashed: 0,
+    compOffEarned: 0,
+  });
+
+  async function pastApproved() {
+    const doc = await LeaveRequest.create({
+      userId: applicant._id,
+      leaveTypeId: leaveType._id,
+      startDate: parseDateInputAsISTDay(pastKey),
+      endDate: parseDateInputAsISTDay(pastKey),
+      days: 1,
+      reason: 'Past leave',
+      status: 'approved',
+      approverId: manager._id,
+      decidedAt: new Date(),
+      finalizedAt: new Date(),
+      notificationsSent: true,
+      submitNotificationsSent: true,
+    });
+    return doc._id.toString();
+  }
+
+  // Approver path: stages (and finalizes) even though the dates passed.
+  const approverId = await pastApproved();
+  await cancelApprovedLeaveByApprover(approverId, manager, managerPerms, { decisionComment: 'correction' });
+  const staged = await LeaveRequest.findById(approverId).lean();
+  assert.equal(staged.pendingDecision, 'cancelled');
+  await runLeaveDecisionNotifyJob(new Date(new Date(staged.notifyAfter).getTime() + 1000));
+  const final = await LeaveRequest.findById(approverId).lean();
+  assert.equal(final.status, 'cancelled');
+  const balance = await LeaveBalance.findOne({ userId: applicant._id, leaveTypeId: leaveType._id, year: pastYear }).lean();
+  assert.equal(balance.used, 1, 'consumed day returned to the balance');
+
+  // Employee self-cancel path: still guarded for past leaves.
+  const selfId = await pastApproved();
+  await assert.rejects(
+    cancelLeaveRequest(selfId, applicant),
+    /dates have passed/,
+  );
+  assert.equal((await LeaveRequest.findById(selfId).lean()).status, 'approved');
+});

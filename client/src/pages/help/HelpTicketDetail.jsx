@@ -173,7 +173,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
 
   async function handleCommentSubmit(event) {
     event.preventDefault();
-    if (ticket?.status === 'closed') return;
+    if (ticket?.status === 'closed' || ticket?.status === 'resolved') return;
     if (!commentBody.trim() && selectedFiles.length === 0) return;
     setSubmittingComment(true);
     setError('');
@@ -444,9 +444,9 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           </ul>
         )}
 
-        {ticket.status === 'closed' ? (
+        {ticket.status === 'closed' || ticket.status === 'resolved' ? (
           <p className="muted small" style={{ marginTop: 'var(--space-4)' }}>
-            This ticket is closed. New comments cannot be added.
+            This ticket is {ticket.status}. New comments cannot be added.
           </p>
         ) : (
           <form className="form-grid" onSubmit={handleCommentSubmit}>

@@ -18,12 +18,92 @@ function throwError(message, statusCode = 400) {
   throw error;
 }
 
-export function computeEntitledForPolicy(policy, year, asOfDate = new Date()) {
-  if (policy.accrualPerMonth > 0 && year === getISTYear(asOfDate)) {
-    const monthsElapsed = getISTMonth(asOfDate);
-    return Math.min(policy.annualQuota, monthsElapsed * policy.accrualPerMonth);
+export function computeEntitledForPolicy(policy, year, asOfDate = new Date(), joiningDate = null) {
+  const currentYear = getISTYear(asOfDate);
+
+  if (policy.accrualPerMonth > 0 && year === currentYear) {
+    const asOfMonth = getISTMonth(asOfDate);
+    let accrualMonths = asOfMonth;
+    if (joiningDate) {
+      const joinYear = getISTYear(joiningDate);
+      if (joinYear === year) {
+        accrualMonths = asOfMonth - getISTMonth(joiningDate) + 1;
+      } else if (joinYear > year) {
+        accrualMonths = 0;
+      }
+    }
+    accrualMonths = Math.max(0, accrualMonths);
+    return Math.min(policy.annualQuota, accrualMonths * policy.accrualPerMonth);
   }
+
+  if (joiningDate) {
+    const joinYear = getISTYear(joiningDate);
+    if (joinYear === year) {
+      const joinMonth = getISTMonth(joiningDate);
+      const remainingMonths = 12 - joinMonth + 1;
+      return Math.min(policy.annualQuota, Math.ceil((policy.annualQuota * remainingMonths) / 12));
+    }
+    if (joinYear > year) {
+      return 0;
+    }
+  }
+
   return policy.annualQuota;
+}
+
+export function roundToHalfDay(value) {
+  return Math.round((Number(value) ?? 0) * 2) / 2;
+}
+
+/**
+ * Monthly-eligible joining-date proration, applied to EVERY leave type for
+ * EVERY employee: (annualQuota / 12) × eligibleMonths, where eligibleMonths
+ * counts the joining month through December inclusive.
+ * - No joining date (or joined on/before Jan 1) → full quota.
+ * - Joined after Dec 31 → 0.
+ * - NOTE: accrualPerMonth / asOfDate are accepted for signature compatibility
+ *   but no longer gate the math — entitlements vest upfront for the whole year
+ *   (pro-rated by joining month). A monthly cap made quotas unreachable
+ *   (e.g. 30/mo can never reach a 365 quota: 12 × 30 = 360).
+ */
+export function computeProratedEntitled({
+  annualQuota,
+  accrualPerMonth = 0,
+  year,
+  joiningDateKey = null,
+  asOfDate = new Date(),
+}) {
+  void accrualPerMonth;
+  void asOfDate;
+  const quota = Number(annualQuota) ?? 0;
+  let proratedQuota = quota;
+  if (joiningDateKey && /^\d{4}-\d{2}-\d{2}$/.test(joiningDateKey)) {
+    const yearStartKey = `${year}-01-01`;
+    const yearEndKey = `${year}-12-31`;
+    if (joiningDateKey > yearEndKey) {
+      return 0;
+    }
+    if (joiningDateKey > yearStartKey) {
+      const joinDate = parseDateInputAsISTDay(joiningDateKey);
+      const joinMonth = getISTMonth(joinDate);
+      const eligibleMonths = 12 - joinMonth + 1;
+      proratedQuota = Math.min(quota, Math.ceil((quota * eligibleMonths) / 12));
+    }
+  }
+  return proratedQuota;
+}
+
+/**
+ * Effective leave start of a user as an IST YYYY-MM-DD key
+ * (contract start → joining date → null when neither is set).
+ */
+export async function getUserLeaveStartKey(userId) {
+  const user = await User.findById(userId).select('joiningDate salaryEffectiveFrom');
+  const raw = user?.salaryEffectiveFrom ?? user?.joiningDate ?? null;
+  if (!raw) return null;
+  const date = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return getISTDateInputValue(date);
 }
 
 /** Matches AdminLeavePolicies year selector: current IST year ±2..+1. */
@@ -64,10 +144,10 @@ export async function seedLeaveTypesAndPolicies(options = {}) {
         });
         console.log(`Seeded leave policy for ${typeCode} (${year})`);
       } else {
-        Object.assign(policy, policyFields);
-        policy.isActive = true;
-        await policy.save();
-        console.log(`Updated leave policy for ${typeCode} (${year})`);
+        // Create-only: never overwrite an admin-configured policy. Overwriting
+        // quotas here used to silently clobber live policies (and orphan the
+        // balances computed from them) every time seed/migrations ran.
+        console.log(`Kept existing leave policy for ${typeCode} (${year})`);
       }
     }
   }
@@ -154,11 +234,20 @@ export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDat
     throwError('Invalid user.');
   }
 
+  const user = await User.findById(userId).select('joiningDate').lean();
+  const joiningDate = user?.joiningDate || null;
   const policies = await resolvePoliciesForYear(year);
+  const joiningDateKey = await getUserLeaveStartKey(userId);
   const balances = [];
 
   for (const policy of policies) {
-    const entitled = computeEntitledForPolicy(policy, year, asOfDate);
+    const entitled = computeProratedEntitled({
+      annualQuota: policy.annualQuota,
+      accrualPerMonth: policy.accrualPerMonth,
+      year,
+      joiningDateKey,
+      asOfDate,
+    });
     let balance = await LeaveBalance.findOne({
       userId,
       leaveTypeId: policy.leaveTypeId._id ?? policy.leaveTypeId,
@@ -177,7 +266,12 @@ export async function ensureBalancesForUser(userId, year = getISTYear(), asOfDat
         encashed: 0,
         compOffEarned: 0,
       });
-    } else if (policy.accrualPerMonth > 0) {
+    } else if (!balance.entitledLocked && balance.entitled !== entitled) {
+      // Heal-on-read: any unlocked row converges to the computed value.
+      // Deliberate manual tweaks are protected by entitledLocked (set only
+      // when an admin hand-tunes entitled) — never by value-sniffing, which
+      // froze stale rows whenever the stored value differed from the quota
+      // for any other reason (older quota era, recreated policies, …).
       balance.entitled = entitled;
       await balance.save();
     }
@@ -193,6 +287,76 @@ export async function initBalancesForAllUsers(year = getISTYear()) {
   for (const user of users) {
     await ensureBalancesForUser(user._id, year);
   }
+}
+
+/**
+ * Recalculate entitled for all active users when a policy is updated.
+ * Uses each user's DOJ for pro-rata computation.
+ * Returns the count of updated balances.
+ */
+export async function recalculateAllBalancesForPolicy(policy) {
+  const year = policy.year || getISTYear();
+  const leaveTypeId = policy.leaveTypeId?._id ?? policy.leaveTypeId;
+
+  const activeUsers = await User.find({ isActive: true }).select('_id joiningDate').lean();
+  const userIds = activeUsers.map((u) => u._id);
+  const userJoiningDateMap = new Map(activeUsers.map((u) => [u._id.toString(), u.joiningDate]));
+
+  const existingBalances = await LeaveBalance.find({
+    userId: { $in: userIds },
+    leaveTypeId,
+    year,
+  }).lean();
+
+  const existingByUser = new Map(
+    existingBalances.map((b) => [b.userId.toString(), b]),
+  );
+
+  const updates = [];
+  const inserts = [];
+
+  for (const userId of userIds) {
+    const entitled = computeEntitledForPolicy(
+      policy,
+      year,
+      new Date(),
+      userJoiningDateMap.get(userId.toString()),
+    );
+    const existing = existingByUser.get(userId.toString());
+    if (existing) {
+      if (existing.entitledLocked) {
+        continue;
+      }
+      updates.push({
+        updateOne: {
+          filter: { _id: existing._id },
+          update: { $set: { entitled } },
+        },
+      });
+    } else {
+      inserts.push({
+        userId,
+        leaveTypeId,
+        year,
+        entitled,
+        used: 0,
+        pending: 0,
+        carried: 0,
+        encashed: 0,
+        compOffEarned: 0,
+      });
+    }
+  }
+
+  const bulkResults = updates.length > 0
+    ? await LeaveBalance.bulkWrite(updates, { ordered: false })
+    : { modifiedCount: 0 };
+
+  if (inserts.length > 0) {
+    await LeaveBalance.insertMany(inserts, { ordered: false });
+  }
+
+  return bulkResults.modifiedCount + inserts.length;
 }
 
 /**
@@ -218,8 +382,17 @@ export function getPaidLeaveQuota(balance) {
   );
 }
 
+/**
+ * Convergence pass for unlocked rows: recomputes entitled from the current
+ * policy so stale values heal on read. Kept as a separate pass (also run by
+ * the monthly job) alongside ensureBalancesForUser. Writes nothing when the
+ * stored value already matches; locked rows are never touched.
+ */
 export async function refreshAccruedEntitlements(userId, year = getISTYear(), asOfDate = new Date()) {
+  const user = await User.findById(userId).select('joiningDate').lean();
+  const joiningDate = user?.joiningDate || null;
   const policies = await resolvePoliciesForYear(year);
+  const joiningDateKey = await getUserLeaveStartKey(userId);
   for (const policy of policies) {
     if (policy.accrualPerMonth <= 0) continue;
     const balance = await LeaveBalance.findOne({
@@ -227,9 +400,18 @@ export async function refreshAccruedEntitlements(userId, year = getISTYear(), as
       leaveTypeId: policy.leaveTypeId._id ?? policy.leaveTypeId,
       year,
     });
-    if (balance) {
-      balance.entitled = computeEntitledForPolicy(policy, year, asOfDate);
-      await balance.save();
+    if (balance && !balance.entitledLocked) {
+      const entitled = computeProratedEntitled({
+        annualQuota: policy.annualQuota,
+        accrualPerMonth: policy.accrualPerMonth,
+        year,
+        joiningDateKey,
+        asOfDate,
+      });
+      if (balance.entitled !== entitled) {
+        balance.entitled = entitled;
+        await balance.save();
+      }
     }
   }
 }
@@ -238,6 +420,71 @@ export async function getBalancesForUser(userId, year = getISTYear()) {
   await refreshAccruedEntitlements(userId, year);
   const balances = await ensureBalancesForUser(userId, year);
   return balances.map((item) => item.toSafeJSON());
+}
+
+/**
+ * Propagates a mid-year policy change to every balance row of that policy's
+ * year: recomputes `entitled` (with joining-date proration) for all UNLOCKED
+ * rows. Rows hand-locked via the manual adjustment API are counted as skipped
+ * and left untouched. Idempotent — re-running converges to the same values.
+ */
+export async function recomputeEntitledForPolicy(policyId, { year = null, asOfDate = new Date() } = {}) {
+  const policy = await LeavePolicy.findById(policyId);
+  if (!policy) {
+    throwError('Leave policy not found.', 404);
+  }
+  const targetYear = year ?? policy.year ?? getISTYear();
+  const typeId = policy.leaveTypeId?._id ?? policy.leaveTypeId;
+
+  const skippedLocked = await LeaveBalance.countDocuments({
+    leaveTypeId: typeId,
+    year: targetYear,
+    entitledLocked: true,
+  });
+  const balances = await LeaveBalance.find({
+    leaveTypeId: typeId,
+    year: targetYear,
+    entitledLocked: { $ne: true },
+  }).select('_id userId entitled');
+
+  const userIds = [...new Set(balances.map((balance) => balance.userId.toString()))];
+  const users =
+    userIds.length > 0
+      ? await User.find({ _id: { $in: userIds } }).select('joiningDate salaryEffectiveFrom')
+      : [];
+  const startKeyByUser = new Map();
+  for (const user of users) {
+    const raw = user?.salaryEffectiveFrom ?? user?.joiningDate ?? null;
+    const date = raw instanceof Date ? raw : raw ? new Date(raw) : null;
+    startKeyByUser.set(
+      user._id.toString(),
+      date && !Number.isNaN(date.getTime()) ? getISTDateInputValue(date) : null,
+    );
+  }
+
+  let recomputed = 0;
+  for (const balance of balances) {
+    const entitled = computeProratedEntitled({
+      annualQuota: policy.annualQuota,
+      accrualPerMonth: policy.accrualPerMonth,
+      year: targetYear,
+      joiningDateKey: startKeyByUser.get(balance.userId.toString()) ?? null,
+      asOfDate,
+    });
+    if (balance.entitled !== entitled) {
+      balance.entitled = entitled;
+      await balance.save();
+      recomputed += 1;
+    }
+  }
+
+  return {
+    policyId: policy._id.toString(),
+    year: targetYear,
+    total: balances.length,
+    recomputed,
+    skippedLocked,
+  };
 }
 
 export async function adjustBalance(userId, payload, adjustedBy) {
@@ -259,6 +506,11 @@ export async function adjustBalance(userId, payload, adjustedBy) {
         if (fields[key] !== undefined) {
           balance[key] = fields[key];
         }
+      }
+      // A hand-tuned entitled value opts out of proration and policy-change
+      // recompute from here on.
+      if (fields.entitled !== undefined) {
+        balance.entitledLocked = true;
       }
 
       await balance.save({ session });
@@ -554,13 +806,19 @@ async function prepareCarryForwardBalances(userId, fromYear, toYear, session = n
   const inserts = [];
   const accrualUpdates = [];
 
+  const joiningDateKey = await getUserLeaveStartKey(userId);
   for (const { year, policies } of years) {
     for (const policy of policies) {
       const typeId = policyTypeId(policy);
       if (!typeId) continue;
 
       const key = balanceMapKey(year, typeId);
-      const entitled = computeEntitledForPolicy(policy, year);
+      const entitled = computeProratedEntitled({
+        annualQuota: policy.annualQuota,
+        accrualPerMonth: policy.accrualPerMonth,
+        year,
+        joiningDateKey,
+      });
 
       if (!balanceMap.has(key)) {
         inserts.push({
@@ -579,7 +837,7 @@ async function prepareCarryForwardBalances(userId, fromYear, toYear, session = n
 
       if (year === fromYear && policy.accrualPerMonth > 0) {
         const balance = balanceMap.get(key);
-        if (balance.entitled !== entitled) {
+        if (!balance.entitledLocked && balance.entitled !== entitled) {
           balance.entitled = entitled;
           accrualUpdates.push(balance);
         }

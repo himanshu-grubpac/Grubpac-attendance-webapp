@@ -562,12 +562,12 @@ export async function computeMonthlySalarySummary(user, monthInput, options = {}
   };
 }
 
-export async function loadSalarySubject(userId) {
+export async function loadSalarySubject(userId, { allowInactive = false } = {}) {
   if (!mongoose.isValidObjectId(userId)) {
     throwError('Employee not found.', 404);
   }
   const user = await User.findById(userId).populate(USER_POPULATE_FIELDS);
-  if (!user || !user.isActive) {
+  if (!user || (!user.isActive && !allowInactive)) {
     throwError('Employee not found.', 404);
   }
   return user;
@@ -612,9 +612,14 @@ export function canViewSalarySummary(actor, subject, permissions) {
 }
 
 export async function getSalarySummaryForUser(actor, permissions, userId, month) {
-  const subject = await loadSalarySubject(userId);
+  // Reads tolerate deactivated subjects (empty-state downstream); writes keep
+  // the strict loader so inactive records stay uneditable.
+  const subject = await loadSalarySubject(userId, { allowInactive: true });
   if (!canViewSalarySummary(actor, subject, permissions)) {
     throwError('You do not have permission to view this salary summary.', 403);
+  }
+  if (!subject.isActive) {
+    return { summary: null, inactive: true };
   }
   const summary = await computeMonthlySalarySummary(subject, month);
   return { summary };
@@ -672,6 +677,22 @@ export function computeNextPayrollDateIst(payrollDayOfMonth, referenceDate = new
   }
   const nextDay = clampPayrollDay(nextYear, nextMonth, payrollDayOfMonth);
   return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`;
+}
+
+/**
+ * Next payroll date with a month-end fallback: when no payroll day is
+ * configured, the last day of the current IST month is used so payroll
+ * surfaces always show a date instead of an empty state. Today can never
+ * pass the last day of its own month, so the fallback is always ahead.
+ */
+export function resolveNextPayrollDateIst(payrollDayOfMonth, referenceDate = new Date()) {
+  const configured = computeNextPayrollDateIst(payrollDayOfMonth, referenceDate);
+  if (configured) return { date: configured, isDefault: false };
+  const todayKey = getISTDateInputValue(referenceDate);
+  const [year, month] = todayKey.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthKey = String(month).padStart(2, '0');
+  return { date: `${year}-${monthKey}-${String(lastDay).padStart(2, '0')}`, isDefault: true };
 }
 
 export function computeSalaryTransferStatsFromRows(rows) {
@@ -819,6 +840,7 @@ export async function updateSalaryTransferStatus(transferId, payload, actorId) {
     throwError('Transfer not found.', 404);
   }
 
+  const previousStatus = transfer.status;
   transfer.status = payload.status;
   transfer.updatedBy = actorId;
 
@@ -841,7 +863,7 @@ export async function updateSalaryTransferStatus(transferId, payload, actorId) {
   }
 
   await transfer.save();
-  return salaryTransferToJSON(transfer);
+  return { ...salaryTransferToJSON(transfer), previousStatus };
 }
 
 export async function getOrCreateSalarySettings() {
@@ -853,9 +875,11 @@ export async function getOrCreateSalarySettings() {
 }
 
 export function salarySettingsToJSON(settings) {
+  const resolved = resolveNextPayrollDateIst(settings.payrollDayOfMonth);
   return {
     payrollDayOfMonth: settings.payrollDayOfMonth ?? null,
-    nextPayrollDate: computeNextPayrollDateIst(settings.payrollDayOfMonth),
+    nextPayrollDate: resolved.date,
+    payrollDayIsDefault: resolved.isDefault,
     updatedAt: settings.updatedAt ?? null,
   };
 }
@@ -896,14 +920,16 @@ export async function buildSalaryMonthMeta(month, summaries) {
   const totalPayroll = withEstimate.reduce((sum, item) => sum + item.payableEstimate, 0);
   const settings = await getOrCreateSalarySettings();
   const transferStats = await getSalaryTransferStats(month);
+  const resolvedPayroll = resolveNextPayrollDateIst(settings.payrollDayOfMonth);
 
   return {
     totalPayroll: roundMoney(totalPayroll),
     employeesWithEstimate: withEstimate.length,
     employeesConfigured: configuredCount,
     pendingTransfers: transferStats.pendingCount,
-    nextPayrollDate: computeNextPayrollDateIst(settings.payrollDayOfMonth),
+    nextPayrollDate: resolvedPayroll.date,
     payrollDayOfMonth: settings.payrollDayOfMonth ?? null,
+    payrollDayIsDefault: resolvedPayroll.isDefault,
   };
 }
 
@@ -931,7 +957,8 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '' })
 
   const [employees, total] = await Promise.all([
     User.find(query)
-      .select('name employeeCode department designation monthlySalary salaryEffectiveFrom')
+      .select('name employeeCode department departmentId designation monthlySalary salaryEffectiveFrom')
+      .populate('departmentId', 'name code')
       // _id tiebreaker keeps offset pagination stable when names tie.
       .sort({ name: 1, _id: 1 })
       .skip(skip)
@@ -944,7 +971,10 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '' })
       id: employee._id.toString(),
       name: employee.name,
       employeeCode: employee.employeeCode ?? null,
-      department: employee.department ?? null,
+      // Live department name from the Department master; legacy text fallback.
+      department: employee.departmentId?.name ?? employee.department ?? null,
+      departmentId: employee.departmentId?._id?.toString() ?? employee.departmentId?.toString?.() ?? null,
+      departmentName: employee.departmentId?.name ?? null,
       designation: employee.designation ?? null,
       monthlySalary: employee.monthlySalary ?? null,
       salaryEffectiveFrom: employee.salaryEffectiveFrom ?? null,

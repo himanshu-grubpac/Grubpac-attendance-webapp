@@ -6,6 +6,9 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import TimeField, { isValidHHmmTime, normalizeHHmmTime } from '../../components/TimeField.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import SearchInput from '../../components/SearchInput.jsx';
+import DateField from '../../components/DateField.jsx';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
@@ -563,6 +566,49 @@ function indexRecordsByUserAndDay(records) {
   return map;
 }
 
+/**
+ * Week-grid totals behind the stat cards. Counts day-cells (one per
+ * employee per working day), not history records — a check-in and its
+ * check-out are a single present cell. `dayKey` narrows to one day;
+ * empty means the whole week.
+ */
+export function summarizeAttendanceCells(rows, weekDays, dayKey) {
+  let present = 0;
+  let absent = 0;
+  let late = 0;
+  let halfDay = 0;
+  let workingSlots = 0;
+
+  for (const row of rows) {
+    row.cells.forEach((cell, cellIndex) => {
+      if (dayKey && weekDays[cellIndex] !== dayKey) return;
+      if (cell.kind === 'weekend' || cell.kind === 'holiday' || cell.kind === 'future') return;
+      if (cell.kind === 'leave') return;
+      if (cell.kind === 'pending') return;
+      workingSlots += 1;
+      if (cell.kind === 'present') {
+        present += 1;
+        if (cell.warningTag) late += 1;
+        if (cell.statusTag === 'HD') halfDay += 1;
+      } else if (cell.kind === 'absent') {
+        absent += 1;
+      }
+    });
+  }
+
+  return { present, absent, late, halfDay, workingSlots };
+}
+
+function formatScopeDayLabel(dayKey) {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  if (!year || !month || !day) return String(dayKey);
+  return new Intl.DateTimeFormat('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
 function classifyDayCell({
   dayKey,
   userId,
@@ -1088,6 +1134,7 @@ function AttendanceEditModal({
   error,
   saving,
   statusOptions,
+  readOnly = false,
   onClose,
   onChange,
   onSubmit,
@@ -1118,7 +1165,7 @@ function AttendanceEditModal({
       >
         <header className="modal__header">
           <h2 id={titleId} className="modal__title">
-            Edit attendance
+            {readOnly ? 'View attendance' : 'Edit attendance'}
           </h2>
           <p className="modal__lead muted">
             {target.employee.name} · {formattedDay}
@@ -1134,6 +1181,12 @@ function AttendanceEditModal({
           <div className="modal__body">
             {error ? <div className="alert alert--error modal__alert">{error}</div> : null}
 
+            {readOnly ? (
+              <p className="muted small" role="status">
+                This week is confirmed — details are read-only. Undo the confirmation to edit.
+              </p>
+            ) : null}
+
             {priorEdit.lastEditedAt ? (
               <div className="attendance-edit-modal__prior muted">
                 Last edited {formatEditTimestamp(priorEdit.lastEditedAt)} by{' '}
@@ -1146,7 +1199,7 @@ function AttendanceEditModal({
               <TimeField
                 value={form.checkInTime}
                 onChange={(value) => onChange({ checkInTime: value })}
-                disabled={saving}
+                disabled={saving || readOnly}
                 aria-label="Check-in time"
               />
             </label>
@@ -1159,7 +1212,7 @@ function AttendanceEditModal({
                 <TimeField
                   value={form.checkOutTime}
                   onChange={(value) => onChange({ checkOutTime: value })}
-                  disabled={saving}
+                  disabled={saving || readOnly}
                   aria-label="Check-out time"
                 />
               </label>
@@ -1171,7 +1224,7 @@ function AttendanceEditModal({
                 value={form.statusCode}
                 onChange={(value) => onChange({ statusCode: value })}
                 options={statusOptions}
-                disabled={saving}
+                disabled={saving || readOnly}
                 aria-label="Attendance status"
               />
             </label>
@@ -1182,7 +1235,7 @@ function AttendanceEditModal({
                 value={form.attendanceMode}
                 onChange={(value) => onChange({ attendanceMode: value })}
                 options={MODE_OPTIONS}
-                disabled={saving}
+                disabled={saving || readOnly}
                 aria-label="Work mode"
               />
             </label>
@@ -1195,18 +1248,20 @@ function AttendanceEditModal({
                 maxLength={500}
                 value={form.lateNote}
                 onChange={(event) => onChange({ lateNote: event.target.value })}
-                disabled={saving}
+                disabled={saving || readOnly}
                 placeholder="Reason for late arrival, if applicable"
               />
             </label>
           </div>
           <footer className="modal__footer">
             <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
-              Cancel
+              {readOnly ? 'Close' : 'Cancel'}
             </button>
-            <button type="submit" className="btn btn--primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Save changes'}
-            </button>
+            {readOnly ? null : (
+              <button type="submit" className="btn btn--primary" disabled={saving}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            )}
           </footer>
         </form>
       </div>
@@ -1274,6 +1329,8 @@ export default function AdminAttendance() {
   const [unconfirmingUserId, setUnconfirmingUserId] = useState(null);
   const [editPickerTarget, setEditPickerTarget] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
+  // Confirmed weeks open the modal read-only (View instead of Edit).
+  const [editReadOnly, setEditReadOnly] = useState(false);
   const [editForm, setEditForm] = useState({
     checkInTime: '09:00',
     checkOutTime: '',
@@ -1299,13 +1356,25 @@ export default function AdminAttendance() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  // Server-side history filters (name/ID search, single day, type, status).
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyDay, setHistoryDay] = useState('');
+  const [historyType, setHistoryType] = useState('');
+  const [historyStatus, setHistoryStatus] = useState('');
+  const debouncedHistorySearch = useDebouncedValue(historySearch, 350);
+  const hasHistoryFilters = Boolean(
+    debouncedHistorySearch.trim() || historyDay || historyType || historyStatus,
+  );
   const {
     columnsLoading: historyColumnsLoading,
     columnsError: historyColumnsError,
     editorOpen: historyEditorOpen,
-    setEditorOpen: setHistoryEditorOpen,
+    openColumnEditor: openHistoryEditor,
+    cancelColumnEdit: cancelHistoryEdit,
     isColumnVisible: isHistoryColumnVisible,
-    handleColumnToggle: handleHistoryColumnToggle,
+    isDraftColumnVisible: isHistoryDraftVisible,
+    handleDraftColumnToggle: handleHistoryDraftToggle,
+    applyColumnPreferences: applyHistoryColumns,
   } = useTableColumns({
     tableKey: HISTORY_TABLE_KEY,
     allColumns: HISTORY_COLUMNS,
@@ -1406,7 +1475,7 @@ export default function AdminAttendance() {
   }, [weekStart]);
 
   // ── History list (infinite scroll) ──────────────────────────────────────
-  const loadHistoryPage = useCallback(async (nextPage) => {
+  const loadHistoryPage = useCallback(async (nextPage, overrides = {}) => {
     if (nextPage < 1) return;
     const isFirst = nextPage === 1;
     if (isFirst) {
@@ -1415,8 +1484,26 @@ export default function AdminAttendance() {
       setHistoryLoadingMore(true);
     }
     setHistoryError('');
+    const filters = {
+      search: debouncedHistorySearch.trim(),
+      day: historyDay,
+      type: historyType,
+      status: historyStatus,
+      ...overrides,
+    };
+    // date and weekStart are mutually exclusive server-side: a picked day
+    // narrows the query to that single day.
+    const params = { page: nextPage, limit: 20 };
+    if (filters.day) {
+      params.date = filters.day;
+    } else {
+      params.weekStart = weekStart;
+    }
+    if (filters.search) params.search = filters.search;
+    if (filters.type) params.type = filters.type;
+    if (filters.status) params.status = filters.status;
     try {
-      const data = await adminApi.listAttendance({ weekStart, page: nextPage, limit: 20 });
+      const data = await adminApi.listAttendance(params);
       const incoming = data.records ?? [];
       setHistoryRecords((current) => {
         const seen = new Set(current.map((record) => record.id ?? record._id));
@@ -1430,7 +1517,7 @@ export default function AdminAttendance() {
       setHistoryLoading(false);
       setHistoryLoadingMore(false);
     }
-  }, [weekStart]);
+  }, [weekStart, debouncedHistorySearch, historyDay, historyType, historyStatus]);
 
   useEffect(() => {
     setHistoryRecords([]);
@@ -1671,28 +1758,17 @@ export default function AdminAttendance() {
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [filterOpen]);
 
+  // Cards follow the history day filter so they always reconcile with the
+  // visible records: a picked day scopes every card to that day, while
+  // "Whole week" keeps the previous week totals untouched.
   const summary = useMemo(() => {
-    let present = 0;
-    let absent = 0;
-    let late = 0;
-    let halfDay = 0;
-    let workingSlots = 0;
-
-    for (const row of filteredGridRows) {
-      for (const cell of row.cells) {
-        if (cell.kind === 'weekend' || cell.kind === 'holiday' || cell.kind === 'future') continue;
-        if (cell.kind === 'leave') continue;
-        if (cell.kind === 'pending') continue;
-        workingSlots += 1;
-        if (cell.kind === 'present') {
-          present += 1;
-          if (cell.warningTag) late += 1;
-          if (cell.statusTag === 'HD') halfDay += 1;
-        } else if (cell.kind === 'absent') {
-          absent += 1;
-        }
-      }
-    }
+    const scopeDay = historyDay || null;
+    const scopeLabel = scopeDay ? formatScopeDayLabel(scopeDay) : null;
+    const { present, absent, late, halfDay, workingSlots } = summarizeAttendanceCells(
+      filteredGridRows,
+      weekDays,
+      scopeDay,
+    );
 
     const activePct = workingSlots > 0 ? Math.round((present / workingSlots) * 100) : 0;
     const absentPct = workingSlots > 0 ? Math.round((absent / workingSlots) * 100) : 0;
@@ -1702,12 +1778,40 @@ export default function AdminAttendance() {
       absent,
       late,
       halfDay,
-      presentHint: workingSlots > 0 ? `${activePct}% active days logged` : 'No working days in range',
-      absentHint: workingSlots > 0 ? `${absentPct}% unplanned absences` : 'No working days in range',
-      lateHint: late > 0 ? 'Check-ins with warnings this week' : 'No late marks this week',
-      halfDayHint: halfDay > 0 ? 'Per office half-day threshold' : 'No half-day marks this week',
+      presentHint:
+        workingSlots > 0
+          ? scopeLabel
+            ? `${present} of ${workingSlots} logged on ${scopeLabel}`
+            : `${activePct}% active days logged`
+          : scopeLabel
+            ? `No working slots on ${scopeLabel}`
+            : 'No working days in range',
+      absentHint:
+        workingSlots > 0
+          ? scopeLabel
+            ? `${absent} of ${workingSlots} absent on ${scopeLabel}`
+            : `${absentPct}% unplanned absences`
+          : scopeLabel
+            ? `No working slots on ${scopeLabel}`
+            : 'No working days in range',
+      lateHint:
+        late > 0
+          ? scopeLabel
+            ? `Check-ins with warnings on ${scopeLabel}`
+            : 'Check-ins with warnings this week'
+          : scopeLabel
+            ? `No late marks on ${scopeLabel}`
+            : 'No late marks this week',
+      halfDayHint:
+        halfDay > 0
+          ? scopeLabel
+            ? `Half-day marks on ${scopeLabel}`
+            : 'Per office half-day threshold'
+          : scopeLabel
+            ? `No half-day marks on ${scopeLabel}`
+            : 'No half-day marks this week',
     };
-  }, [filteredGridRows]);
+  }, [filteredGridRows, weekDays, historyDay]);
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
   const statusOptions = useMemo(
@@ -1715,10 +1819,11 @@ export default function AdminAttendance() {
     [policy.warningsPerQuarter, leaveTypes],
   );
 
-  function openEditForDay(employee, dayKey, cell) {
+  function openEditForDay(employee, dayKey, cell, { readOnly = false } = {}) {
     if (!isEditableAttendanceCell(cell)) return;
 
     setEditPickerTarget(null);
+    setEditReadOnly(readOnly);
 
     if (isAttendanceCreateCell(cell)) {
       const isLeaveOnly = cell.kind === 'leave' && !cell.checkInRecordId;
@@ -1765,27 +1870,30 @@ export default function AdminAttendance() {
     setEditError('');
   }
 
-  function openEditForRow(employee, cells) {
+  function openEditForRow(employee, cells, { readOnly = false } = {}) {
     const editableDays = getEditableWeekDays(cells, weekDays);
     if (editableDays.length === 0) return;
 
     if (editableDays.length === 1) {
       const { dayKey, cell } = editableDays[0];
-      openEditForDay(employee, dayKey, cell);
+      openEditForDay(employee, dayKey, cell, { readOnly });
       return;
     }
 
-    setEditPickerTarget({ employee, editableDays });
+    setEditReadOnly(readOnly);
+    setEditPickerTarget({ employee, editableDays, readOnly });
   }
 
   function closeEditPickerModal() {
     setEditPickerTarget(null);
+    setEditReadOnly(false);
   }
 
   function closeEditModal() {
     if (editSaving) return;
     setEditTarget(null);
     setEditError('');
+    setEditReadOnly(false);
   }
 
   function patchEditForm(patch) {
@@ -1807,7 +1915,7 @@ export default function AdminAttendance() {
   }
 
   async function saveAttendanceEdit() {
-    if (!editTarget) return;
+    if (!editTarget || editReadOnly) return;
     if (!editTarget.isCreate && !editTarget.checkInRecordId && !editTarget.isLeaveOnly) return;
 
     const leaveType = findLeaveTypeByCode(editForm.statusCode, leaveTypes);
@@ -2155,6 +2263,15 @@ export default function AdminAttendance() {
             }}
           >
             <table className="attendance-grid">
+              <colgroup>
+                <col style={{ width: 'var(--attendance-row-num-width)' }} />
+                <col style={{ width: 'var(--attendance-employee-width)' }} />
+                {weekDays.map((_, ci) => (
+                  <col key={ci} style={{ width: 'var(--attendance-day-width)' }} />
+                ))}
+                <col style={{ width: 'var(--attendance-actions-width)' }} />
+                <col />
+              </colgroup>
               <thead>
                 <tr>
                   <th scope="col" className="attendance-grid__col-row-num">
@@ -2275,23 +2392,44 @@ export default function AdminAttendance() {
                           </td>
                         );
                       })}
-                      <td className="attendance-grid__actions">
-                        <div className="attendance-grid__actions-inner">
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm attendance-grid__edit"
-                            disabled={!canEditWeek || isConfirming || isUnconfirming || editSaving}
-                            title={editButtonTitle}
-                            aria-label={
-                              canEditWeek
-                                ? `Edit attendance for ${employee.name}, ${editableWeekDays.length} day${editableWeekDays.length === 1 ? '' : 's'} available`
-                                : 'Edit unavailable — no past working days this week'
-                            }
-                            onClick={() => openEditForRow(employee, cells)}
-                          >
-                            Edit
-                          </button>
-                          {confirmation ? (
+                        <td className="attendance-grid__actions">
+                          <div className="attendance-grid__actions-inner">
+                            {confirmation ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm attendance-grid__edit"
+                                disabled={!canEditWeek || isConfirming || isUnconfirming || editSaving}
+                                title={
+                                  canEditWeek
+                                    ? 'View confirmed attendance (read-only — undo confirmation to edit)'
+                                    : 'No past working days to view this week'
+                                }
+                                aria-label={
+                                  canEditWeek
+                                    ? `View confirmed attendance for ${employee.name}`
+                                    : 'View unavailable — no past working days this week'
+                                }
+                                onClick={() => openEditForRow(employee, cells, { readOnly: true })}
+                              >
+                                View
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm attendance-grid__edit"
+                                disabled={!canEditWeek || isConfirming || isUnconfirming || editSaving}
+                                title={editButtonTitle}
+                                aria-label={
+                                  canEditWeek
+                                    ? `Edit attendance for ${employee.name}, ${editableWeekDays.length} day${editableWeekDays.length === 1 ? '' : 's'} available`
+                                    : 'Edit unavailable — no past working days this week'
+                                }
+                                onClick={() => openEditForRow(employee, cells)}
+                              >
+                                Edit
+                              </button>
+                            )}
+                            {confirmation ? (
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm attendance-grid__undo"
@@ -2344,10 +2482,68 @@ export default function AdminAttendance() {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            onClick={() => setHistoryEditorOpen(true)}
+            onClick={openHistoryEditor}
           >
             Edit columns
           </button>
+        </div>
+        <div className="attendance-history-panel__filters filter-bar">
+          <SearchInput
+            className="filter-bar__search"
+            value={historySearch}
+            onChange={(event) => setHistorySearch(event.target.value)}
+            placeholder="Search name or employee ID…"
+            ariaLabel="Search attendance history"
+          />
+          <label className="field-inline filter-bar__field">
+            <span className="label">Day</span>
+            <DateField
+              value={historyDay}
+              onChange={setHistoryDay}
+              placeholder="Whole week"
+              aria-label="Filter by day"
+            />
+          </label>
+          <label className="field-inline filter-bar__field">
+            <span className="label">Type</span>
+            <SelectField
+              value={historyType}
+              onChange={setHistoryType}
+              options={[
+                { value: '', label: 'Check-in + out' },
+                { value: 'check_in', label: 'Check-in' },
+                { value: 'check_out', label: 'Check-out' },
+              ]}
+              aria-label="Filter by log type"
+            />
+          </label>
+          <label className="field-inline filter-bar__field">
+            <span className="label">Status</span>
+            <SelectField
+              value={historyStatus}
+              onChange={setHistoryStatus}
+              options={[
+                { value: '', label: 'All statuses' },
+                { value: 'allowed', label: 'Allowed' },
+                { value: 'rejected', label: 'Rejected' },
+              ]}
+              aria-label="Filter by status"
+            />
+          </label>
+          {hasHistoryFilters ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setHistorySearch('');
+                setHistoryDay('');
+                setHistoryType('');
+                setHistoryStatus('');
+              }}
+            >
+              Clear
+            </button>
+          ) : null}
         </div>
         {historyError ? <div className="alert alert--error">{historyError}</div> : null}
         {historyColumnsError ? <div className="alert alert--error">{historyColumnsError}</div> : null}
@@ -2357,10 +2553,10 @@ export default function AdminAttendance() {
           <div className="attendance-grid-empty">
             <EmptyState
               icon={EMPTY_ICONS.calendar}
-              title="No attendance records for this week"
+              title="No attendance records found"
               description={
-                deptFilter !== 'all' || statusFilter !== 'all'
-                  ? 'Adjust the filters to see more records.'
+                hasHistoryFilters
+                  ? 'Adjust the search or filters to see more records.'
                   : 'Employees have not checked in during this week.'
               }
             />
@@ -2443,10 +2639,11 @@ export default function AdminAttendance() {
         <ColumnEditorPanel
           open={historyEditorOpen}
           columns={HISTORY_COLUMNS}
-          isColumnVisible={isHistoryColumnVisible}
-          onToggle={handleHistoryColumnToggle}
+          isColumnVisible={isHistoryDraftVisible}
+          onToggle={handleHistoryDraftToggle}
           loading={historyColumnsLoading}
-          onClose={() => setHistoryEditorOpen(false)}
+          onClose={applyHistoryColumns}
+          onCancel={cancelHistoryEdit}
         />
       </section>
 
@@ -2475,7 +2672,14 @@ export default function AdminAttendance() {
           </p>
         </section>
 
-        <div className="attendance-summary__grid" aria-label="Weekly attendance summary">
+        <div
+          className="attendance-summary__grid"
+          aria-label={
+            historyDay
+              ? `Attendance summary for ${formatScopeDayLabel(historyDay)}`
+              : 'Weekly attendance summary'
+          }
+        >
           {SUMMARY_CARDS.map((card) => (
             <article key={card.key} className={`attendance-summary card attendance-summary--${card.tone}`}>
               <div className="attendance-summary__head">
@@ -2513,7 +2717,11 @@ export default function AdminAttendance() {
       <AttendanceDayPickerModal
         target={editPickerTarget}
         onClose={closeEditPickerModal}
-        onSelectDay={(dayKey, cell) => openEditForDay(editPickerTarget.employee, dayKey, cell)}
+        onSelectDay={(dayKey, cell) =>
+          openEditForDay(editPickerTarget.employee, dayKey, cell, {
+            readOnly: editPickerTarget.readOnly === true,
+          })
+        }
       />
       <AttendanceEditModal
         target={editTarget}
@@ -2521,6 +2729,7 @@ export default function AdminAttendance() {
         error={editError}
         saving={editSaving}
         statusOptions={statusOptions}
+        readOnly={editReadOnly}
         onClose={closeEditModal}
         onChange={patchEditForm}
         onSubmit={saveAttendanceEdit}

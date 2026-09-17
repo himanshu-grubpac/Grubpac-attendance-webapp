@@ -9,6 +9,7 @@ export default function LeaveDecisionModal({
   initialComment = '',
   busy = false,
   error = '',
+  notice = '',
   onApprove,
   onReject,
   onCancel,
@@ -133,6 +134,12 @@ export default function LeaveDecisionModal({
         {error ? (
           <div className="alert alert--error confirm-dialog__error" role="alert">
             {error}
+          </div>
+        ) : null}
+
+        {notice ? (
+          <div className="alert alert--warning confirm-dialog__error" role="note">
+            {notice}
           </div>
         ) : null}
 

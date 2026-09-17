@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { authenticate, invalidateUserSessions } from '../middleware/auth.js';
-import { authLimiter, passwordResetLimiter } from '../middleware/rateLimiters.js';
+import { authLimiter, passwordResetLimiter, refreshLimiter } from '../middleware/rateLimiters.js';
 import {
   loginUser,
   getCurrentUser,
+  refreshSession,
   updateProfile,
   changePassword,
   setPin,
@@ -17,8 +18,8 @@ import {
   verifyPasswordReset,
   resetPassword,
 } from '../controllers/passwordResetController.js';
-import { clearCsrfCookie } from '../middleware/csrf.js';
-import { auditLog, getRequestAuditContext } from '../utils/auditLog.js';
+import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, clearCsrfCookie } from '../middleware/csrf.js';
+import { auditLog, auditRequest, getRequestAuditContext } from '../utils/auditLog.js';
 
 const router = Router();
 
@@ -49,10 +50,26 @@ router.post(
   authenticate,
   asyncHandler(async (req, res) => {
     await invalidateUserSessions(req.user._id);
-    auditLog('logout', { userId: req.user._id.toString(), email: req.user.email });
+    auditRequest(req, 'logout', { userId: req.user._id.toString(), email: req.user.email });
     clearAuthCookie(res);
     clearCsrfCookie(res);
     res.json({ message: 'Logged out successfully.' });
+  }),
+);
+
+// Sliding session renewal (see refreshSession). Authenticated only, CSRF
+// enforced by the global csrfProtection middleware — the client sends the
+// X-CSRF-Token header like any other mutation. Deliberately not audit-logged:
+// it fires unattended every ~45 minutes per open browser.
+router.post(
+  '/refresh',
+  refreshLimiter,
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const csrfToken = req.cookies?.[CSRF_COOKIE_NAME] ?? req.headers[CSRF_HEADER_NAME] ?? null;
+    const result = await refreshSession(req.user._id, csrfToken);
+    applyAuthSession(res, result);
+    res.json({ csrfToken: result.csrfToken, expiresAt: result.expiresAt });
   }),
 );
 

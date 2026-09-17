@@ -28,6 +28,7 @@ import {
   encashLeaveBalanceHandler,
   getApprovalsPendingCountsHandler,
   getLeaveBalances,
+  getLeavePolicyHistory,
   getLeaveRequestHandler,
   getMyLeaveBalances,
   getLopRecordsHandler,
@@ -58,6 +59,7 @@ import { compOffDecisionLoginHandler } from '../controllers/compOffController.js
 import {
   batchAdjustLeaveCarriedHandler,
   getLeaveAdjustmentGridHandler,
+  getLeaveAdjustmentHistoryHandler,
 } from '../controllers/leaveAdjustmentController.js';
 
 const router = Router();
@@ -105,6 +107,11 @@ router.patch(
   '/policies/:id',
   requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
   asyncHandler(updateLeavePolicy),
+);
+router.get(
+  '/policies/:id/history',
+  requirePermission(PERMISSIONS.LEAVE_READ, PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  asyncHandler(getLeavePolicyHistory),
 );
 
 router.get('/balances/me', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(getMyLeaveBalances));
@@ -273,6 +280,11 @@ router.get(
   '/adjustments/grid',
   requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
   asyncHandler(getLeaveAdjustmentGridHandler),
+);
+router.get(
+  '/adjustments/history/:userId',
+  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  asyncHandler(getLeaveAdjustmentHistoryHandler),
 );
 router.post(
   '/adjustments/batch',

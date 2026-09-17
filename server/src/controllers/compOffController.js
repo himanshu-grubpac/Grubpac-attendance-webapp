@@ -9,6 +9,7 @@ import {
 import {
   assessCompOffWork,
   autoLoginByCompOffDecisionToken,
+  cancelApprovedCompOff,
   createCompOffRequest,
   decideCompOffRequest,
   getCompOffApprovalsCount,
@@ -51,8 +52,8 @@ export async function getCompOffApprovalsCountHandler(req, res) {
 }
 
 export async function withdrawCompOffRequestHandler(req, res) {
-  const request = await undoCompOffSubmit(req.params.id, req.user);
-  res.json({ request });
+  const result = await undoCompOffSubmit(req.params.id, req.user);
+  res.json(result);
 }
 
 export async function undoCompOffWithdrawHandler(req, res) {
@@ -86,6 +87,17 @@ export async function rejectCompOffRequestHandler(req, res) {
 
 export async function undoCompOffDecisionHandler(req, res) {
   const request = await undoCompOffDecision(req.params.id, req.user, req.userPermissions);
+  res.json({ request });
+}
+
+export async function cancelApprovedCompOffRequestHandler(req, res) {
+  const parsed = compOffDecisionSchema.parse(req.body ?? {});
+  const request = await cancelApprovedCompOff(
+    req.params.id,
+    req.user,
+    req.userPermissions,
+    parsed,
+  );
   res.json({ request });
 }
 

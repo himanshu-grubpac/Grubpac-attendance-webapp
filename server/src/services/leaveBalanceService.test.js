@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   computeCombinedCarryForward,
+  computeEntitledForPolicy,
   computeStandaloneCarryForward,
   getAvailableBalance,
   getPaidLeaveQuota,
@@ -149,4 +150,102 @@ test('getPaidLeaveQuota includes compOffEarned', () => {
     getPaidLeaveQuota({ entitled: 0, carried: 0, compOffEarned: 0, used: 0, pending: 0, encashed: 0 }),
     0,
   );
+});
+
+// --- computeEntitledForPolicy tests ---
+
+function makePolicy(overrides = {}) {
+  return {
+    annualQuota: 30,
+    accrualPerMonth: 0,
+    carryForwardMax: 0,
+    maxAccumulation: 0,
+    paid: true,
+    encashmentMaxPerYear: 0,
+    combinedCarryGroup: null,
+    ...overrides,
+  };
+}
+
+test('computeEntitledForPolicy returns full quota for non-accrual type with no DOJ', () => {
+  const policy = makePolicy({ annualQuota: 30 });
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'));
+  assert.equal(result, 30);
+});
+
+test('computeEntitledForPolicy pro-rates non-accrual type for mid-year DOJ', () => {
+  const policy = makePolicy({ annualQuota: 30 });
+  const joiningDate = new Date('2026-07-01');
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  // joinMonth=7, remaining=6, ceil(30*6/12)=ceil(15)=15
+  assert.equal(result, 15);
+});
+
+test('computeEntitledForPolicy pro-rates non-accrual type for Jan DOJ (full year)', () => {
+  const policy = makePolicy({ annualQuota: 30 });
+  const joiningDate = new Date('2026-01-01');
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  // joinMonth=1, remaining=12, ceil(30*12/12)=30
+  assert.equal(result, 30);
+});
+
+test('computeEntitledForPolicy returns 0 for future DOJ year', () => {
+  const policy = makePolicy({ annualQuota: 30 });
+  const joiningDate = new Date('2027-03-01');
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 0);
+});
+
+test('computeEntitledForPolicy returns full quota when DOJ is before policy year', () => {
+  const policy = makePolicy({ annualQuota: 30 });
+  const joiningDate = new Date('2025-06-15');
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 30);
+});
+
+test('computeEntitledForPolicy accrual: full months from Jan for pre-year DOJ', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2025-06-15');
+  // As of Sep 2026, monthsElapsed=9, 9*2.5=22.5
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 22.5);
+});
+
+test('computeEntitledForPolicy accrual: months relative to DOJ for mid-year joiner', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2026-07-01');
+  // As of Sep 2026, DOJ=Jul (month 7), asOf=Sep (month 9), accrualMonths=9-7+1=3, 3*2.5=7.5
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 7.5);
+});
+
+test('computeEntitledForPolicy accrual: caps at annualQuota', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2026-01-01');
+  // As of Sep 2026, months=9, 9*2.5=22.5 (below cap)
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 22.5);
+});
+
+test('computeEntitledForPolicy accrual: caps at annualQuota for full year', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2025-01-01');
+  // As of Dec 2026, months=12, 12*2.5=30, capped at 30
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-12-31'), joiningDate);
+  assert.equal(result, 30);
+});
+
+test('computeEntitledForPolicy accrual: 0 months for future DOJ', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2027-03-01');
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 0);
+});
+
+test('computeEntitledForPolicy accrual: single month DOJ (joined this month)', () => {
+  const policy = makePolicy({ annualQuota: 30, accrualPerMonth: 2.5 });
+  const joiningDate = new Date('2026-09-01');
+  // As of Sep 2026, accrualMonths=9-9+1=1, 1*2.5=2.5
+  const result = computeEntitledForPolicy(policy, 2026, new Date('2026-09-15'), joiningDate);
+  assert.equal(result, 2.5);
 });

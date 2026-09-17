@@ -96,6 +96,18 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
+  if (user.endingDate && new Date(user.endingDate) < new Date()) {
+    auditLog('login_failed', {
+      identifier: parsed.identifier,
+      reason: 'employment_ended',
+      endingDate: user.endingDate,
+      ...loginAuditContext,
+    });
+    const error = new Error('Your employment has ended. Contact your administrator.');
+    error.statusCode = 403;
+    throw error;
+  }
+
   const permissions = resolveUserPermissions(user);
 
   if (portal === 'admin' && !hasAdminPortalAccess(permissions)) {
@@ -169,6 +181,9 @@ export async function loginUser(body, portal, auditContext = {}) {
     user: {
       ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
       loginPortal: portal,
+      // Single source of truth with toSafeJSON: either flag forces the
+      // first-login gate (covers legacy rows where only one was ever set).
+      mustChangePassword: Boolean(user.forcePasswordChange || user.mustChangePassword),
     },
   };
 }
@@ -176,6 +191,33 @@ export async function loginUser(body, portal, auditContext = {}) {
 export function applyAuthSession(res, { token, csrfToken }) {
   setAuthCookie(res, token);
   setCsrfCookie(res, csrfToken);
+}
+
+/**
+ * Sliding session renewal for long-lived tabs (e.g. an admin triaging the
+ * Pending Requests queue for hours).
+ *
+ * The JWT cookie has a 2h browser lifetime (`jwtCookieMaxAgeMs`). Without
+ * renewal, the browser silently discards it and every subsequent mutation
+ * (approve/reject/confirm) 401s the user to /login. Renewing ahead of expiry
+ * keeps the session alive while the tab stays open.
+ *
+ * The current CSRF token value is preserved (not rotated) so other open tabs
+ * — which hold the old token in memory — keep passing double-submit checks.
+ * A fresh token is minted only when the client sent none.
+ */
+export async function refreshSession(userId, csrfToken) {
+  const user = await loadAuthenticatedUser(userId);
+  if (!user || !user.isActive) {
+    const error = new Error('Session has expired.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return {
+    token: signToken(user),
+    csrfToken: csrfToken || generateCsrfToken(),
+    expiresAt: Date.now() + env.jwtCookieMaxAgeMs,
+  };
 }
 
 export async function getCurrentUser(userId) {
@@ -257,7 +299,9 @@ export async function changePassword(userId, body) {
   }
 
   user.passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  user.mustChangePassword = false;
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+  user.forcePasswordChange = false;
   await user.save();
 
   auditLog('password_changed', {
@@ -276,9 +320,8 @@ export async function changePassword(userId, body) {
 }
 
 /**
- * Employee self-service PIN setup and change.
- * - Only employees may set a PIN (admins use the admin reset endpoint).
- * - Setting a PIN for the first time requires no current PIN.
+ * Self-service PIN setup and change (all roles).
+ * - Setting a PIN for the first time requires the current password.
  * - Changing an existing PIN requires the current PIN to be supplied and correct.
  * - PINs are strictly 4-digit (pin4Hash).
  */

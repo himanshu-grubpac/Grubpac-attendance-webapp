@@ -20,6 +20,7 @@ import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import {
   assessCompOffWork,
+  cancelApprovedCompOff,
   consumeCompOffDecisionToken,
   createCompOffRequest,
   decideCompOffRequest,
@@ -156,7 +157,7 @@ function countNotifications(type = null) {
   return Notification.countDocuments(filter);
 }
 
-test('withdraw stages silently: request stays pending until the window expires', async () => {
+test('undo inside the submit window deletes the never-live request silently', async () => {
   const { employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   assert.equal(created.status, 'pending');
@@ -167,19 +168,19 @@ test('withdraw stages silently: request stays pending until the window expires',
   assert.equal(testEmailOutbox.length, 0);
   assert.equal(testSmsOutbox.length, 0);
 
+  // Like the Apply Leave undo: the never-live row disappears entirely instead
+  // of lingering as a CANCELLED entry — only final decisions leave rows.
   const withdrawn = await undoCompOffSubmit(created.id, employee);
-  assert.equal(withdrawn.status, 'pending', 'staged withdrawal keeps status pending');
-  assert.equal(withdrawn.pendingAction, 'cancelled');
-  assert.ok(withdrawn.decisionUndoExpiresAt, 'withdrawal carries its own undo expiry');
-  assert.equal(await countNotifications(), 0, 'staging the withdrawal is silent');
+  assert.equal(withdrawn.deleted, true);
+  assert.equal(withdrawn.id, created.id);
+  assert.equal(await CompOffRequest.findById(created.id).lean(), null, 'row deleted');
+  assert.equal(await countNotifications(), 0, 'deleting the undo is silent');
   assert.equal(testEmailOutbox.length, 0);
   assert.equal(testSmsOutbox.length, 0);
 
-  // Finalize the staged withdrawal: silent cancellation, no balance touch.
+  // A later sweep finds nothing to finalize and stays silent.
   await runCompOffSweep(FUTURE);
-  const final = await CompOffRequest.findById(created.id).lean();
-  assert.equal(final.status, 'cancelled');
-  assert.equal(await countNotifications(), 0, 'finalized withdrawal stays silent');
+  assert.equal(await countNotifications(), 0);
   assert.equal(testEmailOutbox.length, 0);
   assert.equal(testSmsOutbox.length, 0);
 
@@ -187,15 +188,17 @@ test('withdraw stages silently: request stays pending until the window expires',
   const coType = await LeaveType.findOne({ code: 'CO' });
   const balances = await LeaveBalance.find({ userId: employee._id, leaveTypeId: coType._id });
   assert.equal(balances.length, 0, 'no CO balance row should exist');
+
+  // The same dates are immediately reusable — no staged row blocks resubmit.
+  const second = await submitCompOff(employee, satKey, null, 'Second attempt');
+  assert.equal(second.status, 'pending');
 });
 
 test('repeated submit/withdraw notifies the manager exactly once for the surviving request', async () => {
   const { manager, employee, satKey } = await createCompOffFixture();
   const first = await submitCompOff(employee, satKey, null, 'First attempt');
   await undoCompOffSubmit(first.id, employee);
-  // The staged withdrawal must finalize before the same dates are reusable.
-  await runCompOffSweep(FUTURE);
-  assert.equal((await CompOffRequest.findById(first.id).lean()).status, 'cancelled');
+  assert.equal(await CompOffRequest.findById(first.id).lean(), null, 'undone row deleted');
 
   const second = await submitCompOff(employee, satKey, null, 'Second attempt');
   await runCompOffSweep(FUTURE);
@@ -383,8 +386,7 @@ test('overlapping open request 409 and overlapping leave 400 block creation', as
     (err) => err.statusCode === 409,
   );
   await undoCompOffSubmit(created.id, employee);
-  await runCompOffSweep(FUTURE);
-  assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'cancelled');
+  assert.equal(await CompOffRequest.findById(created.id).lean(), null, 'undone row deleted');
 
   // Leave overlap: an SL leave request (non-WFH) covering the day blocks.
   const slType = await LeaveType.findOne({ code: 'SL' });
@@ -899,13 +901,31 @@ test('expired Take Action tokens are rejected by peek and login', async () => {
   assert.equal(dead.statusCode, 410);
 });
 
-test('withdraw → undo-withdraw restores a live request with a fresh notify window', async () => {
+/**
+ * New withdrawals delete the never-live row outright, so the legacy staged
+ * path (pendingAction 'cancelled') can only be reached by rows staged before
+ * that change. This helper reconstructs such a row for coverage.
+ */
+async function stageLegacyWithdrawal(id) {
+  const now = new Date();
+  await CompOffRequest.updateOne(
+    { _id: id },
+    {
+      $set: {
+        pendingAction: 'cancelled',
+        decidedAt: now,
+        undoExpiresAt: new Date(now.getTime() + 60_000),
+        notifyAfter: new Date(now.getTime() + 60_000),
+        finalizedAt: null,
+      },
+    },
+  );
+}
+
+test('legacy staged withdrawal → undo-withdraw restores a live request with a fresh notify window', async () => {
   const { employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
-
-  const staged = await undoCompOffSubmit(created.id, employee);
-  assert.equal(staged.status, 'pending');
-  assert.equal(staged.pendingAction, 'cancelled');
+  await stageLegacyWithdrawal(created.id);
 
   const restored = await undoCompOffWithdraw(created.id, employee);
   assert.equal(restored.status, 'pending');
@@ -920,40 +940,32 @@ test('withdraw → undo-withdraw restores a live request with a fresh notify win
   assert.equal(testEmailOutbox.filter((m) => m.tag === 'comp-off-manager').length, 1);
 });
 
-test('resubmit is blocked while a withdrawal is staged, allowed after it finalizes', async () => {
+test('undone never-live requests free their dates for immediate resubmit', async () => {
   const { employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await undoCompOffSubmit(created.id, employee);
+  assert.equal(await CompOffRequest.findById(created.id).lean(), null, 'undone row deleted');
 
-  await assert.rejects(
-    submitCompOff(employee, satKey, null, 'Duplicate while withdrawing'),
-    (err) => err.statusCode === 409,
-  );
-
-  await runCompOffSweep(FUTURE);
-  assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'cancelled');
-  assert.equal(testEmailOutbox.length, 0, 'withdrawal finalize is silent');
-
-  const second = await submitCompOff(employee, satKey, null, 'After withdrawal finalized');
+  // No staged row blocks the same dates and no sweep is needed first.
+  const second = await submitCompOff(employee, satKey, null, 'Resubmitted right away');
   assert.equal(second.status, 'pending');
+  assert.equal(testEmailOutbox.length, 0, 'resubmit itself is silent');
 });
 
-test('double withdraw and manager decide during staged withdraw both lose with 409', async () => {
+test('second withdraw and manager decide after a delete both lose with 404', async () => {
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await undoCompOffSubmit(created.id, employee);
 
   await assert.rejects(
     undoCompOffSubmit(created.id, employee),
-    (err) => err.statusCode === 409,
+    (err) => err.statusCode === 404,
   );
   await assert.rejects(
     decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' }),
-    (err) => err.statusCode === 409,
+    (err) => err.statusCode === 404,
   );
-  // The staged withdrawal itself is untouched by the losers.
-  const live = await CompOffRequest.findById(created.id).lean();
-  assert.equal(live.pendingAction, 'cancelled');
+  assert.equal(await CompOffRequest.findById(created.id).lean(), null, 'row stays deleted');
 });
 
 test('withdraw after the manager was notified stays rejected', async () => {
@@ -971,7 +983,7 @@ test('withdraw after the manager was notified stays rejected', async () => {
 test('undo-withdraw past expiry is rejected; non-owner gets 403', async () => {
   const { manager, employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
-  await undoCompOffSubmit(created.id, employee);
+  await stageLegacyWithdrawal(created.id);
 
   const other = await createUser('Stranger');
   await assert.rejects(
@@ -994,8 +1006,8 @@ test('undo-withdraw past expiry is rejected; non-owner gets 403', async () => {
 
 test('withdraw before finalize kills Take Action links issued at submit finalize', async () => {
   // Tokens are only issued at submit finalize, after which withdraw is
-  // rejected — so this drives the reverse order: withdraw first (no tokens
-  // can exist yet), then prove no link can ever be minted for it.
+  // rejected — so this drives the reverse order: withdraw first (the row is
+  // deleted, so no tokens can ever exist), then prove no link can be minted.
   const { employee, satKey } = await createCompOffFixture();
   const created = await submitCompOff(employee, satKey);
   await undoCompOffSubmit(created.id, employee);
@@ -1232,7 +1244,7 @@ test('BUG-019: unauthorized user cannot approve/reject outside their scope', asy
 
   const unrelated = await createUser('Unrelated Manager', { isManager: true });
   await assert.rejects(
-    decideCompOffRequest(created.id, unrelated, MANAGER_PERMS, 'approved', {}),
+    decideCompOffRequest(created.id, unrelated, MANAGER_PERMS, 'approved', { comment: 'Trying to approve.' }),
     (err) => err.statusCode === 403,
     'unrelated manager cannot approve',
   );
@@ -1261,4 +1273,112 @@ test('BUG-019: submit notification does not affect visibility — request visibl
   });
   assert.equal(approvals.pagination.total, 1, 'visible after sweep');
   assert.equal(approvals.requests[0].id, created.id);
+});
+
+async function driveToApproved(manager, employee, satKey, sunKey = null) {
+  const created = await submitCompOff(employee, satKey, sunKey);
+  await runCompOffSweep(FUTURE);
+  await decideCompOffRequest(created.id, manager, MANAGER_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
+  await runCompOffSweep(FUTURE);
+  assert.equal((await CompOffRequest.findById(created.id).lean()).status, 'approved');
+  return created;
+}
+
+test('manager cancels an approved request: staged, then notified on finalize', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await driveToApproved(manager, employee, satKey);
+
+  const staged = await cancelApprovedCompOff(created.id, manager, MANAGER_PERMS, { comment: 'Weekend cover no longer needed.' });
+  assert.equal(staged.status, 'approved', 'status frozen during undo window');
+  assert.equal(staged.pendingAction, 'cancelled');
+  assert.equal(staged.cancelledBy, manager._id.toString());
+  assert.equal(await countNotifications('comp_off_decision'), 1, 'no cancel notice while undoable');
+
+  await runCompOffSweep(FUTURE);
+  const final = await CompOffRequest.findById(created.id).lean();
+  assert.equal(final.status, 'cancelled');
+  assert.equal(final.cancelledBy.toString(), manager._id.toString());
+  assert.equal(await countNotifications('comp_off_decision'), 2, 'applicant notified of the revoke');
+  const cancelMail = testEmailOutbox.filter((m) => m.tag === 'comp-off-status').slice(-1)[0];
+  assert.ok(cancelMail.text.includes('cancelled'));
+  assert.ok(cancelMail.text.includes('Weekend cover no longer needed.'));
+});
+
+test('cancel requires an approved request, a remark, and approval scope', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const otherManager = await createUser('Cancel Other Manager', { isManager: true });
+  const created = await submitCompOff(employee, satKey);
+  await runCompOffSweep(FUTURE);
+
+  // Pending requests cannot be cancelled (approve/reject them instead).
+  await assert.rejects(
+    cancelApprovedCompOff(created.id, manager, MANAGER_PERMS, { comment: 'Too early.' }),
+    (err) => err.statusCode === 409,
+  );
+  // Remark is mandatory.
+  const approved = await driveToApproved(manager, employee, nextWeekendKey(satKey));
+  await assert.rejects(
+    cancelApprovedCompOff(approved.id, manager, MANAGER_PERMS, {}),
+    (err) => err.statusCode === 400,
+  );
+  // Out-of-scope managers cannot cancel.
+  await assert.rejects(
+    cancelApprovedCompOff(approved.id, otherManager, MANAGER_PERMS, { comment: 'Not mine.' }),
+    (err) => err.statusCode === 403,
+  );
+  // Employee cannot cancel via the approver path.
+  await assert.rejects(
+    cancelApprovedCompOff(approved.id, employee, EMPLOYEE_PERMS, { comment: 'Changed mind.' }),
+    (err) => err.statusCode === 403,
+  );
+  assert.equal((await CompOffRequest.findById(approved.id).lean()).pendingAction, null);
+});
+
+test('undoing a staged cancel restores approved with the original approver', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await driveToApproved(manager, employee, satKey);
+
+  await cancelApprovedCompOff(created.id, manager, MANAGER_PERMS, { comment: 'Taking it back soon.' });
+  const undone = await undoCompOffDecision(created.id, manager, MANAGER_PERMS);
+  assert.equal(undone.status, 'approved');
+  assert.equal(undone.pendingAction, null);
+  assert.equal(undone.cancelledBy, null);
+  assert.equal(undone.approverId, manager._id.toString(), 'original approver preserved');
+  assert.equal(await countNotifications('comp_off_undone'), 1);
+
+  await runCompOffSweep(FUTURE);
+  const live = await CompOffRequest.findById(created.id).lean();
+  assert.equal(live.status, 'approved', 'undone cancel never finalizes');
+  assert.equal(testEmailOutbox.filter((m) => m.tag === 'comp-off-status').length, 1, 'only the approval mail');
+});
+
+test('employee cannot undo an approver-staged cancellation', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await driveToApproved(manager, employee, satKey);
+
+  await cancelApprovedCompOff(created.id, manager, MANAGER_PERMS, { comment: 'Revoked.' });
+  await assert.rejects(
+    undoCompOffWithdraw(created.id, employee),
+    (err) => err.statusCode === 403,
+  );
+  const live = await CompOffRequest.findById(created.id).lean();
+  assert.equal(live.pendingAction, 'cancelled', 'staged revoke untouched');
+});
+
+test('lapse sweep never clobbers a staged cancellation', async () => {
+  const { manager, employee, satKey } = await createCompOffFixture();
+  const created = await driveToApproved(manager, employee, satKey);
+  await cancelApprovedCompOff(created.id, manager, MANAGER_PERMS, { comment: 'Revoked.' });
+
+  // Push the staged windows out and advance the clock beyond the lapse
+  // boundary: the finalizer must skip (not due) and lapse must skip (staged).
+  const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await CompOffRequest.updateOne(
+    { _id: created.id },
+    { $set: { notifyAfter: farFuture, undoExpiresAt: farFuture } },
+  );
+  await runCompOffSweep(new Date(Date.now() + 10 * 24 * 60 * 60 * 1000));
+  const live = await CompOffRequest.findById(created.id).lean();
+  assert.equal(live.status, 'approved', 'staged cancel not lapsed');
+  assert.equal(live.pendingAction, 'cancelled');
 });

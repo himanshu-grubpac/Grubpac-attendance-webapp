@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage, preferencesApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { IST_TIMEZONE } from '../../utils/datetime.js';
@@ -13,6 +14,7 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
+import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
@@ -66,6 +68,30 @@ function visibleColumnsToPayload(visibleKeys) {
   }));
 }
 
+// Filter memory across the details round-trip (per-tab session storage).
+const FILTER_STORAGE_KEY = 'grubpac.adminUsers.filters.v1';
+
+function readStoredFilters() {
+  try {
+    const raw = sessionStorage.getItem(FILTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const cleaned = {};
+    if (typeof parsed.search === 'string') cleaned.search = parsed.search;
+    if (typeof parsed.statusFilter === 'string') cleaned.statusFilter = parsed.statusFilter;
+    if (typeof parsed.departmentFilter === 'string') cleaned.departmentFilter = parsed.departmentFilter;
+    if (typeof parsed.roleFilter === 'string') cleaned.roleFilter = parsed.roleFilter;
+    if (typeof parsed.newThisMonthFilter === 'boolean') {
+      cleaned.newThisMonthFilter = parsed.newThisMonthFilter;
+    }
+    return cleaned;
+  } catch {
+    // Storage unavailable (private mode) — filters just won't persist.
+    return {};
+  }
+}
+
 const STATUS_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'true', label: 'Active' },
@@ -104,12 +130,15 @@ const STAT_CARDS = [
 ];
 
 function formatJoinedSinceHint(monthKey) {
-  if (!monthKey) return 'Joined since month start';
+  // Registration-based (createdAt), matching the stat + list predicate —
+  // deliberately "registered", not "joined": bulk-imported employees carry
+  // historical joining dates but were registered this month.
+  if (!monthKey) return 'Registered since month start';
   const [year, month] = monthKey.split('-').map(Number);
   const monthAbbr = new Intl.DateTimeFormat('en-IN', { month: 'short' }).format(
     new Date(year, month - 1, 1),
   );
-  return `Joined since ${monthAbbr} 1st`;
+  return `Registered since ${monthAbbr} 1st`;
 }
 
 function departmentLabel(employee) {
@@ -181,6 +210,7 @@ export default function AdminUsers() {
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
   const canReadAllAttendance = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const { showSuccess } = useToast();
 
   const [employees, setEmployees] = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -188,12 +218,15 @@ export default function AdminUsers() {
   const [departments, setDepartments] = useState([]);
   const [roles, setRoles] = useState([]);
   const [managers, setManagers] = useState([]);
+  const [storedFilters] = useState(readStoredFilters);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [departmentFilter, setDepartmentFilter] = useState('');
-  const [roleFilter, setRoleFilter] = useState('');
-  const [newThisMonthFilter, setNewThisMonthFilter] = useState(false);
+  const [search, setSearch] = useState(storedFilters.search ?? '');
+  const [statusFilter, setStatusFilter] = useState(storedFilters.statusFilter ?? '');
+  const [departmentFilter, setDepartmentFilter] = useState(storedFilters.departmentFilter ?? '');
+  const [roleFilter, setRoleFilter] = useState(storedFilters.roleFilter ?? '');
+  const [newThisMonthFilter, setNewThisMonthFilter] = useState(
+    storedFilters.newThisMonthFilter ?? false,
+  );
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   // RBAC-filtered column keys for the editor inventory (null = not loaded yet).
   const [allowedColumnKeys, setAllowedColumnKeys] = useState(null);
@@ -204,8 +237,11 @@ export default function AdminUsers() {
   const [columnsLoading, setColumnsLoading] = useState(true);
   const [columnsError, setColumnsError] = useState('');
   const [showColumnEditor, setShowColumnEditor] = useState(false);
+  // Draft edited inside the panel; only applied to the table on Done.
+  const [draftColumns, setDraftColumns] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef(null);
+  const tableWrapRef = useRef(null);
   const debouncedSearch = useDebouncedValue(search, 350);
   const skipDebouncedSearchRef = useRef(true);
   const requestKeyRef = useRef('');
@@ -295,9 +331,11 @@ export default function AdminUsers() {
     try {
       const data = await adminApi.getEmployeeStats();
       setStats(data.stats ?? null);
+      return data.stats ?? null;
     } catch (err) {
       setStats(null);
       setStatsError(getErrorMessage(err));
+      return null;
     } finally {
       setStatsLoading(false);
     }
@@ -359,7 +397,6 @@ export default function AdminUsers() {
 
   useEffect(() => {
     loadColumnPreferences();
-    loadStats();
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
@@ -374,8 +411,41 @@ export default function AdminUsers() {
       .listManagers()
       .then((data) => setManagers(data.managers ?? []))
       .catch(() => { });
-    loadEmployees({ query: '', nextPage: 1, nextStatus: '', nextDepartment: '', nextRole: '' });
+    // Stats first: the persisted month filter needs monthKey, which only
+    // the stats response provides. Loading employees before it resolves
+    // would silently drop the month predicate.
+    (async () => {
+      const monthStats = await loadStats();
+      loadEmployees({
+        query: search,
+        nextPage: 1,
+        nextStatus: statusFilter,
+        nextDepartment: departmentFilter,
+        nextRole: roleFilter,
+        nextNewThisMonth: newThisMonthFilter,
+        monthKey: monthStats?.monthKey ?? null,
+      });
+    })();
+    // Intentionally runs once: restores the persisted filter set (if any).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadColumnPreferences, loadEmployees, loadStats]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        FILTER_STORAGE_KEY,
+        JSON.stringify({
+          search,
+          statusFilter,
+          departmentFilter,
+          roleFilter,
+          newThisMonthFilter,
+        }),
+      );
+    } catch {
+      // Storage unavailable — filters just won't persist.
+    }
+  }, [search, statusFilter, departmentFilter, roleFilter, newThisMonthFilter]);
 
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {
@@ -496,13 +566,22 @@ export default function AdminUsers() {
   function handleStatCardClick(key) {
     switch (key) {
       case 'total':
-        // clear all employee filters
+        // Clear all employee filters (state AND request): leaving stale
+        // status/department/role/search state behind desyncs the dropdowns
+        // from the rows, and the infinite-scroll observer would then append
+        // with the old status and clobber pagination ("Showing 10 of 5").
+        setSearch('');
+        setStatusFilter('');
+        setDepartmentFilter('');
+        setRoleFilter('');
         setNewThisMonthFilter(false);
+        skipDebouncedSearchRef.current = true;
         loadEmployees({
-          query: search,
+          query: '',
           nextPage: 1,
           nextStatus: '',
           nextDepartment: '',
+          nextRole: '',
           nextNewThisMonth: false,
         });
         break;
@@ -552,6 +631,11 @@ export default function AdminUsers() {
           }),
           loadStats(),
         ]);
+        showSuccess(
+          nextActive
+            ? `${employee.name} activated. They can sign in again.`
+            : `${employee.name} deactivated. They can no longer sign in.`,
+        );
       },
     });
   }
@@ -609,16 +693,39 @@ export default function AdminUsers() {
     return visibleColumns.includes(key);
   }
 
-  function handleColumnToggle(key) {
+  function isDraftColumnVisible(key) {
+    return (draftColumns ?? visibleColumns).includes(key);
+  }
+
+  function openColumnEditor() {
+    setDraftColumns([...visibleColumns]);
+    setShowColumnEditor(true);
+  }
+
+  function cancelColumnEdit() {
+    setDraftColumns(null);
+    setShowColumnEditor(false);
+  }
+
+  function handleDraftColumnToggle(key) {
     const column = ALL_COLUMNS.find((c) => c.key === key);
     if (column?.always) return;
-    setVisibleColumns((prev) => {
-      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-      const normalized = normalizeVisibleColumns(next);
-      saveColumnPreferences(normalized).catch(() => {
-        setVisibleColumns(prev);
-      });
-      return normalized;
+    setDraftColumns((prev) => {
+      const base = prev ?? visibleColumns;
+      const next = base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+      return normalizeVisibleColumns(next);
+    });
+  }
+
+  function applyColumnPreferences() {
+    const normalized = normalizeVisibleColumns(draftColumns ?? visibleColumns);
+    const previous = visibleColumns;
+    // Optimistic apply + close; rollback only if the server persist fails.
+    setVisibleColumns(normalized);
+    setDraftColumns(null);
+    setShowColumnEditor(false);
+    saveColumnPreferences(normalized).catch(() => {
+      setVisibleColumns(previous);
     });
   }
 
@@ -626,6 +733,10 @@ export default function AdminUsers() {
     search || statusFilter || departmentFilter || roleFilter || newThisMonthFilter,
   );
   const newThisMonthHint = formatJoinedSinceHint(stats?.monthKey);
+  // Filters combine (AND): with e.g. Status=Inactive also active, the table
+  // is the intersection — spell that out so the stat count (116) vs the
+  // table count (4) never looks like a data bug again.
+  const hasOtherFilters = Boolean(search || statusFilter || departmentFilter || roleFilter);
   const pageSize = pagination?.limit ?? EMPLOYEE_PAGE_SIZE;
 
   return (
@@ -748,32 +859,22 @@ export default function AdminUsers() {
                 </button>
               </div>
             ) : null}
-          </div>
 
-          {canWriteUsers ? (
-            <div className="employees-toolbar__actions">
+            <div className="employees-toolbar__editcol">
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                onClick={() => setShowColumnEditor(true)}
+                onClick={openColumnEditor}
               >
                 Edit columns
               </button>
-              <Link to="/admin/users/register" className="btn btn-primary btn-sm">
-                + Add Employee
-              </Link>
+              {canWriteUsers ? (
+                <Link to="/admin/users/register" className="btn btn-primary btn-sm">
+                  + Add Employee
+                </Link>
+              ) : null}
             </div>
-          ) : (
-            <div className="employees-toolbar__actions">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setShowColumnEditor(true)}
-              >
-                Edit columns
-              </button>
-            </div>
-          )}
+          </div>
         </div>
 
         {listError ? <div className="alert alert--error">{listError}</div> : null}
@@ -781,7 +882,9 @@ export default function AdminUsers() {
 
         {newThisMonthFilter ? (
           <p className="employees-filter-notice muted small" role="status">
-            Showing employees {newThisMonthHint.toLowerCase()}.
+            {hasOtherFilters && pagination && stats?.newThisMonth != null
+              ? `Showing ${pagination.total} of ${stats.newThisMonth} employees ${newThisMonthHint.toLowerCase()} — other filters applied.`
+              : `Showing employees ${newThisMonthHint.toLowerCase()}.`}
           </p>
         ) : null}
 
@@ -820,7 +923,7 @@ export default function AdminUsers() {
           />
         ) : (
           <>
-            <div className="table-wrap table-wrap--responsive employees-table-wrap">
+            <div ref={tableWrapRef} className="table-wrap table-wrap--responsive employees-table-wrap">
               <table className="table data-table employees-table">
                 <thead>
                   <tr>
@@ -949,6 +1052,7 @@ export default function AdminUsers() {
                 </tbody>
               </table>
             </div>
+            <StickyHScrollBar targetRef={tableWrapRef} syncKey={employees.length} />
 
             {pagination && employees.length > 0 ? (
               <p className="employees-scroll-hint muted small" role="status">
@@ -965,15 +1069,15 @@ export default function AdminUsers() {
         <>
           <div
             className="slide-panel-backdrop"
-            onClick={() => setShowColumnEditor(false)}
-            onKeyDown={(e) => e.key === 'Escape' && setShowColumnEditor(false)}
+            onClick={cancelColumnEdit}
+            onKeyDown={(e) => e.key === 'Escape' && cancelColumnEdit()}
           />
           <div
             className="slide-panel"
             role="dialog"
             aria-label="Edit columns"
             style={{ width: '20rem' }}
-            onKeyDown={(e) => e.key === 'Escape' && setShowColumnEditor(false)}
+            onKeyDown={(e) => e.key === 'Escape' && cancelColumnEdit()}
           >
             <div className="slide-panel__header">
               <div className="slide-panel__titles">
@@ -985,7 +1089,7 @@ export default function AdminUsers() {
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                onClick={() => setShowColumnEditor(false)}
+                onClick={cancelColumnEdit}
                 aria-label="Close"
               >
                 ✕
@@ -1006,8 +1110,8 @@ export default function AdminUsers() {
                         <input
                           type="checkbox"
                           className="column-editor-list__checkbox"
-                          checked={isColumnVisible(col.key)}
-                          onChange={() => handleColumnToggle(col.key)}
+                          checked={isDraftColumnVisible(col.key)}
+                          onChange={() => handleDraftColumnToggle(col.key)}
                           disabled={col.always || columnsLoading}
                         />
                         <span className="column-editor-list__text">{col.label}</span>
@@ -1025,7 +1129,7 @@ export default function AdminUsers() {
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  onClick={() => setShowColumnEditor(false)}
+                  onClick={applyColumnPreferences}
                 >
                   Done
                 </button>

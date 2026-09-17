@@ -5,6 +5,7 @@ import { LeaveRequest } from '../models/LeaveRequest.js';
 import { Holiday } from '../models/Holiday.js';
 import { HolidayCategory } from '../models/HolidayCategory.js';
 import { User } from '../models/User.js';
+import { LeavePolicyHistory } from '../models/LeavePolicyHistory.js';
 import {
   createLeavePolicySchema,
   createLeaveRequestSchema,
@@ -32,7 +33,7 @@ import {
   updateHolidaySchema,
 } from '../../../shared/validation/holidays.js';
 import { parseDateInputAsISTDay, getISTYear } from '../utils/istDate.js';
-import { auditLog } from '../utils/auditLog.js';
+import { auditEntityChange, auditRequest, getRequestAuditContext } from '../utils/auditLog.js';
 import { signToken } from '../middleware/auth.js';
 import { generateCsrfToken, setCsrfCookie } from '../middleware/csrf.js';
 import { setAuthCookie } from './authController.js';
@@ -50,7 +51,9 @@ import {
   getBalancesForUser,
   ensureBalancesForUser,
   previewYearEndCarryForward,
+  recomputeEntitledForPolicy,
   recordEncashment,
+  recalculateAllBalancesForPolicy,
 } from '../services/leaveBalanceService.js';
 import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
@@ -97,7 +100,7 @@ export async function createLeaveType(req, res) {
   }
 
   const leaveType = await LeaveType.create(parsed);
-  auditLog('leave_type_created', {
+  auditRequest(req, 'leave_type_created', {
     adminId: req.user._id.toString(),
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
@@ -112,6 +115,12 @@ export async function updateLeaveType(req, res) {
     return res.status(404).json({ message: 'Leave type not found.' });
   }
 
+  const previous = {
+    code: leaveType.code,
+    name: leaveType.name,
+    description: leaveType.description ?? null,
+    isActive: leaveType.isActive,
+  };
   if (parsed.code !== undefined && parsed.code !== leaveType.code) {
     const existing = await LeaveType.findOne({ code: parsed.code });
     if (existing) {
@@ -123,6 +132,21 @@ export async function updateLeaveType(req, res) {
   if (parsed.description !== undefined) leaveType.description = parsed.description;
   if (parsed.isActive !== undefined) leaveType.isActive = parsed.isActive;
   await leaveType.save();
+
+  auditRequest(req, 'leave_type_updated', auditEntityChange({
+    adminId: req.user._id.toString(),
+    module: 'leave',
+    entity: 'LeaveType',
+    entityId: leaveType._id.toString(),
+    action: 'Update',
+    previous,
+    next: {
+      code: leaveType.code,
+      name: leaveType.name,
+      description: leaveType.description ?? null,
+      isActive: leaveType.isActive,
+    },
+  }));
 
   res.json({ type: leaveType.toSafeJSON() });
 }
@@ -144,7 +168,7 @@ export async function deleteLeaveType(req, res) {
   await LeaveBalance.deleteMany({ leaveTypeId: leaveType._id });
   await leaveType.deleteOne();
 
-  auditLog('leave_type_deleted', {
+  auditRequest(req, 'leave_type_deleted', {
     adminId: req.user._id.toString(),
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
@@ -167,6 +191,36 @@ export async function listLeavePolicies(req, res) {
   res.json({ year, policies: policies.map((item) => item.toSafeJSON()) });
 }
 
+export async function getLeavePolicyHistory(req, res) {
+  const policy = await LeavePolicy.findById(req.params.id).populate(LEAVE_POLICY_POPULATE);
+  if (!policy) {
+    return res.status(404).json({ message: 'Leave policy not found.' });
+  }
+
+  const history = await LeavePolicyHistory.find({ policyId: policy._id })
+    .populate('changedBy', 'name email')
+    .sort({ changedAt: -1 })
+    .limit(100);
+
+  res.json({
+    policy: policy.toSafeJSON(),
+    history: history.map((entry) => ({
+      id: entry._id.toString(),
+      annualQuota: entry.annualQuota,
+      accrualPerMonth: entry.accrualPerMonth,
+      carryForwardMax: entry.carryForwardMax,
+      maxAccumulation: entry.maxAccumulation,
+      paid: entry.paid,
+      encashmentMaxPerYear: entry.encashmentMaxPerYear,
+      combinedCarryGroup: entry.combinedCarryGroup,
+      changedBy: entry.changedBy ? { name: entry.changedBy.name, email: entry.changedBy.email } : null,
+      changedAt: entry.changedAt,
+      changeReason: entry.changeReason || null,
+      snapshot: entry.snapshot,
+    })),
+  });
+}
+
 export async function createLeavePolicy(req, res) {
   const parsed = createLeavePolicySchema.parse(req.body);
   const year = parsed.year ?? getISTYear();
@@ -180,13 +234,28 @@ export async function createLeavePolicy(req, res) {
     return res.status(409).json({ message: 'Policy already exists for this leave type and year.' });
   }
 
-  const policy = await LeavePolicy.create({ ...parsed, year });
-  await policy.populate(LEAVE_POLICY_POPULATE);
-  auditLog('leave_policy_created', {
-    adminId: req.user._id.toString(),
-    policyId: policy._id.toString(),
+  const policy = await LeavePolicy.create({
+    ...parsed,
     year,
+    history: [
+      {
+        ...parsed,
+        year,
+        changedBy: req.user._id,
+        effectiveDate: new Date(),
+        action: 'created',
+      },
+    ],
   });
+  await policy.populate(LEAVE_POLICY_POPULATE);
+  auditRequest(req, 'leave_policy_created', auditEntityChange({
+    adminId: req.user._id.toString(),
+    module: 'leave',
+    entity: 'LeavePolicy',
+    entityId: policy._id.toString(),
+    action: 'Create',
+    next: { ...parsed, year },
+  }));
   res.status(201).json({ policy: policy.toSafeJSON() });
 }
 
@@ -197,16 +266,51 @@ export async function updateLeavePolicy(req, res) {
     return res.status(404).json({ message: 'Leave policy not found.' });
   }
 
+  const previous = {
+    annualQuota: policy.annualQuota,
+    accrualPerMonth: policy.accrualPerMonth,
+    carryForwardMax: policy.carryForwardMax,
+    maxAccumulation: policy.maxAccumulation,
+    requireDocAfterConsecutiveDays: policy.requireDocAfterConsecutiveDays ?? null,
+    paid: policy.paid,
+    encashmentMaxPerYear: policy.encashmentMaxPerYear,
+    combinedCarryGroup: policy.combinedCarryGroup ?? null,
+    isActive: policy.isActive,
+  };
   Object.assign(policy, parsed);
+  policy.history = [
+    ...(policy.history ?? []),
+    {
+      ...previous,
+      changedBy: req.user._id,
+      effectiveDate: new Date(),
+      action: 'updated',
+    },
+  ];
   await policy.save();
   await policy.populate(LEAVE_POLICY_POPULATE);
 
-  auditLog('leave_policy_updated', {
+  const recalculatedCount = await recalculateAllBalancesForPolicy(policy);
+
+  auditRequest(req, 'leave_policy_updated', auditEntityChange({
     adminId: req.user._id.toString(),
-    policyId: policy._id.toString(),
+    module: 'leave',
+    entity: 'LeavePolicy',
+    entityId: policy._id.toString(),
+    action: 'Update',
+    previous,
+    next: parsed,
+  }));
+
+  // Mid-year policy edits propagate to every unlocked balance row of that
+  // year's policy (joining-date prorated). Hand-locked rows are skipped.
+  const entitledRecompute = await recomputeEntitledForPolicy(policy._id);
+  auditRequest(req, 'leave_policy_entitled_recomputed', {
+    adminId: req.user._id.toString(),
+    ...entitledRecompute,
   });
 
-  res.json({ policy: policy.toSafeJSON() });
+  res.json({ policy: policy.toSafeJSON(), entitledRecompute });
 }
 
 export async function getMyLeaveBalances(req, res) {
@@ -243,14 +347,38 @@ export async function getLeaveBalances(req, res) {
 
 export async function adjustLeaveBalances(req, res) {
   const parsed = adjustLeaveBalanceSchema.parse(req.body);
+  const beforeDoc = await LeaveBalance.findOne({
+    userId: req.params.userId,
+    leaveTypeId: parsed.leaveTypeId,
+    year: parsed.year,
+  }).lean();
+  const previous = beforeDoc
+    ? {
+        entitled: beforeDoc.entitled ?? 0,
+        used: beforeDoc.used ?? 0,
+        pending: beforeDoc.pending ?? 0,
+        carried: beforeDoc.carried ?? 0,
+        encashed: beforeDoc.encashed ?? 0,
+      }
+    : null;
   const result = await adjustBalance(req.params.userId, parsed, req.user._id);
 
-  auditLog('leave_balance_adjusted', {
+  auditRequest(req, 'leave_balance_adjusted', {
     adminId: req.user._id.toString(),
     userId: req.params.userId,
     leaveTypeId: parsed.leaveTypeId,
     year: parsed.year,
     reason: parsed.reason,
+    previous,
+    next: result?.balance
+      ? {
+          entitled: result.balance.entitled ?? 0,
+          used: result.balance.used ?? 0,
+          pending: result.balance.pending ?? 0,
+          carried: result.balance.carried ?? 0,
+          encashed: result.balance.encashed ?? 0,
+        }
+      : null,
   });
 
   res.json(result);
@@ -262,16 +390,17 @@ export async function createLeaveRequestHandler(req, res) {
     // B-011: the exception flag skips apply-deadline and lead/deputy checks.
     // Only HR/admin may set it; everyone else fails closed with an audit trail.
     if (!canGrantLeaveException(req.user)) {
-      auditLog('leave_admin_exception_denied', {
+      auditRequest(req, 'leave_admin_exception_denied', {
         applicantId: req.user._id.toString(),
       });
       throwError('Only HR or admin can request an admin exception.', 403);
     }
-    auditLog('leave_admin_exception_granted', {
+    auditRequest(req, 'leave_admin_exception_granted', {
       applicantId: req.user._id.toString(),
     });
   }
-  const request = await createLeaveRequest(req.user._id, parsed);
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+  const request = await createLeaveRequest(req.user._id, parsed, auditContext);
   res.status(201).json({ request });
 }
 
@@ -335,72 +464,85 @@ export async function previewLeaveRequestDays(req, res) {
 }
 
 export async function cancelLeaveRequestHandler(req, res) {
-  const request = await cancelLeaveRequest(req.params.id, req.user);
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+  const request = await cancelLeaveRequest(req.params.id, req.user, auditContext);
   res.json({ request });
 }
 
 export async function editLeaveRequestHandler(req, res) {
-  const request = await editLeaveRequest(req.params.id, req.user, req.body);
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+  const request = await editLeaveRequest(req.params.id, req.user, req.body, auditContext);
   res.json({ request });
 }
 
 export async function notifyLeaveRequestHandler(req, res) {
-  await dispatchSubmitNotifications(req.params.id);
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+  await dispatchSubmitNotifications(req.params.id, undefined, auditContext);
   res.json({ ok: true });
 }
 
 export async function undoSubmittedLeaveRequestHandler(req, res) {
-  const request = await undoSubmittedLeaveRequest(req.params.id, req.user);
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+  const request = await undoSubmittedLeaveRequest(req.params.id, req.user, auditContext);
   res.json({ request });
 }
 
 export async function cancelApprovedLeaveByApproverHandler(req, res) {
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
   const request = await cancelApprovedLeaveByApprover(
     req.params.id,
     req.user,
     req.userPermissions,
-    { decisionComment: req.body?.comment ?? null },
+    { decisionComment: req.body?.comment ?? null, auditContext },
   );
   res.json({ request });
 }
 
 export async function undoLeaveCancellationHandler(req, res) {
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
   const request = await undoLeaveCancellation(
     req.params.id,
     req.user,
     req.userPermissions,
+    auditContext,
   );
   res.json({ request });
 }
 
 export async function approveLeaveRequestHandler(req, res) {
   const parsed = leaveDecisionSchema.parse(req.body ?? {});
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
   const request = await decideLeaveRequest(
     req.params.id,
     req.user,
     req.userPermissions,
     'approved',
     parsed,
+    auditContext,
   );
   res.json({ request });
 }
 
 export async function rejectLeaveRequestHandler(req, res) {
   const parsed = leaveDecisionSchema.parse(req.body ?? {});
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
   const request = await decideLeaveRequest(
     req.params.id,
     req.user,
     req.userPermissions,
     'rejected',
     parsed,
+    auditContext,
   );
   res.json({ request });
 }
 export async function undoLeaveDecisionHandler(req, res) {
+  const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
   const request = await undoLeaveDecision(
     req.params.id,
     req.user,
     req.userPermissions,
+    auditContext,
   );
   res.json({ request });
 }
@@ -537,7 +679,8 @@ export async function leaveDecisionLinkHandler(req, res) {
     return res.status(400).type('html').send(decisionLinkHtml(false, 'A remark is required for this action.'));
   }
   try {
-    const { manager } = await decideLeaveRequestByToken(request, action, token, decisionComment);
+    const auditContext = { ...getRequestAuditContext(req), email: req.user?.email };
+    const { manager } = await decideLeaveRequestByToken(request, action, token, decisionComment, auditContext);
     const verb = action === 'approve' ? 'approved' : 'rejected';
     const by = manager && manager.name ? ` by ${manager.name}` : '';
     const portalUrl = `${env.clientOrigin}/admin/leave/approvals`;
@@ -647,7 +790,7 @@ export async function createHoliday(req, res) {
     createdBy: req.user._id,
   });
 
-  auditLog('holiday_created', {
+  auditRequest(req, 'holiday_created', {
     adminId: req.user._id.toString(),
     holidayId: holiday._id.toString(),
     date: parsed.date,
@@ -663,6 +806,13 @@ export async function updateHoliday(req, res) {
     return res.status(404).json({ message: 'Holiday not found.' });
   }
 
+  const previous = {
+    date: holiday.date ? holiday.date.toISOString() : null,
+    name: holiday.name,
+    description: holiday.description ?? null,
+    type: holiday.type ?? null,
+    isActive: holiday.isActive,
+  };
   if (parsed.date) {
     const date = parseDateInputAsISTDay(parsed.date);
     const existing = await Holiday.findOne({ date, _id: { $ne: holiday._id } });
@@ -677,6 +827,21 @@ export async function updateHoliday(req, res) {
   if (parsed.isActive !== undefined) holiday.isActive = parsed.isActive;
 
   await holiday.save();
+  auditRequest(req, 'holiday_updated', auditEntityChange({
+    adminId: req.user._id.toString(),
+    module: 'leave',
+    entity: 'Holiday',
+    entityId: holiday._id.toString(),
+    action: 'Update',
+    previous,
+    next: {
+      date: holiday.date ? holiday.date.toISOString() : null,
+      name: holiday.name,
+      description: holiday.description ?? null,
+      type: holiday.type ?? null,
+      isActive: holiday.isActive,
+    },
+  }));
   res.json({ holiday: holiday.toSafeJSON() });
 }
 
@@ -687,7 +852,7 @@ export async function deleteHoliday(req, res) {
   }
 
   await holiday.deleteOne();
-  auditLog('holiday_deleted', {
+  auditRequest(req, 'holiday_deleted', {
     adminId: req.user._id.toString(),
     holidayId: holiday._id.toString(),
   });
@@ -702,7 +867,7 @@ export async function listRecurringHolidayRules(req, res) {
 export async function updateRecurringHolidayRules(req, res) {
   const parsed = recurringHolidayRulesSchema.parse(req.body);
   const rules = await saveRecurringHolidayRules(parsed.rules, req.user._id);
-  auditLog('recurring_holiday_rules_updated', {
+  auditRequest(req, 'recurring_holiday_rules_updated', {
     adminId: req.user._id.toString(),
     count: rules.length,
   });
@@ -712,7 +877,7 @@ export async function updateRecurringHolidayRules(req, res) {
 export async function materializeRecurringHolidays(req, res) {
   const parsed = materializeRecurringSchema.parse(req.body);
   const result = await materializeRecurringHolidaysForYear(parsed.year, req.user._id);
-  auditLog('recurring_holidays_materialized', {
+  auditRequest(req, 'recurring_holidays_materialized', {
     adminId: req.user._id.toString(),
     year: parsed.year,
     created: result.created.length,
@@ -727,7 +892,7 @@ export async function deleteRecurringRuleHolidays(req, res) {
     return res.status(400).json({ error: 'name is required' });
   }
   const result = await deleteRecurringHolidaysByRuleName(name.trim());
-  auditLog('recurring_rule_holidays_deleted', {
+  auditRequest(req, 'recurring_rule_holidays_deleted', {
     adminId: req.user._id.toString(),
     ruleName: name.trim(),
     deleted: result.deleted,
@@ -743,15 +908,22 @@ export async function initUserBalancesHandler(req, res) {
 
 export async function encashLeaveBalanceHandler(req, res) {
   const parsed = encashLeaveSchema.parse(req.body);
+  const beforeDoc = await LeaveBalance.findOne({
+    userId: req.params.userId,
+    leaveTypeId: parsed.leaveTypeId,
+    year: parsed.year,
+  }).lean();
   const result = await recordEncashment(req.params.userId, parsed, req.user._id);
 
-  auditLog('leave_encashment_recorded', {
+  auditRequest(req, 'leave_encashment_recorded', {
     adminId: req.user._id.toString(),
     userId: req.params.userId,
     leaveTypeId: parsed.leaveTypeId,
     year: parsed.year,
     days: parsed.days,
     reason: parsed.reason,
+    previous: { encashed: beforeDoc?.encashed ?? 0 },
+    next: { encashed: result?.balance?.encashed ?? (beforeDoc?.encashed ?? 0) + parsed.days },
   });
 
   res.json(result);
@@ -773,7 +945,7 @@ export async function carryForwardHandler(req, res) {
     appliedBy: req.user._id,
   });
 
-  auditLog('leave_carry_forward_applied', {
+  auditRequest(req, 'leave_carry_forward_applied', {
     adminId: req.user._id.toString(),
     fromYear: parsed.fromYear,
     toYear: result.toYear,
@@ -790,7 +962,7 @@ export async function carryForwardHandler(req, res) {
 export async function runLeaveAccrualJobHandler(req, res) {
   const result = await runMonthlyAccrualJob();
 
-  auditLog('leave_accrual_job_run', {
+  auditRequest(req, 'leave_accrual_job_run', {
     adminId: req.user._id.toString(),
     year: result.year,
   });

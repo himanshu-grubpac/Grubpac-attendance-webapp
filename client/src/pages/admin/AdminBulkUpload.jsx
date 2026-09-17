@@ -1,31 +1,29 @@
 import { Fragment, useRef, useState } from 'react';
 import { MAX_BULK_UPLOAD_ROWS } from '@shared/validation/common.js';
 import { EMPLOYEE_CODE_FORMAT_HINT } from '@shared/validation/employee.js';
-import PasswordGeneratorPanel from '../../components/PasswordGeneratorPanel.jsx';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['.xlsx', '.xls'];
 
 const BULK_REGULATIONS = [
-  'Download the template first — it contains ALL current employees (active and inactive) with their unique employee id.',
-  'Rows with an "id" value will UPDATE the matching employee record. Rows with a BLANK "id" will CREATE a new employee.',
-  'The "id" column is the immutable employee identifier. Do NOT edit or delete id values — the system uses it to match records.',
-  '"email" and "mobile" are IMMUTABLE via bulk import. Any changes to these fields in the uploaded file will be ignored.',
+  'Two-step flow: upload first generates a review table — nothing changes until you Confirm & Sync in the popup.',
+  'Download the template first — it contains ALL current employees (active and inactive).',
+  'Rows are matched by "email": an email matching an existing employee UPDATES that record. A new email CREATES a new employee.',
+  'The "email" column is the employee identifier. Do NOT edit email values.',
+  '"email", "mobile", and "employeeCode" are IMMUTABLE via bulk import. Changing mobile or employeeCode fails that row with a validation error naming the employee — except a malformed stored mobile, which is healed when the file carries a valid 10-digit replacement.',
   'To change email or mobile, use the individual employee edit page instead.',
-  '"password" and "pin" columns: leave BLANK to keep the existing password/pin. Fill them in ONLY to set new credentials.',
-  'When a new employee is added (blank id), a typed password is REQUIRED: 8+ characters with uppercase, lowercase, and a number.',
-  'When a new employee is added (blank id), firstName, email, mobile, designation, joiningDate, department, and reportingManagerEmail are also required.',
-  '"pin4Digite" sets the 4-digit login PIN for new and existing employees.',
-  `Required columns for new employees: firstName, email, mobile, password, designation, joiningDate, reportingManagerEmail.`,
-  `Optional columns: lastName, employeeCode, department, reportingManagerCode, dateOfBirth, endingDate, isActive.`,
+  'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in. Passwords remain visible in the sync results for any email that fails delivery.',
+  'New employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail. Pick the role from the dropdown list in the role column.',
+  '"role" changes apply to existing employees too (admin accounts are never touched by bulk import). New reporting managers automatically manage their own department; assign further managed departments from the user edit page for wider team visibility.',
+  'Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, …). A filled-in code is kept when valid and unused.',
   `employeeCode format: ${EMPLOYEE_CODE_FORMAT_HINT}`,
   'First name must be 2–50 characters; last name is optional and must be at most 50 characters.',
   'Designation is required and must be at most 100 characters.',
   'Email must be valid (max 254 chars) and unique across the system for new employees.',
   'Mobile must be a valid 10-digit Indian number (starting with 6–9) and unique for new employees.',
-  'Password must be 8–128 characters with uppercase, lowercase, and a number.',
   'Dates must use YYYY-MM-DD format. endingDate and dateOfBirth are optional.',
   'isActive must be TRUE or FALSE.',
   `File must be Excel (.xlsx or .xls), up to 5 MB, with at most ${MAX_BULK_UPLOAD_ROWS} data rows.`,
@@ -132,19 +130,187 @@ function ChangeDiff({ changedFields, ignoredFields }) {
   );
 }
 
+function SummaryPills({ summary }) {
+  if (!summary) return null;
+  return (
+    <div className="summary-row">
+      <span className="stat-pill">Total: {summary.total}</span>
+      <span className="stat-pill stat-pill--success">
+        Created: {summary.created}
+      </span>
+      <span className="stat-pill stat-pill--info">
+        Updated: {summary.updated}
+      </span>
+      <span className="stat-pill stat-pill--muted">
+        Unchanged: {summary.unchanged}
+      </span>
+      <span className="stat-pill stat-pill--warning">
+        Duplicate: {summary.duplicate}
+      </span>
+      <span className="stat-pill stat-pill--error">
+        Errors: {(summary.validation_error || 0) + (summary.error || 0)}
+      </span>
+      {(summary.emailsSent || summary.emailsFailed) ? (
+        <>
+          <span className="stat-pill stat-pill--success">
+            Emails sent: {summary.emailsSent || 0}
+          </span>
+          <span className="stat-pill stat-pill--error">
+            Emails failed: {summary.emailsFailed || 0}
+          </span>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function FileWarnings({ warnings }) {
+  if (!warnings?.length) return null;
+  return (
+    <div className="alert alert--warning small" role="note">
+      <strong>File warnings:</strong>
+      <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
+        {warnings.map((warning) => (
+          <li key={warning}>{warning}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ResultsTable({ result, expandedRow, onToggleRow, copiedRow, onCopyPassword }) {
+  return (
+    <div className="table-wrap table-wrap--responsive">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Status</th>
+            <th>Email</th>
+            <th>Password</th>
+            <th>Changes</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {result.results.map((row) => {
+            const hasDetails = row.changedFields?.length || row.ignoredFields?.length;
+            const isExpanded = expandedRow === row.rowNumber;
+            return (
+              <Fragment key={row.rowNumber}>
+                <tr
+                  className={hasDetails ? 'bulk-upload__row--expandable' : ''}
+                  onClick={hasDetails ? () => onToggleRow(row.rowNumber) : undefined}
+                  onKeyDown={
+                    hasDetails
+                      ? (event) => {
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            onToggleRow(row.rowNumber);
+                          }
+                        }
+                      : undefined
+                  }
+                  tabIndex={hasDetails ? 0 : undefined}
+                  role={hasDetails ? 'button' : undefined}
+                  aria-expanded={hasDetails ? isExpanded : undefined}
+                  aria-label={
+                    hasDetails
+                      ? `Row ${row.rowNumber} field changes, activate to ${
+                          isExpanded ? 'collapse' : 'expand'
+                        }`
+                      : undefined
+                  }
+                >
+                  <td data-label="Row">{row.rowNumber}</td>
+                  <td data-label="Status">
+                    <span className={statusPillClass(row.status)}>{row.status}</span>
+                  </td>
+                  <td data-label="Email">{row.email || '—'}</td>
+                  <td data-label="Password">
+                    {row.status === 'created' && row.generatedPassword ? (
+                      <span className="bulk-upload__password">
+                        <code>{row.generatedPassword}</code>{' '}
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCopyPassword(row.rowNumber, row.generatedPassword);
+                          }}
+                        >
+                          {copiedRow === row.rowNumber ? 'Copied' : 'Copy'}
+                        </button>
+                        {row.emailStatus ? (
+                          <span
+                            className={`stat-pill ${row.emailStatus === 'sent' ? 'stat-pill--success' : 'stat-pill--error'}`}
+                            style={{ marginLeft: '0.5rem' }}
+                          >
+                            Email {row.emailStatus}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td data-label="Changes">
+                    {hasDetails ? (
+                      <span className="bulk-upload__change-count muted small">
+                        {row.changedFields?.length || 0} changed
+                        {row.ignoredFields?.length
+                          ? `, ${row.ignoredFields.length} ignored`
+                          : ''}
+                        {hasDetails ? (
+                          <span className="bulk-upload__expand-icon" aria-hidden="true">
+                            {isExpanded ? '▾' : '▸'}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td data-label="Message">{row.message}</td>
+                </tr>
+                {hasDetails && isExpanded ? (
+                  <tr className="bulk-upload__detail-row">
+                    <td colSpan={6}>
+                      <ChangeDiff
+                        changedFields={row.changedFields}
+                        ignoredFields={row.ignoredFields}
+                      />
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function AdminBulkUpload() {
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const { showSuccess } = useToast();
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [copiedRow, setCopiedRow] = useState(null);
 
   function clearFileSelection() {
     setFile(null);
+    setPreview(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -153,6 +319,7 @@ export default function AdminBulkUpload() {
   function applySelectedFile(nextFile) {
     setError('');
     setResult(null);
+    setPreview(null);
     setExpandedRow(null);
 
     if (!nextFile) {
@@ -210,27 +377,58 @@ export default function AdminBulkUpload() {
     }
   }
 
-  async function handleUpload(event) {
+  async function handlePreview(event) {
     event.preventDefault();
     if (!file) {
       setError('Please choose an Excel file before uploading.');
       return;
     }
 
+    // Step 1 — dry run: review every change before anything is applied.
+    setPreviewing(true);
+    setError('');
+    setPreview(null);
+    setResult(null);
+    setExpandedRow(null);
+    try {
+      const data = await adminApi.bulkPreview(file);
+      setPreview(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function handleConfirmSync() {
+    if (!file || !preview) return;
+    const summary = preview.summary ?? {};
+    const errorCount = (summary.validation_error || 0) + (summary.error || 0);
     await requestConfirm({
-      title: 'Upload and sync employee data?',
-      message: `Import "${file.name}"? Existing rows (with id) will be updated. New rows (blank id) will create employee accounts.`,
-      confirmLabel: 'Upload & Sync',
+      title: 'Sync reviewed changes?',
+      message:
+        `Apply "${file.name}"? ${summary.created || 0} to create, ` +
+        `${summary.updated || 0} to update` +
+        (errorCount > 0 ? `, ${errorCount} row(s) will be skipped with errors` : '') +
+        `. New accounts get auto-generated passwords and emailed login credentials.`,
+      confirmLabel: 'Sync',
       variant: 'danger',
       onConfirm: async () => {
         setLoading(true);
         setError('');
-        setResult(null);
         setExpandedRow(null);
         try {
           const data = await adminApi.bulkUpload(file);
           setResult(data);
+          setPreview(null);
           clearFileSelection();
+          const summary = data?.summary ?? {};
+          const errorCount = (summary.validation_error || 0) + (summary.error || 0);
+          showSuccess(
+            `Sync complete — ${summary.created || 0} created, ${summary.updated || 0} updated` +
+              (errorCount > 0 ? `, ${errorCount} row(s) skipped with errors` : '') +
+              '.',
+          );
         } catch (err) {
           setError(getErrorMessage(err));
         } finally {
@@ -244,7 +442,24 @@ export default function AdminBulkUpload() {
     setExpandedRow(expandedRow === rowNumber ? null : rowNumber);
   }
 
-  const canUpload = Boolean(file) && !loading;
+  async function copyGeneratedPassword(rowNumber, password) {
+    try {
+      await navigator.clipboard.writeText(password);
+    } catch {
+      const fallback = document.createElement('textarea');
+      fallback.value = password;
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      document.body.removeChild(fallback);
+    }
+    setCopiedRow(rowNumber);
+    window.setTimeout(() => {
+      setCopiedRow((current) => (current === rowNumber ? null : current));
+    }, 2000);
+  }
+
+  const canUpload = Boolean(file) && !loading && !previewing;
 
   return (
     <div className="page page--bulk-upload">
@@ -288,7 +503,6 @@ export default function AdminBulkUpload() {
               </>
             )}
           </button>
-          <PasswordGeneratorPanel />
         </section>
 
         <section className="bulk-upload__step card" aria-labelledby="bulk-step-upload-title">
@@ -301,8 +515,8 @@ export default function AdminBulkUpload() {
                 Upload Updated File
               </h2>
               <p className="bulk-upload__step-lead muted">
-                Drag and drop your updated spreadsheet or browse to select a file. Changes will be
-                detected and applied automatically.
+                Drag and drop your updated spreadsheet or browse to select a file. Changes are
+                previewed for review first — nothing is applied until you confirm and sync.
               </p>
             </div>
           </header>
@@ -392,111 +606,67 @@ export default function AdminBulkUpload() {
         </ul>
       </section>
 
+      {preview ? (
+        <section className="bulk-upload__results card" aria-labelledby="bulk-preview-title">
+          <h2 id="bulk-preview-title" className="bulk-upload__results-title">
+            Review changes — nothing applied yet
+          </h2>
+          <p className="alert alert--warning small" role="note">
+            This is a dry run of “{file?.name ?? 'the uploaded file'}”. No employee records
+            were changed and no emails were sent. Review every row, then Confirm &amp; Sync to
+            apply.
+          </p>
+          <FileWarnings warnings={preview.warnings} />
+          <SummaryPills summary={preview.summary} />
+          <ResultsTable
+            result={preview}
+            expandedRow={expandedRow}
+            onToggleRow={toggleRowExpand}
+            copiedRow={copiedRow}
+            onCopyPassword={copyGeneratedPassword}
+          />
+          <div className="form-actions" style={{ marginTop: '1rem' }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={clearFileSelection}
+              disabled={loading}
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleConfirmSync}
+              disabled={loading || !file}
+            >
+              {loading ? 'Syncing…' : 'Confirm & Sync'}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {result ? (
         <section className="bulk-upload__results card" aria-labelledby="bulk-results-title">
           <h2 id="bulk-results-title" className="bulk-upload__results-title">
             Sync results
           </h2>
-          <div className="summary-row">
-            <span className="stat-pill">Total: {result.summary.total}</span>
-            <span className="stat-pill stat-pill--success">
-              Created: {result.summary.created}
-            </span>
-            <span className="stat-pill stat-pill--info">
-              Updated: {result.summary.updated}
-            </span>
-            <span className="stat-pill stat-pill--muted">
-              Unchanged: {result.summary.unchanged}
-            </span>
-            <span className="stat-pill stat-pill--warning">
-              Duplicate: {result.summary.duplicate}
-            </span>
-            <span className="stat-pill stat-pill--error">
-              Errors: {(result.summary.validation_error || 0) + (result.summary.error || 0)}
-            </span>
-          </div>
-          <div className="table-wrap table-wrap--responsive">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Row</th>
-                  <th>Status</th>
-                  <th>Email</th>
-                  <th>Changes</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.results.map((row) => {
-                  const hasDetails = row.changedFields?.length || row.ignoredFields?.length;
-                  const isExpanded = expandedRow === row.rowNumber;
-                  return (
-                    <Fragment key={row.rowNumber}>
-                      <tr
-                        className={hasDetails ? 'bulk-upload__row--expandable' : ''}
-                        onClick={hasDetails ? () => toggleRowExpand(row.rowNumber) : undefined}
-                        onKeyDown={
-                          hasDetails
-                            ? (event) => {
-                                if (event.target !== event.currentTarget) return;
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  toggleRowExpand(row.rowNumber);
-                                }
-                              }
-                            : undefined
-                        }
-                        tabIndex={hasDetails ? 0 : undefined}
-                        role={hasDetails ? 'button' : undefined}
-                        aria-expanded={hasDetails ? isExpanded : undefined}
-                        aria-label={
-                          hasDetails
-                            ? `Row ${row.rowNumber} field changes, activate to ${
-                                isExpanded ? 'collapse' : 'expand'
-                              }`
-                            : undefined
-                        }
-                      >
-                        <td data-label="Row">{row.rowNumber}</td>
-                        <td data-label="Status">
-                          <span className={statusPillClass(row.status)}>{row.status}</span>
-                        </td>
-                        <td data-label="Email">{row.email || '—'}</td>
-                        <td data-label="Changes">
-                          {hasDetails ? (
-                            <span className="bulk-upload__change-count muted small">
-                              {row.changedFields?.length || 0} changed
-                              {row.ignoredFields?.length
-                                ? `, ${row.ignoredFields.length} ignored`
-                                : ''}
-                              {hasDetails ? (
-                                <span className="bulk-upload__expand-icon" aria-hidden="true">
-                                  {isExpanded ? '▾' : '▸'}
-                                </span>
-                              ) : null}
-                            </span>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td data-label="Message">{row.message}</td>
-                      </tr>
-                      {hasDetails && isExpanded ? (
-                        <tr className="bulk-upload__detail-row">
-                          <td colSpan={5}>
-                            <ChangeDiff
-                              changedFields={row.changedFields}
-                              ignoredFields={row.ignoredFields}
-                            />
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {result.summary.created > 0 ? (
+            <p className="alert alert--warning small" role="note">
+              {result.summary.created} new account{result.summary.created === 1 ? '' : 's'} created.
+              Generated passwords are shown only here — copy each one and share it with its
+              employee securely.
+            </p>
+          ) : null}
+          <FileWarnings warnings={result.warnings} />
+          <SummaryPills summary={result.summary} />
+          <ResultsTable
+            result={result}
+            expandedRow={expandedRow}
+            onToggleRow={toggleRowExpand}
+            copiedRow={copiedRow}
+            onCopyPassword={copyGeneratedPassword}
+          />
         </section>
       ) : null}
 
@@ -519,21 +689,26 @@ export default function AdminBulkUpload() {
               Upload another file
             </button>
           </>
+        ) : preview ? (
+          <p className="bulk-upload__footer-note muted small" role="status">
+            Review the changes above, then Confirm &amp; Sync to apply them — or Discard to
+            start over.
+          </p>
         ) : (
           <>
             <p className="bulk-upload__footer-note muted small">
-              Download the employee directory, make changes, and upload to sync. Existing employees
-              are matched by the "id" column. New rows without an id create new accounts.
+              Download the employee directory, make changes, and upload to review. Existing
+              employees are matched by email. New emails create new accounts after you confirm.
             </p>
-            <form onSubmit={handleUpload}>
+            <form onSubmit={handlePreview}>
               <button type="submit" className="btn btn-primary bulk-upload__submit" disabled={!canUpload}>
-                {loading ? (
+                {previewing ? (
                   <>
                     <span className="spinner spinner--sm" aria-hidden="true" />
-                    Uploading…
+                    Reviewing…
                   </>
                 ) : (
-                  'Upload & Sync'
+                  'Upload & Review'
                 )}
               </button>
             </form>

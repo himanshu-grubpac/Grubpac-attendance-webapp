@@ -244,7 +244,7 @@ export default function EmployeeCompOff() {
       loadRequests(page);
     } catch (err) {
       const message = getErrorMessage(err) || 'Could not withdraw the request.';
-      if (err?.response?.status === 409 || err?.response?.status === 410) {
+      if (err?.response?.status === 404 || err?.response?.status === 409 || err?.response?.status === 410) {
         showToast(`${message} Refreshing your requests.`, { variant: 'error' });
         loadRequests(page);
         return;
@@ -267,12 +267,19 @@ export default function EmployeeCompOff() {
   }
 
   async function handleWithdraw(item) {
-    // No confirm dialog: the Undo toast below is the safety net, same as the
-    // submit flow. Withdrawing only stages the cancellation — the request is
-    // really gone after the undo window expires with no toast action taken.
+    // No confirm dialog: like the Apply Leave undo, withdrawing a request the
+    // manager never saw deletes it immediately — the row simply disappears
+    // and only final decisions ever leave an entry behind.
     setError('');
     try {
       const response = await compOffApi.withdraw(item.id);
+      if (response?.deleted) {
+        showSuccess('Comp off request withdrawn.');
+        loadRequests(page);
+        return;
+      }
+      // Legacy fallback: rows staged before the delete-on-withdraw change
+      // still surface here with an Undo action until they settle.
       const req = response?.request ?? {};
       const serverUndoMs = Date.parse(req.decisionUndoExpiresAt ?? '');
       const undoMs = Number.isFinite(serverUndoMs)

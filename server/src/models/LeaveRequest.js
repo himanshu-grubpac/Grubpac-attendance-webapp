@@ -16,6 +16,15 @@ const leaveRequestSchema = new mongoose.Schema(
       default: 'pending',
     },
     documentUrl: { type: String, default: null, trim: true },
+    /**
+     * Submitter request origin captured at creation (refreshed on edit) so
+     * background finalize / auto-approve audit rows can attribute device +
+     * network even though no HTTP request exists when they run. Absent on
+     * legacy documents — audit falls back to "Not recorded".
+     */
+    submittedIp: { type: String, default: null, trim: true },
+    submittedDeviceId: { type: String, default: null, trim: true },
+    submittedUserAgent: { type: String, default: null, trim: true },
     approverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     /** Who staged the current (or last) cancellation: applicant self-cancel or approver cancel. Cleared when the cancellation is undone or the request is edited. */
     cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

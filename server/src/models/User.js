@@ -56,12 +56,21 @@ const userSchema = new mongoose.Schema(
     /** Null while employed; set when the employee separates. */
     endingDate: { type: Date, default: null },
     passwordHash: { type: String, required: true },
+    /** True when the current password is a temporary/auto-generated one the user must replace. */
+    mustChangePassword: { type: Boolean, default: false },
     /** 4-digit PIN hash (bcrypt). 6-digit PINs were retired — see unset-pin6 migration. */
     pin4Hash: { type: String, default: null },
     /** Monthly gross salary in INR — admin/HR only. */
     monthlySalary: { type: Number, default: null, min: 0 },
     salaryEffectiveFrom: { type: Date, default: null },
     isActive: { type: Boolean, default: true },
+    /**
+     * When true the employee must change their password before accessing the portal.
+     * Defaults to false so pre-existing/legacy accounts are never gated: every
+     * creation path sets it explicitly true for new employees; cleared on first
+     * password change.
+     */
+    forcePasswordChange: { type: Boolean, default: false },
     /** Incremented to invalidate outstanding JWT sessions (logout / password change). */
     tokenVersion: { type: Number, default: 0, min: 0 },
     lastLoginAt: { type: Date, default: null },
@@ -120,7 +129,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
     joiningDate: this.joiningDate ?? null,
     dateOfBirth: this.dateOfBirth ?? null,
     endingDate: this.endingDate ?? null,
-    department: departmentDoc?.name ?? this.department ?? null,
+    department: departmentDoc?.name ?? null,
     departmentId: departmentDoc?._id?.toString() ?? this.departmentId?.toString?.() ?? null,
     departmentName: departmentDoc?.name ?? null,
     managedDepartmentIds: (this.managedDepartmentIds ?? []).map((id) =>
@@ -141,6 +150,9 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
       : {}),
     hasPassword: Boolean(this.passwordHash),
     hasPin: Boolean(this.pin4Hash),
+    // Single source of truth with the login response: either flag forces the
+    // first-login gate (covers legacy rows where only one was ever set).
+    mustChangePassword: Boolean(this.mustChangePassword || this.forcePasswordChange),
     isActive: this.isActive,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

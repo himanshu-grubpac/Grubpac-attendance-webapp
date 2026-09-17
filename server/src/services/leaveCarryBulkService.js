@@ -47,9 +47,19 @@ const LEAVE_TYPE_SUB_COLUMNS = [
   { key: 'carry', label: 'Carry' },
 ];
 
+/**
+ * Audit-only columns. The extra components sit BEFORE Remaining on purpose:
+ * the upload parser matches the exact Entitled/Used/Remaining/Carry template
+ * signature, so this ordering keeps audit files un-uploadable (clean error,
+ * never a silent import of snapshot values as carry adjustments).
+ */
 const LEAVE_TYPE_AUDIT_SUB_COLUMNS = [
   { key: 'entitled', label: 'Entitled' },
   { key: 'used', label: 'Used' },
+  { key: 'carried', label: 'Carried' },
+  { key: 'pending', label: 'Pending' },
+  { key: 'compOff', label: 'CompOff' },
+  { key: 'encashed', label: 'Encashed' },
   { key: 'remaining', label: 'Remaining' },
 ];
 
@@ -577,7 +587,7 @@ export async function buildCarryBulkTemplate({
   sheet.mergeCells(3, 1, 3, colCount);
   const instructionCell = sheet.getCell(3, 1);
   instructionCell.value = isAudit
-    ? 'Read-only audit snapshot. Entitled, Used, and Remaining are from live system balances. This file is not for upload.'
+    ? 'Read-only audit snapshot from live system balances. Remaining = Entitled + Carried + CompOff - Used - Pending - Encashed. This file is not for upload.'
     : 'Fill Carry columns and reason only; do not edit pre-filled Entitled, Used, or Remaining columns.';
   instructionCell.font = { italic: true, size: 10, name: 'Calibri', color: { argb: INSTRUCTION_TEXT } };
   instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INSTRUCTION_FILL } };
@@ -631,13 +641,24 @@ export async function buildCarryBulkTemplate({
 
     for (const leaveType of leaveTypes) {
       const balance = employeeRow.balanceByCode.get(leaveType.code);
-      values.push(
-        balance?.entitled ?? 0,
-        balance?.used ?? 0,
-        balance?.available ?? 0,
-      );
-      if (!isAudit) {
-        values.push('');
+      if (isAudit) {
+        // Order matches LEAVE_TYPE_AUDIT_SUB_COLUMNS above.
+        values.push(
+          balance?.entitled ?? 0,
+          balance?.used ?? 0,
+          balance?.carried ?? 0,
+          balance?.pending ?? 0,
+          balance?.compOffEarned ?? 0,
+          balance?.encashed ?? 0,
+          balance?.available ?? 0,
+        );
+      } else {
+        values.push(
+          balance?.entitled ?? 0,
+          balance?.used ?? 0,
+          balance?.available ?? 0,
+          '',
+        );
       }
     }
     if (!isAudit) {

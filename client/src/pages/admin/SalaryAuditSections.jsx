@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi, getErrorMessage, leaveApi, salaryApi } from '../../services/api.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -9,6 +9,7 @@ import SalaryDetailModal from '../../components/SalaryDetailModal.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -161,6 +162,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
       setDetail({
         summary: summaryData.summary ?? null,
         balances: balanceData.balances ?? [],
+        inactive: summaryData.inactive === true,
       });
     } catch (err) {
       setDetail(null);
@@ -231,6 +233,12 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
 
       {loading ? (
         <TableSkeleton label="Loading salary history" />
+      ) : history?.inactive ? (
+        <EmptyState
+          icon={EMPTY_ICONS.payroll}
+          title="Employee data not found"
+          description="This employee is deactivated, so salary history is unavailable."
+        />
       ) : !selectedId ? (
         <EmptyState
           icon={EMPTY_ICONS.payroll}
@@ -308,6 +316,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
             balances={detail?.balances ?? []}
             loading={detailLoading}
             error={detailError}
+            inactive={detail?.inactive === true}
             onClose={closeDetail}
           />
         </>
@@ -339,6 +348,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const [auditDetailError, setAuditDetailError] = useState('');
   const [auditDetailOpen, setAuditDetailOpen] = useState(false);
   const [auditDetailMonth, setAuditDetailMonth] = useState(null);
+  const tableWrapRef = useRef(null);
 
   function closeAuditDetail() {
     setAuditDetailOpen(false);
@@ -364,6 +374,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
       setAuditDetail({
         summary: summaryData.summary ?? null,
         balances: balanceData.balances ?? [],
+        inactive: summaryData.inactive === true,
       });
     } catch (err) {
       setAuditDetail(null);
@@ -510,7 +521,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
             description="No employees in scope for this month."
           />
         ) : (
-          <div className="table-wrap table-wrap--responsive salary-table-wrap">
+          <div ref={tableWrapRef} className="table-wrap table-wrap--responsive salary-table-wrap">
             <table className="table data-table salary-table">
               <thead>
                 <tr>
@@ -581,6 +592,8 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
           </div>
         )}
 
+        <StickyHScrollBar targetRef={tableWrapRef} syncKey={employees.length} />
+
         <SalaryDetailModal
           open={auditDetailOpen}
           month={auditDetailMonth}
@@ -588,6 +601,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
           balances={auditDetail?.balances ?? []}
           loading={auditDetailLoading}
           error={auditDetailError}
+          inactive={auditDetail?.inactive === true}
           onClose={closeAuditDetail}
         />
       </section>

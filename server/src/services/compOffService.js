@@ -457,6 +457,7 @@ export async function createCompOffRequest(userId, payload) {
     days,
     startDate: payload.startDate,
     endDate: payload.endDate,
+    next: { status: 'pending', days, startDate: payload.startDate, endDate: payload.endDate },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -576,6 +577,8 @@ export async function dispatchCompOffSubmit(requestId, now = new Date()) {
     auditLog('comp_off_submit_finalized', {
       userId: (request.userId?._id ?? request.userId)?.toString?.(),
       requestId: request._id.toString(),
+      previous: { submitNotificationsSent: false },
+      next: { submitNotificationsSent: true },
     });
   } finally {
     pendingSubmitDispatch.delete(key);
@@ -583,12 +586,15 @@ export async function dispatchCompOffSubmit(requestId, now = new Date()) {
 }
 
 /**
- * Stages an employee withdrawal of a freshly submitted comp-off request
- * inside its undo window. The request stays `pending` with
- * `pendingAction: 'cancelled'` so the employee gets an Undo toast and can
- * still change their mind; only the finalizer flips it to `cancelled`
- * (silently). Same guards as before: withdraw is only possible before the
- * manager was notified — afterwards the request must run its course.
+ * Undoes a freshly submitted comp-off request inside its submit undo window —
+ * mirrors the Apply Leave / Apply WFH undo: the request never went live (the
+ * manager was never notified), so the row is deleted outright instead of
+ * lingering as a CANCELLED entry. Only requests that reach a final decision
+ * (approved / rejected / assessed / lapsed) ever leave a row behind, and the
+ * employee can resubmit immediately. Same guards as before: undo is only
+ * possible before the manager was notified — afterwards the request must run
+ * its course. (Rows staged as `pendingAction: 'cancelled'` before this change
+ * are still honored by undoCompOffWithdraw / the finalizer.)
  */
 export async function undoCompOffSubmit(requestId, actor) {
   const request = await loadCompOffRequest(requestId);
@@ -598,33 +604,17 @@ export async function undoCompOffSubmit(requestId, actor) {
   }
 
   const now = new Date();
-  const stageTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS, now.getTime());
-  const claimed = await CompOffRequest.findOneAndUpdate(
-    {
-      _id: request._id,
-      status: 'pending',
-      pendingAction: null,
-      notificationsSent: false,
-      submitNotificationsSent: { $ne: true },
-      undoExpiresAt: { $gt: now },
-    },
-    [
-      {
-        $set: {
-          pendingAction: 'cancelled',
-          decidedAt: now,
-          approverId: null,
-          decisionTokens: [],
-          undoExpiresAt: stageTiming.undoExpiresAt,
-          notifyAfter: stageTiming.notifyAfter,
-          pendingRevision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
-          finalizedAt: null,
-          revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
-        },
-      },
-    ],
-    { returnDocument: 'after', updatePipeline: true },
-  );
+  // Atomic delete-claim: exactly one of {undo, submit-dispatch} wins. If the
+  // dispatcher already flipped submitNotificationsSent, the claim misses and
+  // the ladder below reports the request as already sent.
+  const claimed = await CompOffRequest.findOneAndDelete({
+    _id: request._id,
+    status: 'pending',
+    pendingAction: null,
+    notificationsSent: false,
+    submitNotificationsSent: { $ne: true },
+    undoExpiresAt: { $gt: now },
+  });
 
   if (!claimed) {
     const current = await CompOffRequest.findById(request._id).select('status pendingAction notificationsSent submitNotificationsSent undoExpiresAt');
@@ -646,20 +636,12 @@ export async function undoCompOffSubmit(requestId, actor) {
     pendingSubmitTimers.delete(String(requestId));
   }
 
-  await scheduleLeaveFinalize({
-    requestId: request._id.toString(),
-    kind: 'cancel',
-    notifyAfter: stageTiming.notifyAfter,
-    revision: claimed.revision,
-  });
-
-  auditLog('comp_off_withdraw_staged', {
+  auditLog('comp_off_submit_undone', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
-    revision: claimed.revision,
   });
 
-  return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
+  return { deleted: true, id: request._id.toString() };
 }
 
 /**
@@ -667,12 +649,19 @@ export async function undoCompOffSubmit(requestId, actor) {
  * request to a live pending request with a FRESH submit undo window (so the
  * manager is still notified afterwards — the withdrawal never happened as
  * far as anyone else is concerned). Owner-only. Silent: no notifications.
+ * NOTE: new withdrawals delete the never-live row outright (see
+ * undoCompOffSubmit); this only serves rows staged before that change.
  */
 export async function undoCompOffWithdraw(requestId, actor) {
   const request = await loadCompOffRequest(requestId);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   if (requesterId !== actor._id.toString()) {
     throwError('You can only undo your own comp off withdrawal.', 403);
+  }
+  // Approver-staged cancellations belong to undoCompOffDecision; the employee
+  // must never clear an approver's staged revoke from here.
+  if (request.cancelledBy) {
+    throwError('This cancellation was made by your approver and cannot be undone here.', 403);
   }
   if (request.pendingAction !== 'cancelled') {
     if (request.status !== 'pending' || request.finalizedAt) {
@@ -693,6 +682,7 @@ export async function undoCompOffWithdraw(requestId, actor) {
       _id: request._id,
       status: 'pending',
       pendingAction: 'cancelled',
+      cancelledBy: null,
       revision: stagedRevision,
       $or: [
         { undoExpiresAt: { $gt: now } },
@@ -738,6 +728,8 @@ export async function undoCompOffWithdraw(requestId, actor) {
   auditLog('comp_off_withdraw_undone', {
     userId: actor._id.toString(),
     requestId: request._id.toString(),
+    previous: { status: 'pending', pendingAction: 'cancelled' },
+    next: { status: 'pending', pendingAction: null },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -773,6 +765,32 @@ async function notifyCompOffApplicant({ request, status, remarks = null, credite
         await sendSms({
           to: applicant.mobile,
           message: `Your comp off work on ${dateText} was assessed. +${creditedDays} day(s) added to your CO balance.`,
+        });
+      }
+      return;
+    }
+
+    if (status === 'cancelled') {
+      await createNotification({
+        userId,
+        type: 'comp_off_decision',
+        title: 'Comp off cancelled',
+        body: `Your approved comp off work on ${dateText} was cancelled by your approver.${safeRemarks ? ` Remarks: ${safeRemarks}` : ''}`,
+        link: '/employee/leave/comp-off',
+        metadata: { requestId: request._id.toString() },
+      });
+      if (applicant.email) {
+        const { subject, html, text } = renderCompOffDecisionEmail({
+          status: 'cancelled',
+          dateText,
+          remarks: safeRemarks,
+        });
+        await sendEmail({ to: applicant.email, subject, html, text, tag: 'comp-off-status' });
+      }
+      if (applicant.mobile) {
+        await sendSms({
+          to: applicant.mobile,
+          message: `Your approved comp off work on ${dateText} was cancelled by your approver.${safeRemarks ? ' Remarks: ' + safeRemarks : ''}`,
         });
       }
       return;
@@ -891,6 +909,99 @@ export async function decideCompOffRequest(requestId, actor, permissions, decisi
     requestId: request._id.toString(),
     comment,
     revision: request.revision,
+    previous: { status: 'pending' },
+    next: { status: request.pendingAction },
+  });
+
+  return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
+}
+
+/**
+ * Stages an approver cancellation of an APPROVED comp-off request (mirrors
+ * the leave approver-cancel flow). The request keeps `status: 'approved'`
+ * with `pendingAction: 'cancelled'` + `cancelledBy` until the undo window
+ * expires; only the finalizer flips it to `cancelled` and notifies the
+ * applicant. A remark is mandatory. Worked/assessed requests cannot be
+ * cancelled — assess (possibly at zero credit) instead.
+ */
+export async function cancelApprovedCompOff(requestId, actor, permissions, payload = {}) {
+  const request = await loadCompOffRequest(requestId);
+  if (request.status !== 'approved') {
+    throwError('Only approved comp off requests can be cancelled.', 409);
+  }
+  if (request.pendingAction) {
+    throwError('A decision is already pending. Undo it first before cancelling.', 409);
+  }
+
+  const requester = await loadRequester(request.userId?._id ?? request.userId);
+  if (!canApproveLeave(actor, requester, permissions)) {
+    throwError('You are not authorized to cancel this comp off request.', 403);
+  }
+
+  const comment = (payload.comment ?? '').trim() || null;
+  if (!comment) {
+    throwError('A remark is required to cancel this comp off request.');
+  }
+
+  const stagedAt = new Date();
+  const stageTiming = provisionalTiming(LEAVE_DECISION_UNDO_MS, stagedAt.getTime());
+  const setUpdate = {
+    pendingAction: 'cancelled',
+    cancelledBy: actor._id,
+    approverId: request.approverId ?? actor._id,
+    decidedAt: stagedAt,
+    comment,
+    undoExpiresAt: stageTiming.undoExpiresAt,
+    notifyAfter: stageTiming.notifyAfter,
+    notificationsSent: false,
+    submitNotificationsSent: true,
+    decisionTokens: [],
+    finalizedAt: null,
+  };
+
+  const claimed = await CompOffRequest.findOneAndUpdate(
+    { _id: request._id, status: 'approved', pendingAction: null },
+    [
+      {
+        $set: {
+          ...setUpdate,
+          revision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+          pendingRevision: { $add: [{ $ifNull: ['$revision', 0] }, 1] },
+        },
+      },
+    ],
+    { returnDocument: 'after', updatePipeline: true },
+  );
+
+  if (!claimed) {
+    const current = await CompOffRequest.findById(request._id).select('status pendingAction');
+    if (!current || current.status !== 'approved') {
+      throwError('Only approved comp off requests can be cancelled.', 409);
+    }
+    throwError('A decision is already pending. Undo it first before cancelling.', 409);
+  }
+
+  for (const [key, value] of Object.entries(setUpdate)) {
+    request[key] = value;
+  }
+  request.revision = claimed.revision;
+  request.pendingRevision = claimed.pendingRevision;
+
+  await scheduleLeaveFinalize({
+    requestId: request._id.toString(),
+    kind: 'comp-off',
+    notifyAfter: setUpdate.notifyAfter,
+    revision: request.revision,
+  });
+
+  auditLog('comp_off_cancel_staged', {
+    adminId: actor._id.toString(),
+    userId: requester._id.toString(),
+    requestId: request._id.toString(),
+    comment,
+    revision: request.revision,
+    previous: { status: 'approved' },
+    next: { status: 'approved', pendingAction: 'cancelled' },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -898,13 +1009,17 @@ export async function decideCompOffRequest(requestId, actor, permissions, decisi
 
 /**
  * Undoes a staged decision inside its undo window. Silent for the manager;
- * the applicant gets an in-app notice that the request moved back to pending.
+ * the applicant gets an in-app notice that the request moved back to pending
+ * (or back to approved when undoing an approver-staged cancellation).
  */
 export async function undoCompOffDecision(requestId, actor, permissions) {
   const request = await loadCompOffRequest(requestId);
-  // Staged employee withdrawals belong to undoCompOffWithdraw (owner-only);
-  // a manager decision-undo must never clear them.
-  if (!request.pendingAction || request.pendingAction === 'assessed' || request.pendingAction === 'cancelled') {
+  // Staged employee withdrawals (cancelledBy unset) belong to
+  // undoCompOffWithdraw (owner-only); a manager decision-undo must never
+  // clear them. Approver-staged cancellations (cancelledBy set) ARE undoable
+  // here — status stays approved, not pending.
+  const isManagerCancel = request.pendingAction === 'cancelled' && request.cancelledBy;
+  if (!request.pendingAction || request.pendingAction === 'assessed' || (request.pendingAction === 'cancelled' && !isManagerCancel)) {
     if (request.status !== 'pending' || request.finalizedAt) {
       throwError('The decision is now final and can no longer be undone.', 410);
     }
@@ -923,6 +1038,10 @@ export async function undoCompOffDecision(requestId, actor, permissions) {
     ? new Date(request.undoExpiresAt)
     : new Date(new Date(request.decidedAt).getTime() + LEAVE_DECISION_UNDO_MS);
 
+  // Undoing an approver-staged cancellation restores the approved state and
+  // keeps the original approver; undoing a staged approve/reject clears the
+  // stager as before.
+  const preserveApprover = request.pendingAction === 'cancelled';
   const claimed = await CompOffRequest.findOneAndUpdate(
     {
       _id: request._id,
@@ -936,7 +1055,8 @@ export async function undoCompOffDecision(requestId, actor, permissions) {
     {
       $set: {
         pendingAction: null,
-        approverId: null,
+        cancelledBy: null,
+        ...(preserveApprover ? {} : { approverId: null }),
         decidedAt: null,
         comment: null,
         notifyAfter: null,
@@ -961,11 +1081,12 @@ export async function undoCompOffDecision(requestId, actor, permissions) {
     throwError('This decision was already updated. Refresh and try again.', 409);
   }
 
+  const restoredStatus = request.status === 'approved' ? 'approved' : 'pending';
   await createNotification({
     userId: userId.toString(),
     type: 'comp_off_undone',
     title: 'Comp off decision undone',
-    body: 'Your comp off request was moved back to pending for review.',
+    body: `Your comp off request was moved back to ${restoredStatus} for review.`,
     link: '/employee/leave/comp-off',
     metadata: { requestId: request._id.toString() },
   });
@@ -974,6 +1095,8 @@ export async function undoCompOffDecision(requestId, actor, permissions) {
     adminId: actor._id.toString(),
     userId: userId.toString(),
     requestId: request._id.toString(),
+    previous: { status: request.status, pendingAction: request.pendingAction },
+    next: { status: restoredStatus, pendingAction: null },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -1140,6 +1263,8 @@ export async function assessCompOffWork(requestId, actor, permissions, assessmen
     dayAssessments,
     comment,
     revision: request.revision,
+    previous: { status: 'worked' },
+    next: { status: 'worked', pendingAction: 'assessed', dayAssessments },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -1219,6 +1344,8 @@ export async function undoCompOffAssessment(requestId, actor, permissions) {
     adminId: actor._id.toString(),
     userId: userId.toString(),
     requestId: request._id.toString(),
+    previous: { status: 'worked', pendingAction: 'assessed' },
+    next: { status: 'worked', pendingAction: null },
   });
 
   return (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON();
@@ -1324,12 +1451,38 @@ export async function finalizeCompOffAction(request) {
   // Deferred notification — post-commit only, never blocking finality.
   // A finalized employee withdrawal is silent by design (nobody was ever
   // notified while it was provisional): no email, SMS, or in-app notice.
+  // An approver-staged cancellation IS notified: the employee's approved
+  // work was revoked after they were told it was approved.
   if (decision === 'cancelled') {
-    auditLog('comp_off_withdrawn', {
-      userId: userId?.toString?.(),
-      requestId: requestKey,
-      revision: (request.revision ?? 0) + 1,
-    });
+    if (request.cancelledBy) {
+      try {
+        await notifyCompOffApplicant({ request, status: 'cancelled', remarks: request.comment });
+      } catch (notifyErr) {
+        console.error('[comp-off] cancelled notification failed', {
+          requestId: requestKey,
+          error: notifyErr?.message,
+        });
+        auditLog('comp_off_finalized_notification_failed', {
+          requestId: requestKey,
+          decision,
+          error: notifyErr?.message ?? 'unknown',
+        });
+      }
+      auditLog('comp_off_cancelled', {
+        adminId: request.cancelledBy?.toString?.(),
+        userId: userId?.toString?.(),
+        requestId: requestKey,
+        revision: (request.revision ?? 0) + 1,
+        previous: { status: 'approved', pendingAction: 'cancelled' },
+        next: { status: 'cancelled' },
+      });
+    } else {
+      auditLog('comp_off_withdrawn', {
+        userId: userId?.toString?.(),
+        requestId: requestKey,
+        revision: (request.revision ?? 0) + 1,
+      });
+    }
     return { finalized: true, requestId: requestKey };
   }
   try {
@@ -1369,6 +1522,8 @@ export async function finalizeCompOffAction(request) {
     decision,
     creditedDays,
     revision: (request.revision ?? 0) + 1,
+    previous: { pendingAction: decision },
+    next: { status: decision, creditedDays },
   });
 
   return { finalized: true, requestId: requestKey };
@@ -1383,6 +1538,8 @@ export async function lapseStaleCompOff(now = new Date()) {
   const startOfYesterday = new Date(startOfDayIST(now).getTime() - 24 * 60 * 60 * 1000);
   const candidates = await CompOffRequest.find({
     status: 'approved',
+    // Never clobber a staged approver cancellation — the finalizer owns it.
+    pendingAction: null,
     endDate: { $lt: startOfYesterday },
   }).select('_id userId startDate endDate');
 
@@ -1402,7 +1559,7 @@ export async function lapseStaleCompOff(now = new Date()) {
       skippedWithCheckIn.push(request._id.toString());
       continue;
     }
-    await CompOffRequest.updateOne({ _id: request._id, status: 'approved' }, {
+    await CompOffRequest.updateOne({ _id: request._id, status: 'approved', pendingAction: null }, {
       $set: {
         status: 'lapsed',
         pendingAction: null,
@@ -1418,6 +1575,8 @@ export async function lapseStaleCompOff(now = new Date()) {
     auditLog('comp_off_lapsed', {
       userId: userId?.toString?.(),
       requestId: request._id.toString(),
+      previous: { status: 'approved' },
+      next: { status: 'lapsed' },
     });
     lapsed += 1;
   }

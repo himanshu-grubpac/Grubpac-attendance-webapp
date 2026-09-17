@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { formatISTDate, formatISTDateTime, IST_TIMEZONE } from '../../utils/datetime.js';
+import { formatISTDate, formatISTDateTime, getISTDateInputValue, IST_TIMEZONE } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -158,6 +158,22 @@ function durationLabel(days) {
   return `${value} days`;
 }
 
+/**
+ * Whether the leave period has fully passed (IST). Cancelling is allowed
+ * regardless — this only drives the payroll warning in the cancel dialog.
+ */
+function isPastLeave(item) {
+  const rawEnd = item?.endDate;
+  const endKey =
+    typeof rawEnd === 'string'
+      ? rawEnd.slice(0, 10)
+      : rawEnd
+        ? getISTDateInputValue(new Date(rawEnd))
+        : null;
+  if (!endKey) return false;
+  return endKey < getISTDateInputValue();
+}
+
 function submittedLabel(value) {
   if (!value) return null;
   return formatISTDateTime(value);
@@ -290,9 +306,12 @@ export default function AdminLeaveApprovals() {
     columnsLoading: leaveColumnsLoading,
     columnsError: leaveColumnsError,
     editorOpen: leaveEditorOpen,
-    setEditorOpen: setLeaveEditorOpen,
+    openColumnEditor: openLeaveEditor,
+    cancelColumnEdit: cancelLeaveEdit,
     isColumnVisible: isLeaveColumnVisible,
-    handleColumnToggle: handleLeaveColumnToggle,
+    isDraftColumnVisible: isLeaveDraftVisible,
+    handleDraftColumnToggle: handleLeaveDraftToggle,
+    applyColumnPreferences: applyLeaveColumns,
   } = useTableColumns({
     tableKey: LEAVE_TABLE_KEY,
     allColumns: LEAVE_COLUMNS,
@@ -749,7 +768,7 @@ export default function AdminLeaveApprovals() {
               </div>
             ) : null}
             <div className="filter-bar__field approvals-toolbar__clear">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLeaveEditorOpen(true)}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={openLeaveEditor}>
                 Edit columns
               </button>
             </div>
@@ -1140,10 +1159,11 @@ export default function AdminLeaveApprovals() {
       <ColumnEditorPanel
         open={leaveEditorOpen}
         columns={LEAVE_COLUMNS}
-        isColumnVisible={isLeaveColumnVisible}
-        onToggle={handleLeaveColumnToggle}
+        isColumnVisible={isLeaveDraftVisible}
+        onToggle={handleLeaveDraftToggle}
         loading={leaveColumnsLoading}
-        onClose={() => setLeaveEditorOpen(false)}
+        onClose={applyLeaveColumns}
+        onCancel={cancelLeaveEdit}
       />
 
       <LeaveDecisionModal
@@ -1165,6 +1185,11 @@ export default function AdminLeaveApprovals() {
         initialComment={cancelModal.comment}
         busy={actingId === cancelModal.item?.id}
         error={error}
+        notice={
+          cancelModal.item && isPastLeave(cancelModal.item)
+            ? 'This leave period has already passed. Cancelling returns the days to the balance, but payroll for settled months is not adjusted automatically.'
+            : ''
+        }
         onCommentChange={(value) => setCancelModal((prev) => ({ ...prev, comment: value }))}
         onApprove={handleCancelApproved}
         onReject={() => setCancelModal({ open: false, item: null, comment: '' })}
