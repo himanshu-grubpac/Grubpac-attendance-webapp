@@ -39,6 +39,7 @@ import { auditLog } from '../utils/auditLog.js';
 import { createLopOnApproval } from './lopSettlementService.js';
 import { scheduleLeaveFinalize } from './leaveFinalizeQueue.js';
 import {
+  isUserInTeamScope,
   resolveLeaveApprovalUserIds,
   resolveLeaveTeamUserIds,
 } from './teamScopeService.js';
@@ -906,6 +907,36 @@ async function validateLeadDeputyConflict(userId, startDate, endDate, adminExcep
 }
 
 const ADMIN_LEAVE_CORRECTION_REASON = 'Admin attendance correction';
+
+/**
+ * Immediate approval used by admin-correction paths (no undo window — the
+ * admin acts deliberately, unlike the staged approve/reject flow). Consumes
+ * the reserved pending days and stamps the request approved. Restored after
+ * the provisional-lifecycle rewrite dropped it, which left three admin
+ * paths throwing `applyLeaveApproval is not defined` (HTTP 500).
+ */
+async function applyLeaveApproval(
+  request,
+  { userId, leaveTypeId, days, year, session, approverId = null, comment = null },
+) {
+  await approvePendingDays(userId, leaveTypeId, days, year, session);
+  await createLopOnApproval(userId, leaveTypeId, request._id, request.startDate, days, session);
+  request.status = 'approved';
+  request.approverId = approverId;
+  request.decidedAt = new Date();
+  request.decisionComment = comment;
+  // Clear any staged provisional state so a later sweep cannot finalize a
+  // stale decision over the admin's correction; bump the revision so an
+  // in-flight finalizer loses the race deterministically. Submit-notification
+  // flags are deliberately untouched (a pending submit notify must still fire).
+  request.pendingDecision = null;
+  request.pendingRevision = null;
+  request.notifyAfter = null;
+  request.undoExpiresAt = null;
+  request.finalizedAt = new Date();
+  request.revision = (request.revision ?? 0) + 1;
+  await request.save({ session });
+}
 
 async function adminForceApproveExistingLeave(request, actor, session) {
   if (request.status === 'approved') return;

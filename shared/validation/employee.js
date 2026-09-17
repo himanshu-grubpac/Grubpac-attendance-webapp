@@ -118,13 +118,9 @@ export function applyEmployeeDateRangeRules(data, ctx) {
       message: 'Joining date cannot be in the future.',
     });
   }
-  if (data.endingDate && data.endingDate > today) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['endingDate'],
-      message: 'Ending date cannot be in the future.',
-    });
-  }
+  // NOTE: a FUTURE ending date is legitimate (notice period, fixed-term
+  // contract end, planned separation) — only the joining-date bound above
+  // and the endingDate >= joiningDate range rule constrain it.
 }
 
 /** Optional DOB must be a reasonable past date (IST calendar day). */
