@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getErrorMessage, salaryApi } from '../../services/api.js';
 import { formatINRCurrency, formatISTDate } from '../../utils/datetime.js';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
 import { getTodayIstValue } from '../../components/DateField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -13,13 +19,7 @@ import './AdminLopCalculation.css';
 
 const PAGE_SIZE = 20;
 
-const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
+const YEAR_OPTIONS = buildSalaryYearOptions();
 
 function parseMonthFilterValue(value) {
   if (!value || !/^\d{4}-\d{2}$/.test(value)) {
@@ -33,30 +33,6 @@ function parseMonthFilterValue(value) {
 function toMonthFilterValue(year, month) {
   return `${year}-${month}`;
 }
-
-function getCurrentIstYear() {
-  return Number(getTodayMonthIst().split('-')[0]);
-}
-
-function clampYearToCurrent(year) {
-  const currentYear = getCurrentIstYear();
-  const parsed = Number(year);
-  if (!Number.isFinite(parsed) || parsed > currentYear) {
-    return String(currentYear);
-  }
-  return String(parsed);
-}
-
-function buildYearOptions() {
-  const currentYear = getCurrentIstYear();
-  const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-const YEAR_OPTIONS = buildYearOptions();
 
 /** Matches server resolveSalaryAsOfDate defaults for MTD cutoff. */
 function resolveAsOfForMonth(month) {
@@ -97,12 +73,17 @@ function TableSkeleton() {
 
 export default function AdminLopCalculation() {
   const { showSuccess } = useToast();
-  const [yearFilter, setYearFilter] = useState(() =>
-    clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
-  );
-  const [monthPartFilter, setMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
+  const initialMonth = useMemo(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    const clampedYear = clampYearToCurrentIst(year);
+    return {
+      year: clampedYear,
+      month: clampMonthPartForYear(clampedYear, month),
+    };
+  }, []);
+  const [yearFilter, setYearFilter] = useState(initialMonth.year);
+  const [monthPartFilter, setMonthPartFilter] = useState(initialMonth.month);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const month = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
     [yearFilter, monthPartFilter],
@@ -123,6 +104,12 @@ export default function AdminLopCalculation() {
   const [bulkExporting, setBulkExporting] = useState(false);
   const [downloadingUserId, setDownloadingUserId] = useState(null);
   const [detailTarget, setDetailTarget] = useState(null);
+
+  const handleYearChange = useCallback((value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  }, []);
 
   const loadSummaries = useCallback(async () => {
     setLoading(true);
@@ -194,8 +181,9 @@ export default function AdminLopCalculation() {
   );
 
   const handleModalMonthChange = useCallback((year, monthPart) => {
-    setYearFilter(clampYearToCurrent(year));
-    setMonthPartFilter(monthPart);
+    const nextYear = clampYearToCurrentIst(year);
+    setYearFilter(nextYear);
+    setMonthPartFilter(clampMonthPartForYear(nextYear, monthPart));
   }, []);
 
   const viewingDateLabel = responseAsOfDate ? formatISTDate(responseAsOfDate) : formatISTDate(asOf);
@@ -211,24 +199,25 @@ export default function AdminLopCalculation() {
       <section className="salary-panel card card--table" aria-label="Salary calculation and LOP">
         <div className="salary-toolbar card__toolbar">
           <div className="salary-toolbar__filters filter-bar">
-            <div className="field-inline filter-bar__field salary-toolbar__field salary-toolbar__field--period">
+            <div className="field-inline filter-bar__field salary-toolbar__field">
+              <span className="label">Year</span>
+              <SelectField
+                value={yearFilter}
+                onChange={handleYearChange}
+                options={YEAR_OPTIONS}
+                aria-label="LOP year"
+                disabled={loading || bulkExporting}
+              />
+            </div>
+            <div className="field-inline filter-bar__field salary-toolbar__field">
               <span className="label">Month</span>
-              <div className="salary-toolbar__period">
-                <SelectField
-                  value={yearFilter}
-                  onChange={(value) => setYearFilter(clampYearToCurrent(value))}
-                  options={YEAR_OPTIONS}
-                  aria-label="LOP year"
-                  disabled={loading || bulkExporting}
-                />
-                <SelectField
-                  value={monthPartFilter}
-                  onChange={setMonthPartFilter}
-                  options={SALARY_MONTH_OPTIONS}
-                  aria-label="LOP month"
-                  disabled={loading || bulkExporting}
-                />
-              </div>
+              <SelectField
+                value={monthPartFilter}
+                onChange={setMonthPartFilter}
+                options={monthOptions}
+                aria-label="LOP month"
+                disabled={loading || bulkExporting}
+              />
             </div>
           </div>
 
@@ -346,7 +335,7 @@ export default function AdminLopCalculation() {
         month={month}
         asOf={asOf}
         yearOptions={YEAR_OPTIONS}
-        monthOptions={SALARY_MONTH_OPTIONS}
+        monthOptions={monthOptions}
         onMonthChange={handleModalMonthChange}
         onClose={() => setDetailTarget(null)}
       />

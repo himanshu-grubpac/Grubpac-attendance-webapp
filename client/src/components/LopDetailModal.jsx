@@ -100,24 +100,25 @@ export default function LopDetailModal({
 
         <div className="modal__body salary-detail-modal__body">
           <div className="salary-toolbar__filters filter-bar">
-            <div className="field-inline filter-bar__field salary-toolbar__field salary-toolbar__field--period">
+            <div className="field-inline filter-bar__field salary-toolbar__field">
+              <span className="label">Year</span>
+              <SelectField
+                value={month.split('-')[0]}
+                onChange={(year) => onMonthChange?.(year, month.split('-')[1])}
+                options={yearOptions}
+                aria-label="LOP detail year"
+                disabled={loading}
+              />
+            </div>
+            <div className="field-inline filter-bar__field salary-toolbar__field">
               <span className="label">Month</span>
-              <div className="salary-toolbar__period">
-                <SelectField
-                  value={month.split('-')[0]}
-                  onChange={(year) => onMonthChange?.(year, month.split('-')[1])}
-                  options={yearOptions}
-                  aria-label="LOP detail year"
-                  disabled={loading}
-                />
-                <SelectField
-                  value={month.split('-')[1]}
-                  onChange={(monthPart) => onMonthChange?.(month.split('-')[0], monthPart)}
-                  options={monthOptions}
-                  aria-label="LOP detail month"
-                  disabled={loading}
-                />
-              </div>
+              <SelectField
+                value={month.split('-')[1]}
+                onChange={(monthPart) => onMonthChange?.(month.split('-')[0], monthPart)}
+                options={monthOptions}
+                aria-label="LOP detail month"
+                disabled={loading}
+              />
             </div>
           </div>
 

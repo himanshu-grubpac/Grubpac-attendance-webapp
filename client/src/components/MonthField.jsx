@@ -154,4 +154,75 @@ export default function MonthField({
   );
 }
 
-export { parseMonthValue, toMonthValue, formatMonthLabel, getTodayMonthIst };
+const SALARY_MONTH_NAME_FORMATTER = new Intl.DateTimeFormat('en-IN', {
+  month: 'long',
+  timeZone: 'UTC',
+});
+
+/** Current calendar year in IST (YYYY). */
+function getCurrentIstYear() {
+  return Number(getTodayMonthIst().split('-')[0]);
+}
+
+/** Current calendar month in IST (MM). */
+function getCurrentIstMonthPart() {
+  return getTodayMonthIst().split('-')[1];
+}
+
+/** Clamp a year string so it cannot exceed the current IST year. */
+function clampYearToCurrentIst(year) {
+  const currentYear = getCurrentIstYear();
+  const parsed = Number(year);
+  if (!Number.isFinite(parsed) || parsed > currentYear) {
+    return String(currentYear);
+  }
+  return String(parsed);
+}
+
+/** Salary/LOP year dropdown: current IST year down to current − pastYears. */
+function buildSalaryYearOptions(pastYears = 4) {
+  const currentYear = getCurrentIstYear();
+  const years = [];
+  for (let year = currentYear; year >= currentYear - pastYears; year -= 1) {
+    years.push({ value: String(year), label: String(year) });
+  }
+  return years;
+}
+
+/** Month dropdown options for a selected year — omits future months in the current IST year. */
+function buildSalaryMonthOptions(selectedYear) {
+  const currentYear = getCurrentIstYear();
+  const currentMonth = Number(getCurrentIstMonthPart());
+  const year = Number(selectedYear);
+  const maxMonth = Number.isFinite(year) && year === currentYear ? currentMonth : 12;
+  return Array.from({ length: maxMonth }, (_, index) => ({
+    value: String(index + 1).padStart(2, '0'),
+    label: SALARY_MONTH_NAME_FORMATTER.format(new Date(Date.UTC(2020, index, 1))),
+  }));
+}
+
+/** Keep month part within allowed range for the selected year (IST). */
+function clampMonthPartForYear(year, monthPart) {
+  const options = buildSalaryMonthOptions(year);
+  if (options.length === 0) {
+    return getCurrentIstMonthPart();
+  }
+  const allowed = new Set(options.map((option) => option.value));
+  if (allowed.has(monthPart)) {
+    return monthPart;
+  }
+  return options[options.length - 1].value;
+}
+
+export {
+  parseMonthValue,
+  toMonthValue,
+  formatMonthLabel,
+  getTodayMonthIst,
+  getCurrentIstYear,
+  getCurrentIstMonthPart,
+  clampYearToCurrentIst,
+  buildSalaryYearOptions,
+  buildSalaryMonthOptions,
+  clampMonthPartForYear,
+};

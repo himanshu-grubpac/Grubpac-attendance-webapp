@@ -188,6 +188,23 @@ export function computeLeaveDaysIST(
   return { days: calendarDays, workingDays, sandwichApplied: true };
 }
 
+export function getISTMonthInputValue(date = new Date()) {
+  return getISTDateInputValue(date).slice(0, 7);
+}
+
+/** Reject future salary/LOP months — clamp to current IST month (YYYY-MM). */
+export function clampMonthInputToCurrentIst(monthInput) {
+  const parsed = parseMonthInputAsISTRange(monthInput);
+  if (!parsed) {
+    return getISTMonthInputValue();
+  }
+  const currentMonth = getISTMonthInputValue();
+  if (parsed.monthKey > currentMonth) {
+    return currentMonth;
+  }
+  return parsed.monthKey;
+}
+
 /** Parse YYYY-MM and return IST month boundaries (inclusive). */
 export function parseMonthInputAsISTRange(monthInput) {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(monthInput ?? '').trim());

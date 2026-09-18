@@ -17,7 +17,7 @@ import {
   updateSalarySettingsSchema,
   updateUserSalarySchema,
 } from '../../../shared/validation/salary.js';
-import { parseDateInputAsISTDay } from '../utils/istDate.js';
+import { clampMonthInputToCurrentIst, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { auditRequest } from '../utils/auditLog.js';
 import {
   buildLopExportWorkbook,
@@ -308,20 +308,23 @@ export async function exportSalaryAuditHandler(req, res) {
 
 export async function listLopSummariesHandler(req, res) {
   const parsed = lopListQuerySchema.parse(req.query);
-  const result = await listLopSummaries(parsed);
+  const month = clampMonthInputToCurrentIst(parsed.month);
+  const result = await listLopSummaries({ ...parsed, month });
   res.json(result);
 }
 
 export async function getLopDetailHandler(req, res) {
   const { userId } = lopDetailParamsSchema.parse(req.params);
-  const { month, asOf } = lopDetailQuerySchema.parse(req.query);
+  const { month: rawMonth, asOf } = lopDetailQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
   const result = await getLopDetailForUser(req.user, req.userPermissions, userId, month, asOf);
   res.json(result);
 }
 
 export async function exportLopSingleHandler(req, res) {
   const { userId } = lopDetailParamsSchema.parse(req.params);
-  const { month, asOf } = lopExportQuerySchema.parse(req.query);
+  const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
 
   const subject = await loadSalarySubject(userId);
   if (!canViewSalarySummary(req.user, subject, req.userPermissions)) {
@@ -357,7 +360,8 @@ export async function exportLopSingleHandler(req, res) {
 }
 
 export async function exportLopBulkHandler(req, res) {
-  const { month, asOf } = lopExportQuerySchema.parse(req.query);
+  const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
   const summaries = await listAllLopSummariesForMonth(month, asOf);
   const exportRows = summaries.flatMap((summary) => lopDeductionRowsToExportRows(summary));
   const asOfLabel = asOf ?? summaries[0]?.asOfDate ?? month;
