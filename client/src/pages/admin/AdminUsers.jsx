@@ -218,8 +218,12 @@ function TableSkeleton() {
 
 export default function AdminUsers() {
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
+  // Reporting managers get the scoped creation entry points (Employee role,
+  // managed departments only — enforced by the register API).
+  const canAddTeamEmployee = user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
+  const canAddEmployee = canWriteUsers || canAddTeamEmployee;
   const canReadAllAttendance = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess } = useToast();
@@ -298,12 +302,19 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(true);
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // The Admin option is visible only to viewers who can administer roles —
+  // everyone else gets the assignable/filterable set (register + detail
+  // pages hide it unconditionally).
+  const canSeeAdminRole = user?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN
+    || hasPermission(PERMISSIONS.ROLES_MANAGE);
   const roleOptions = useMemo(
     () => [
       { value: '', label: 'All roles' },
-      ...roles.map((role) => ({ value: role.id, label: role.name })),
+      ...roles
+        .filter((role) => canSeeAdminRole || role.slug !== SYSTEM_ROLE_SLUGS.ADMIN)
+        .map((role) => ({ value: role.id, label: role.name })),
     ],
-    [roles],
+    [roles, canSeeAdminRole],
   );
 
   const departmentOptions = useMemo(
@@ -1163,7 +1174,7 @@ export default function AdminUsers() {
                 >
                   Edit columns
                 </button>
-                {canWriteUsers ? (
+                {canAddEmployee ? (
                   <Link to="/admin/users/register" className="btn btn-primary btn-sm">
                     + Add Employee
                   </Link>
@@ -1210,7 +1221,7 @@ export default function AdminUsers() {
                     ? 'Show all employees'
                     : 'Clear filters'}
                 </button>
-              ) : !hasActiveFilters && canWriteUsers ? (
+              ) : !hasActiveFilters && canAddEmployee ? (
                 <Link to="/admin/users/register" className="btn btn-primary btn-sm">
                   Register employee
                 </Link>

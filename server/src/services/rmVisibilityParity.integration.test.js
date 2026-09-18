@@ -1,11 +1,15 @@
 /**
  * RM visibility parity (integration, real Mongo).
  *
- * Every team-scoped page (dashboard, employee list, attendance history,
- * today strip) must resolve the SAME membership for a reporting manager:
+ * Every reports-scoped page (dashboard stats, employee list, attendance
+ * history) must resolve the SAME membership for a reporting manager:
  * direct reports + delegate chain, never managed departments. Regression
  * test for the dashboard-38 vs list-20 split: a manager with 38 reports and
  * a 20-person managed department sees the same 38 people everywhere.
+ *
+ * Today Present is the deliberate exception: its dashboard roster and page
+ * are managed-department scoped (in-scope reports + self + in-scope
+ * same-role peers) — see teamTodayScope.integration.test.js.
  */
 process.env.NODE_ENV = 'test';
 
@@ -64,7 +68,7 @@ async function createUser(name, fields = {}) {
   });
 }
 
-test('team scope equals leave-approval scope even with a managed department', async () => {
+test('authority scope equals leave-approval scope even with a managed department', async () => {
   const role = await createRole();
   const dept = new mongoose.Types.ObjectId();
   const mgr = await createUser('Mgr', {
@@ -105,7 +109,7 @@ test('team scope equals leave-approval scope even with a managed department', as
   assert.ok(!sortIds(teamIds).includes(String(mgr._id)), 'manager does not see self');
 });
 
-test('employee-directory query narrows to the same membership', async () => {
+test('employee-directory query shows the visibility roster (managed + self + RMs)', async () => {
   const role = await createRole();
   const dept = new mongoose.Types.ObjectId();
   const mgr = await createUser('MgrTwo', {
@@ -114,11 +118,15 @@ test('employee-directory query narrows to the same membership', async () => {
     managedDepartmentIds: [dept],
   });
   const direct = await createUser('DirectTwo', { roleId: role._id, reportingManagerId: mgr._id });
-  await createUser('StrangerTwo', {
+  const stranger = await createUser('StrangerTwo', {
     roleId: role._id,
     reportingManagerId: new mongoose.Types.ObjectId(),
     departmentId: dept,
   });
+  // Fellow RM with the real reporting-manager slug (test roles use suffixed
+  // slugs, which the fellow-RM lookup deliberately ignores).
+  const rmRole = await Role.create({ name: 'RM', slug: 'reporting-manager', permissions: RM_PERMS });
+  const sibRm = await createUser('SibRmTwo', { roleId: rmRole._id });
 
   const query = await applyTeamScopeToEmployeeQuery(
     {},
@@ -128,6 +136,16 @@ test('employee-directory query narrows to the same membership', async () => {
     PERMISSIONS.ATTENDANCE_READ_TEAM,
   );
   const found = await User.find(query).select('_id').lean();
-  const ids = found.map((u) => String(u._id));
-  assert.deepEqual(ids.sort(), [String(direct._id)].sort());
+  const ids = found.map((u) => String(u._id)).sort();
+  assert.ok(ids.includes(String(direct._id)), 'direct report visible');
+  assert.ok(ids.includes(String(stranger._id)), 'managed-department member visible');
+  assert.ok(ids.includes(String(mgr._id)), 'manager sees self');
+  assert.ok(ids.includes(String(sibRm._id)), 'fellow RM visible');
+
+  // Authority stays narrow: approvals never include managed strangers, self,
+  // or fellow RMs — visibility never grants acting.
+  const approvalIds = (await resolveLeaveApprovalUserIds(mgr)).map(String);
+  assert.ok(!approvalIds.includes(String(stranger._id)), 'approvals exclude managed stranger');
+  assert.ok(!approvalIds.includes(String(mgr._id)), 'approvals exclude self');
+  assert.ok(!approvalIds.includes(String(sibRm._id)), 'approvals exclude fellow RM');
 });

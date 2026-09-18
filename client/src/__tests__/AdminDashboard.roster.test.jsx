@@ -6,6 +6,8 @@ import { MemoryRouter } from 'react-router-dom';
 import AdminDashboard from '../pages/admin/AdminDashboard.jsx';
 
 let allowRoster = true;
+let allowTeamRoster = true;
+let mockManagedDepartments = [];
 
 vi.mock('../services/api.js', () => ({
   adminApi: {
@@ -57,8 +59,10 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   return {
     ...actual,
     useAuth: () => ({
+      user: { managedDepartmentIds: mockManagedDepartments },
       hasPermission: (permission) => {
         if (permission === 'attendance.read_all') return allowRoster;
+        if (permission === 'attendance.read_team') return allowTeamRoster;
         return true;
       },
     }),
@@ -66,6 +70,10 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
 });
 
 import { adminApi } from '../services/api.js';
+
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
 
 function setup() {
   render(
@@ -80,6 +88,8 @@ function setup() {
 describe('AdminDashboard roster preview', () => {
   beforeEach(() => {
     allowRoster = true;
+    allowTeamRoster = true;
+    mockManagedDepartments = [];
     vi.clearAllMocks();
   });
 
@@ -119,14 +129,71 @@ describe('AdminDashboard roster preview', () => {
     );
   });
 
-  it('hides the roster section without full-read permission', async () => {
+  it('hides the roster section without any team-read permission', async () => {
     allowRoster = false;
+    allowTeamRoster = false;
     setup();
     await waitFor(() => {
       expect(screen.getByText('Total Active Employees')).toBeInTheDocument();
     });
     expect(screen.queryByText('Today present')).not.toBeInTheDocument();
     expect(adminApi.getTeamTodayStatus).not.toHaveBeenCalled();
+  });
+
+  it('shows the managed-scoped roster without a department dropdown for team viewers', async () => {
+    allowRoster = false;
+    allowTeamRoster = true;
+    mockManagedDepartments = ['d1'];
+    setup();
+    await waitFor(() => {
+      expect(screen.getByText('Today present')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Anuj')).toBeInTheDocument();
+    expect(adminApi.getTeamTodayStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ page: 1, limit: 10 }),
+    );
+    // Single managed department locks the scope: no department dropdown.
+    expect(screen.queryByLabelText('Filter by department')).not.toBeInTheDocument();
+  });
+
+  it('limits the department and role dropdowns to the viewer scope', async () => {
+    const user = userEvent.setup();
+    allowRoster = false;
+    allowTeamRoster = true;
+    mockManagedDepartments = ['d1', 'd2'];
+    // StrictMode double-mounts, so the roster fetch fires twice — a
+    // persistent override (not Once) covers both calls.
+    adminApi.getTeamTodayStatus.mockResolvedValue({
+      teamStatus: [
+        { userId: 'u1', firstName: 'Anuj', employeeCode: 'EMP109', department: 'Development', roleName: 'SDE', status: 'checked_in' },
+      ],
+      pagination: { page: 1, limit: 10, total: 1, totalPages: 1 },
+      // Only Development has people — Design is managed but empty and
+      // must still list (union of managed + facets).
+      scopeFacets: {
+        departments: [{ id: 'd1', name: 'Development' }],
+        roles: [{ id: 'r1', name: 'SDE' }],
+      },
+    });
+    adminApi.listDepartments.mockResolvedValue({
+      departments: [
+        { id: 'd1', name: 'Development' },
+        { id: 'd2', name: 'Design' },
+        { id: 'd3', name: 'GTM' },
+      ],
+    });
+    setup();
+    await waitFor(() => {
+      expect(screen.getByText('Today present')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('combobox', { name: 'Filter by department' }));
+    expect(await screen.findByRole('option', { name: 'Development' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Design' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'GTM' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('combobox', { name: 'Filter by role' }));
+    expect(await screen.findByRole('option', { name: 'SDE' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Admin' })).not.toBeInTheDocument();
   });
 
   it('keeps KPI cards when the roster fetch fails', async () => {

@@ -1,4 +1,4 @@
-import { PERMISSION_GROUPS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { PERMISSIONS, PERMISSION_GROUPS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import {
@@ -13,7 +13,26 @@ export async function listPermissions(req, res) {
 }
 
 export async function listRoles(req, res) {
-  const { includeSystem } = roleListQuerySchema.parse(req.query);
+  const { includeSystem, scope } = roleListQuerySchema.parse(req.query);
+  const canSeeCatalog =
+    hasPermission(req.userPermissions, PERMISSIONS.ROLES_MANAGE)
+    || hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE);
+  if (!canSeeCatalog) {
+    // Team creators never see the catalog (it carries every role's
+    // permission matrix) — only the id/name/slug of roles they may assign.
+    const actorSlug = req.user?.roleId?.slug ?? null;
+    if (scope !== 'creatable' || actorSlug !== SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
+      return res.status(403).json({ message: 'You do not have permission for this action.' });
+    }
+    const employeeRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.EMPLOYEE })
+      .select('_id name slug')
+      .lean();
+    return res.json({
+      roles: employeeRole
+        ? [{ id: employeeRole._id.toString(), name: employeeRole.name, slug: employeeRole.slug }]
+        : [],
+    });
+  }
   const query = includeSystem ? {} : { isSystem: false };
   const roles = await Role.find(query).sort({ isSystem: -1, name: 1 });
   res.json({ roles: roles.map((role) => role.toSafeJSON()) });

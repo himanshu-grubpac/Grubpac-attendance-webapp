@@ -87,6 +87,16 @@ describe('AuthContext canSwitchPortal (TEMP admin hide)', () => {
     await waitFor(() => expect(screen.getByTestId('switch-flag')).toHaveTextContent('no'));
   });
 
+  it('uses roleSlug over a stale legacy role (RM with legacy admin flag keeps the switch)', async () => {
+    setup({ ...dualUser('employee'), roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER });
+    await waitFor(() => expect(screen.getByTestId('switch-flag')).toHaveTextContent('yes'));
+  });
+
+  it('hides the switch when roleSlug is admin even if legacy role differs', async () => {
+    setup({ ...dualUser('employee'), roleSlug: SYSTEM_ROLE_SLUGS.ADMIN });
+    await waitFor(() => expect(screen.getByTestId('switch-flag')).toHaveTextContent('no'));
+  });
+
   it('hides the switch when logged out', async () => {
     mockUser = null;
     document.cookie = 'attendance_csrf=test';

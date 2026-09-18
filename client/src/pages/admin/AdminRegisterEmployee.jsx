@@ -154,9 +154,16 @@ function RegisterPasswordField({ value, onChange, error, disabled }) {
 
 export default function AdminRegisterEmployee() {
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const { showSuccess, showError } = useToast();
   const canManageSalary = hasPermission(PERMISSIONS.SALARY_WRITE);
+  // Scoped team creation: reporting managers without full user access create
+  // Employee accounts under their own managed departments only. The server
+  // re-enforces every bound; the form just narrows the choices.
+  const scopedCreator =
+    !hasPermission(PERMISSIONS.USERS_WRITE)
+    && user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
+  const scopedManagedIds = scopedCreator ? (user?.managedDepartmentIds ?? []) : null;
   const [form, setForm] = useState(emptyForm);
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
@@ -172,11 +179,16 @@ export default function AdminRegisterEmployee() {
     setReferenceLoading(true);
     setReferenceError('');
 
-    Promise.all([
-      adminApi.listRoles(),
-      adminApi.listDepartments(),
-      adminApi.listManagers({ limit: 500 }),
-    ])
+    // Scoped creators resolve only the roles they may assign (Employee) and
+    // never need the manager directory — new joiners always report to them.
+    const rolesPromise = scopedCreator
+      ? adminApi.listRoles({ scope: 'creatable' })
+      : adminApi.listRoles();
+    const managersPromise = scopedCreator
+      ? Promise.resolve({ managers: [] })
+      : adminApi.listManagers({ limit: 500 });
+
+    Promise.all([rolesPromise, adminApi.listDepartments(), managersPromise])
       .then(([rolesData, departmentsData, managersData]) => {
         const nextRoles = rolesData.roles ?? [];
         const nextDepartments = departmentsData.departments ?? [];
@@ -197,7 +209,17 @@ export default function AdminRegisterEmployee() {
       .finally(() => {
         setReferenceLoading(false);
       });
-  }, []);
+    // Re-resolves when the session lands: a slow auth restore would otherwise
+    // fetch the full catalog as a scoped creator (403) or vice versa.
+  }, [scopedCreator]);
+
+  // Scoped creators always file under themselves; the session user can land
+  // after the reference fetch, so preset separately once it is known.
+  useEffect(() => {
+    if (scopedCreator && user?.id) {
+      setForm((current) => (current.reportingManagerId ? current : { ...current, reportingManagerId: user.id }));
+    }
+  }, [scopedCreator, user?.id]);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -297,13 +319,15 @@ export default function AdminRegisterEmployee() {
     .map((role) => ({ value: role.id, label: role.name }));
 
   const departmentOptions = departments
-    .filter((dept) => dept.isActive)
+    .filter((dept) => dept.isActive && (scopedManagedIds === null || scopedManagedIds.includes(dept.id)))
     .map((dept) => ({ value: dept.id, label: dept.name }));
 
-  const managerOptions = managers.map((manager) => ({
-    value: manager.id,
-    label: `${manager.name} (${manager.roleName})`,
-  }));
+  const managerOptions = scopedCreator && user?.id
+    ? [{ value: user.id, label: `${user.name ?? 'You'} (Reporting Manager)` }]
+    : managers.map((manager) => ({
+      value: manager.id,
+      label: `${manager.name} (${manager.roleName})`,
+    }));
 
   const hasDepartmentList = departmentOptions.length > 0;
   const formDisabled = submitting || referenceLoading;
@@ -485,10 +509,12 @@ export default function AdminRegisterEmployee() {
                 options={roleOptions}
                 placeholder="Select role"
                 aria-label="Role"
-                disabled={formDisabled || roleOptions.length === 0}
+                disabled={formDisabled || roleOptions.length === 0 || scopedCreator}
               />
               <p id="register-role-hint" className="muted small">
-                Controls permissions and portal access. Defaults to Employee.
+                {scopedCreator
+                  ? 'Reporting managers can only create Employee accounts.'
+                  : 'Controls permissions and portal access. Defaults to Employee.'}
               </p>
               <FieldError message={fieldErrors.roleId} />
             </div>
@@ -513,9 +539,15 @@ export default function AdminRegisterEmployee() {
               <div className="register-field register-field--full">
                 <RegisterLabel>Department</RegisterLabel>
                 <p className="muted small" id="register-department-empty-hint">
-                  No departments configured yet.{' '}
-                  <Link to="/admin/departments">Create departments</Link> before assigning
-                  employees to a team.
+                  {scopedCreator ? (
+                    'No managed departments are assigned to your account. Ask an administrator to assign one before adding team members.'
+                  ) : (
+                    <>
+                      No departments configured yet.{' '}
+                      <Link to="/admin/departments">Create departments</Link> before assigning
+                      employees to a team.
+                    </>
+                  )}
                 </p>
               </div>
             )}
@@ -530,17 +562,20 @@ export default function AdminRegisterEmployee() {
                 options={managerOptions}
                 placeholder="Select reporting manager"
                 aria-label="Reporting manager"
-                disabled={formDisabled}
+                disabled={formDisabled || scopedCreator}
               />
               <p id="register-manager-hint" className="muted small">
-                {reportingManagerRequired
-                  ? 'Required for employees — used for leave approval and team reporting.'
-                  : 'Optional for this role — used for leave approval and team reporting.'}
+                {scopedCreator
+                  ? 'New joiners always report to you.'
+                  : reportingManagerRequired
+                    ? 'Required for employees — used for leave approval and team reporting.'
+                    : 'Optional for this role — used for leave approval and team reporting.'}
               </p>
               <FieldError message={fieldErrors.reportingManagerId} />
             </div>
 
-            {hasDepartmentList ? (
+            {/* Team creators file Employee accounts only — no team scope to grant. */}
+            {hasDepartmentList && !scopedCreator ? (
               <div className="register-field">
                 <RegisterLabel required={managedDeptsRequired} optional={!managedDeptsRequired}>
                   Managed departments (team scope)

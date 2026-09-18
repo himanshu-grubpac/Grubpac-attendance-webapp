@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { PERMISSIONS } from '@shared/permissions.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
@@ -27,11 +27,20 @@ const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0
 
 export default function AdminTodayPresent() {
   const { setMeta } = usePageMetaContext();
-  const { hasPermission } = useAuth();
-  // Department filter mirrors the Employee List (full-read only); the role
-  // filter is available to every scoped viewer. Server-side team scope
-  // applies on top, so neither filter can widen visibility.
-  const canFilterByDepartment = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  const { hasPermission, user } = useAuth();
+  // Department filter mirrors the Employee List (full-read only), except
+  // team viewers with several managed departments get a dropdown limited
+  // to their scoped departments; a single scoped department locks the
+  // table (no dropdown). The role filter is available to every scoped
+  // viewer, limited to the roles of the people under them. Server-side
+  // team scope applies on top, so no filter can widen visibility.
+  const canSeeFullRoster = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canSeeTeamRoster =
+    canSeeFullRoster || hasPermission(PERMISSIONS.ATTENDANCE_READ_TEAM);
+  const managedDepartmentIds = useMemo(() => {
+    const raw = user?.managedDepartmentIds;
+    return Array.isArray(raw) ? raw.map((id) => String(id)) : [];
+  }, [user]);
   const [teamStatus, setTeamStatus] = useState([]);
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [pagination, setPagination] = useState(null);
@@ -45,6 +54,59 @@ export default function AdminTodayPresent() {
   const [roleFilter, setRoleFilter] = useState('');
   const [departments, setDepartments] = useState([]);
   const [roles, setRoles] = useState([]);
+  // Scope facets arrive with every response: the distinct
+  // departments/roles across the viewer's whole scoped membership. Team
+  // viewers build both dropdowns from these (never the directory lists).
+  const [scopeFacets, setScopeFacets] = useState({ departments: [], roles: [] });
+  // Scoped department options for team viewers: the UNION of assigned
+  // managed departments (intersected with the directory for names) and
+  // facet departments — a managed department with no people yet still
+  // lists. Options can only narrow: the server enforces the same scope.
+  // A single scoped department locks the table (no dropdown).
+  const scopedDeptOptions = useMemo(() => {
+    const byId = new Map();
+    for (const dept of departments) {
+      if (managedDepartmentIds.includes(String(dept.id))) {
+        byId.set(String(dept.id), { id: dept.id, name: dept.name });
+      }
+    }
+    const facets = Array.isArray(scopeFacets.departments) ? scopeFacets.departments : [];
+    for (const dept of facets) {
+      const key = String(dept?.id ?? '');
+      if (key && !byId.has(key)) byId.set(key, { id: dept.id, name: dept.name });
+    }
+    return [...byId.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [departments, managedDepartmentIds, scopeFacets]);
+  const showDepartmentFilter = canSeeFullRoster || (canSeeTeamRoster && scopedDeptOptions.length > 1);
+  const departmentOptions = useMemo(() => {
+    const list = canSeeFullRoster ? departments : scopedDeptOptions;
+    return [
+      { value: '', label: canSeeFullRoster ? 'All departments' : 'All managed departments' },
+      ...list.map((dept) => ({ value: dept.id, label: dept.name })),
+    ];
+  }, [canSeeFullRoster, departments, scopedDeptOptions]);
+  // The Admin role option is visible only to viewers who can administer
+  // roles — team viewers never see it in any role dropdown.
+  const canSeeAdminRole = user?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN
+    || hasPermission(PERMISSIONS.ROLES_MANAGE);
+  const withoutAdminRole = (role) => canSeeAdminRole || role.slug !== SYSTEM_ROLE_SLUGS.ADMIN;
+  const scopedRoleOptions = useMemo(() => {
+    const fromFacets = Array.isArray(scopeFacets.roles) ? scopeFacets.roles : [];
+    return [
+      { value: '', label: 'All roles' },
+      ...fromFacets
+        .filter(withoutAdminRole)
+        .map((role) => ({ value: role.id, label: role.name })),
+    ];
+  }, [scopeFacets, canSeeAdminRole]);
+  // Team viewers cannot list roles (ROLES_MANAGE/USERS_WRITE only), so
+  // without scope roles the filter would be a dead select — hide it.
+  const showRoleFilter = canSeeFullRoster || (canSeeTeamRoster && scopedRoleOptions.length > 1);
+  const roleOptions = useMemo(() => (
+    canSeeFullRoster
+      ? [{ value: '', label: 'All roles' }, ...roles.filter(withoutAdminRole).map((role) => ({ value: role.id, label: role.name }))]
+      : scopedRoleOptions
+  ), [canSeeFullRoster, roles, scopedRoleOptions, canSeeAdminRole]);
   const loadMoreRef = useRef(null);
   const tableWrapRef = useRef(null);
   const requestKeyRef = useRef('');
@@ -108,6 +170,7 @@ export default function AdminTodayPresent() {
       setSummary(data.summary ?? EMPTY_SUMMARY);
       setPagination(data.pagination ?? null);
       setPage(data.pagination?.page ?? nextPage);
+      setScopeFacets(data.scopeFacets ?? { departments: [], roles: [] });
     } catch (err) {
       if (requestKeyRef.current !== requestKey) return;
       setError(getErrorMessage(err));
@@ -115,6 +178,7 @@ export default function AdminTodayPresent() {
         setTeamStatus([]);
         setSummary(EMPTY_SUMMARY);
         setPagination(null);
+        setScopeFacets({ departments: [], roles: [] });
       }
     } finally {
       if (requestKeyRef.current === requestKey) {
@@ -239,17 +303,11 @@ export default function AdminTodayPresent() {
           hasActiveSearch={Boolean(query.trim())}
           onDepartmentChange={handleDepartmentChange}
           departmentValue={departmentFilter}
-          showDepartmentFilter={canFilterByDepartment}
-          departmentOptions={[
-            { value: '', label: 'All departments' },
-            ...departments.map((dept) => ({ value: dept.id, label: dept.name })),
-          ]}
-          onRoleChange={handleRoleChange}
+          showDepartmentFilter={showDepartmentFilter}
+          departmentOptions={departmentOptions}
+          onRoleChange={showRoleFilter ? handleRoleChange : null}
           roleValue={roleFilter}
-          roleOptions={[
-            { value: '', label: 'All roles' },
-            ...roles.map((role) => ({ value: role.id, label: role.name })),
-          ]}
+          roleOptions={roleOptions}
           toolbarActions={(
             <button
               type="button"

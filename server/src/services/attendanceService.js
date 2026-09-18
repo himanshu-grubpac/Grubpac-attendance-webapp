@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
 
@@ -17,6 +18,7 @@ import {
 import { getHolidayMapForYear, adminApplyLeaveForEmployeeDay } from './leaveService.js';
 import {
   isUserInTeamScope,
+  resolveTeamRosterIds,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import {
@@ -386,48 +388,23 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
   let userIds = [];
   if (canReadAll) {
-    // Directory parity: the Employee List directory counts non-admin
-    // accounts of all statuses, so the board shows the same roster (inactive
-    // members render as inactive rows, never as absent) and both totals
-    // reconcile.
-    const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
-    const adminRoleId = adminRole?._id?.toString() ?? null;
-    // Admins stay out of the default roster (directory parity) but appear
-    // when explicitly requested via the role filter — mirrors the Employee
-    // List, where picking the Admin role lists admins.
-    const includeAdmins = adminRoleId ? roleFilter === adminRoleId : roleFilter === 'admin';
-    const rosterQuery = includeAdmins
-      ? {}
-      : adminRole
-        ? { roleId: { $ne: adminRole._id } }
-        : { role: { $ne: 'admin' } };
-    const roster = await User.find(rosterQuery).select('_id').lean();
+    // Directory parity with the Employee List (All includes admins): the
+    // roster carries every scoped account of all statuses, so admins are
+    // searchable and the totals reconcile with the directory stats.
+    // Inactive members render as inactive rows, never as absent.
+    // Explicit department/role narrowing still applies below.
+    const roster = await User.find({}).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Canonical team scope: ACTIVE direct reports + delegate chain only.
-    // Inactive ex-reports are hidden (unlike the admin board, which keeps
-    // inactive rows). Managed departments do NOT widen visibility: an RM sees
-    // precisely the active people under them, matching every other team view.
-    const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id').lean();
-    const delegatedManagers = await User.find({ delegateApproverId: actor._id, isActive: true }).select('_id').lean();
-    const delegatedReports =
-      delegatedManagers.length > 0
-        ? await User.find({
-            reportingManagerId: { $in: delegatedManagers.map((manager) => manager._id) },
-            isActive: true,
-          })
-            .select('_id')
-            .lean()
-        : [];
-    const seen = new Set();
-    userIds = [...directReports, ...delegatedReports]
-      .map((member) => member._id)
-      .filter((id) => {
-        const key = String(id);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+    // Visibility roster (managed departments + reports + delegates + self +
+    // fellow RMs, all statuses): same membership as the Employee List so both
+    // totals reconcile. Inactive members render as inactive rows below.
+    userIds = await resolveTeamRosterIds(
+      actor,
+      permissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    ) ?? [];
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
@@ -552,6 +529,41 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     return true;
   });
 
+  // Distinct departments/roles across the whole scoped membership (before
+  // search/pagination/narrowing) so scoped viewers get department/role
+  // filter options limited to the people under them — never the full
+  // directory. Full readers ignore these and keep the directory lists.
+  // IDs come from the raw membership query (populate yields null for
+  // dangling references) and names resolve via the directory collections.
+  const facetMembers = await User.find({ _id: { $in: userIds } })
+    .select('departmentId roleId')
+    .lean();
+  const facetDeptIds = [
+    ...new Set(
+      (facetMembers ?? [])
+        .map((member) => member.departmentId?.toString?.() ?? '')
+        .filter(Boolean),
+    ),
+  ];
+  const facetRoleIds = [
+    ...new Set(
+      (facetMembers ?? []).map((member) => member.roleId?.toString?.() ?? '').filter(Boolean),
+    ),
+  ];
+  const [facetDeptDocs, facetRoleDocs] = await Promise.all([
+    facetDeptIds.length > 0 ? Department.find({ _id: { $in: facetDeptIds } }).select('name').lean() : [],
+    facetRoleIds.length > 0 ? Role.find({ _id: { $in: facetRoleIds } }).select('name slug').lean() : [],
+  ]);
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+  const scopeFacets = {
+    departments: (facetDeptDocs ?? [])
+      .map((dept) => ({ id: dept._id.toString(), name: dept.name }))
+      .sort(byName),
+    roles: (facetRoleDocs ?? [])
+      .map((role) => ({ id: role._id.toString(), name: role.name, slug: role.slug ?? null }))
+      .sort(byName),
+  };
+
   const teamStatus = users.map((user) => {
     const userIdStr = user._id.toString();
     const checkIn = checkInByUser.get(userIdStr) ?? null;
@@ -662,6 +674,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     teamStatus: rows,
     pagination: { page: safePage, limit, total, totalPages },
     summary,
+    scopeFacets,
   };
 }
 

@@ -83,7 +83,7 @@ export default function App() {
               <Route
                 path="admin/users/register"
                 element={
-                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_WRITE}>
+                  <ProtectedRoute portal="admin" permission={PERMISSIONS.USERS_WRITE} teamCreator>
                     <AdminRegisterEmployee />
                   </ProtectedRoute>
                 }

@@ -83,11 +83,13 @@ async function setup() {
   return { admin, adminRole, empRole, rmRole, dev, design, devEmp, designRm };
 }
 
-test('no filters returns the whole scoped roster (admins excluded, like the directory)', async () => {
+test('no filters returns the whole scoped roster including admins (Employee List parity)', async () => {
   const { admin } = await setup();
   const result = await getTeamTodayStatusService(admin, ADMIN_PERMS, { paginate: true, page: 1, limit: 25 });
-  assert.equal(result.pagination.total, 2);
-  assert.equal(result.summary.total, 2);
+  assert.equal(result.pagination.total, 3);
+  assert.equal(result.summary.total, 3);
+  const names = result.teamStatus.map((row) => row.name);
+  assert.ok(names.includes('Admin Test'));
 });
 
 test('departmentId narrows rows, total and summary together', async () => {

@@ -18,7 +18,7 @@ const BULK_REGULATIONS = [
   'The "email" column is the employee identifier. Do NOT edit email values.',
   '"email", "mobile", and "employeeCode" are IMMUTABLE via bulk import. Changing mobile or employeeCode fails that row with a validation error naming the employee — except a malformed stored mobile, which is healed when the file carries a valid 10-digit replacement.',
   'To change email or mobile, use the individual employee edit page instead.',
-  'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in. Passwords remain visible in the sync results for any email that fails delivery.',
+  'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.',
   'New employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail. Pick the role from the dropdown list in the role column.',
   '"role" changes apply to existing employees too (admin accounts are never touched by bulk import). New reporting managers automatically manage their own department; assign further managed departments from the user edit page for wider team visibility.',
   'Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, …). A filled-in code is kept when valid and unused.',
@@ -610,18 +610,6 @@ export default function AdminBulkUpload() {
     }, 2000);
   }
 
-  // Post-sync row table only when rows need inspection: new accounts carry
-  // one-time generated passwords, errors/duplicates name the rows to fix.
-  // Pure updated/unchanged syncs skip the 100-row noise — pills + toast +
-  // footer message already say it all.
-  const resultSummary = result?.summary ?? {};
-  const resultErrorCount =
-    (resultSummary.validation_error || 0) + (resultSummary.error || 0);
-  const showResultRowTable =
-    (resultSummary.created || 0) > 0 ||
-    resultErrorCount > 0 ||
-    (resultSummary.duplicate || 0) > 0;
-
   return (
     <div className="page page--bulk-upload">
       {error ? (
@@ -795,51 +783,16 @@ export default function AdminBulkUpload() {
         onClose={closeReviewPopup}
       />
 
-      {result ? (
-        <section className="bulk-upload__results card" aria-labelledby="bulk-results-title">
-          <h2 id="bulk-results-title" className="bulk-upload__results-title">
-            Sync results
-          </h2>
-          {result.summary.created > 0 ? (
-            <p className="alert alert--warning small" role="note">
-              {result.summary.created} new account{result.summary.created === 1 ? '' : 's'} created.
-              Generated passwords are shown only here — copy each one and share it with its
-              employee securely.
-            </p>
-          ) : null}
-          <FileWarnings warnings={result.warnings} />
-          <SummaryPills summary={result.summary} />
-          {showResultRowTable ? (
-            <ResultsTable
-              result={result}
-              expandedRow={expandedRow}
-              onToggleRow={toggleRowExpand}
-              copiedRow={copiedRow}
-              onCopyPassword={copyGeneratedPassword}
-            />
-          ) : null}
-        </section>
-      ) : null}
-
       <footer className="bulk-upload__footer">
         {result && !file && !loading ? (
-          <>
-            <p className="bulk-upload__footer-note muted small" role="status">
-              Sync complete — {result.summary.updated} updated, {result.summary.created} created,{' '}
-              {result.summary.unchanged} unchanged
-              {(result.summary.validation_error || 0) + (result.summary.error || 0) > 0
-                ? `, ${(result.summary.validation_error || 0) + (result.summary.error || 0)} with errors`
-                : ''}
-              . Changes are live.
-            </p>
-            <button
-              type="button"
-              className="btn btn-outline-primary bulk-upload__submit"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Upload another file
-            </button>
-          </>
+          <p className="bulk-upload__footer-note muted small" role="status">
+            Sync complete — {result.summary.updated} updated, {result.summary.created} created,{' '}
+            {result.summary.unchanged} unchanged
+            {(result.summary.validation_error || 0) + (result.summary.error || 0) > 0
+              ? `, ${(result.summary.validation_error || 0) + (result.summary.error || 0)} with errors`
+              : ''}
+            . Changes are live.
+          </p>
         ) : (
           <p className="bulk-upload__footer-note muted small">
             Download the employee directory, make changes, and upload to review. Existing

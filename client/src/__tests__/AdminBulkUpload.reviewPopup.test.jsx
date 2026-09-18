@@ -102,7 +102,7 @@ describe('AdminBulkUpload review popup flow', () => {
     expect(adminApi.bulkPreview).toHaveBeenCalledTimes(1);
   });
 
-  it('sync inside the popup confirms and shows results', async () => {
+  it('sync inside the popup confirms and shows a footer message only', async () => {
     const user = userEvent.setup();
     setup();
     pickFile();
@@ -119,14 +119,18 @@ describe('AdminBulkUpload review popup flow', () => {
     await waitFor(() => {
       expect(adminApi.bulkUpload).toHaveBeenCalledTimes(1);
     });
-    // Popup closes; inline results section appears.
+    // Popup closes; no results section or row table after sync — only the
+    // footer confirmation message (next upload starts from the dropzone).
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(await screen.findByText('Sync results')).toBeInTheDocument();
+    expect(await screen.findByText(/Sync complete — 0 updated, 1 created/)).toBeInTheDocument();
+    expect(screen.queryByText('Sync results')).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /upload another file/i })).not.toBeInTheDocument();
   });
 
-  it('clean sync hides the per-row table; pills and message still confirm', async () => {
+  it('clean sync shows no results section; footer message still confirms', async () => {
     const user = userEvent.setup();
     adminApi.bulkUpload.mockResolvedValueOnce({
       summary: {
@@ -151,15 +155,15 @@ describe('AdminBulkUpload review popup flow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Confirm & Sync' }));
     const confirmBox = await screen.findByRole('alertdialog');
     await user.click(within(confirmBox).getByRole('button', { name: 'Sync' }));
-    expect(await screen.findByText('Sync results')).toBeInTheDocument();
-    expect(screen.getByText(/Unchanged: 2/)).toBeInTheDocument();
+    expect(await screen.findByText(/Sync complete — 0 updated, 0 created, 2 unchanged/)).toBeInTheDocument();
+    expect(screen.queryByText('Sync results')).not.toBeInTheDocument();
     // Row-level noise stays hidden; footer message confirms instead.
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.queryByText('a@test.example')).not.toBeInTheDocument();
-    expect(screen.getByText(/2 unchanged/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /upload another file/i })).not.toBeInTheDocument();
   });
 
-  it('sync with errors keeps the per-row table for diagnosis', async () => {
+  it('sync with errors still shows no results section; footer names the error count', async () => {
     const user = userEvent.setup();
     adminApi.bulkUpload.mockResolvedValueOnce({
       summary: {
@@ -184,9 +188,10 @@ describe('AdminBulkUpload review popup flow', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Confirm & Sync' }));
     const confirmBox = await screen.findByRole('alertdialog');
     await user.click(within(confirmBox).getByRole('button', { name: 'Sync' }));
-    expect(await screen.findByText('Sync results')).toBeInTheDocument();
-    expect(screen.getByRole('table')).toBeInTheDocument();
-    expect(screen.getByText('bad')).toBeInTheDocument();
+    expect(await screen.findByText(/Sync complete — 0 updated, 0 created, 1 unchanged, 1 with errors/)).toBeInTheDocument();
+    expect(screen.queryByText('Sync results')).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /upload another file/i })).not.toBeInTheDocument();
   });
 
   it('discard closes the popup and clears the file', async () => {    const user = userEvent.setup();

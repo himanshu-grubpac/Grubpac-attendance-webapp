@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import {
   ALL_PERMISSIONS,
   PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
   hasAnyPermission,
   hasPermission,
   legacyRoleFromSlug,
@@ -106,6 +107,24 @@ export function requireAllPermissions(...requiredPermissions) {
     }
     return next();
   };
+}
+
+/**
+ * Employee-creation surface (single register + assignable-role catalog):
+ * full writers and role managers pass; reporting-manager team creators pass
+ * the route but stay department/role-scoped inside the controller (scoped
+ * creation under their managed departments only). Everyone else gets a 403.
+ * req.user carries the populated roleId (slug) via loadAuthenticatedUser.
+ */
+export function requireUserWriteOrTeamCreator(req, res, next) {
+  if (
+    hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE)
+    || hasPermission(req.userPermissions, PERMISSIONS.ROLES_MANAGE)
+    || req.user?.roleId?.slug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER
+  ) {
+    return next();
+  }
+  return res.status(403).json({ message: 'You do not have permission for this action.' });
 }
 
 export function requireAdminPortalAccess(req, res, next) {

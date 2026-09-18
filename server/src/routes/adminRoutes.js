@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { authenticate, requirePermission } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireUserWriteOrTeamCreator } from '../middleware/auth.js';
 import { singleFileUpload } from '../middleware/upload.js';
 import {
   bulkUploadEmployees,
@@ -70,7 +70,7 @@ router.use(authenticate);
 router.get('/permissions', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(listPermissions));
 router.get(
   '/roles',
-  requirePermission(PERMISSIONS.ROLES_MANAGE, PERMISSIONS.USERS_WRITE),
+  requireUserWriteOrTeamCreator,
   asyncHandler(listRoles),
 );
 router.post('/roles', requirePermission(PERMISSIONS.ROLES_MANAGE), asyncHandler(createRole));
@@ -98,7 +98,7 @@ router.delete(
   asyncHandler(deleteDepartment),
 );
 
-router.post('/users', requirePermission(PERMISSIONS.USERS_WRITE), asyncHandler(registerEmployee));
+router.post('/users', requireUserWriteOrTeamCreator, asyncHandler(registerEmployee));
 router.get(
   '/users',
   requirePermission(

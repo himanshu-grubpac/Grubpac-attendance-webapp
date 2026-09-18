@@ -11660,8 +11660,27 @@ body::-webkit-scrollbar-thumb {
     display: contents;
   }
 
+  /* Two tidy lines: search + selects on line 1, both date fields on line 2
+     with the actions pushed right beside them. NOTE: the filters group is
+     display:contents, so the labels stay DOM children of that group — the
+     date selector must be a descendant selector, not a child selector.
+     The full-width ::before break (order 5) sits after every non-date item
+     (order 0) and before the dates (order 6) + actions (order 7), so
+     Joined-from never strands on line 1 while Joined-to wraps alone. */
+  .employees-toolbar__filters::before {
+    content: "";
+    flex-basis: 100%;
+    height: 0;
+    order: 5;
+  }
+
+  .employees-toolbar__filters .employees-toolbar__field:has(.date-field) {
+    order: 6;
+  }
+
   .employees-toolbar__filters > .employees-toolbar__group--actions {
     align-self: flex-end;
+    order: 7;
   }
 }
 
@@ -13660,6 +13679,7 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;

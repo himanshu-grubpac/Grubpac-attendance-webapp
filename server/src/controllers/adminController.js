@@ -53,6 +53,7 @@ import {
 import {
   applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
   isUserInTeamScope,
+  isUserVisibleToActor,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
 
@@ -124,6 +125,50 @@ const employeeListQuerySchema = paginationSchema.extend({
 });
 
 /**
+ * Reporting-manager team creation: Employee role only, always reporting to
+ * the RM themself, department restricted to the RM's managed departments
+ * (enforced again inside createEmployee via departmentScope). Privileged
+ * fields are stripped so a scoped creator can never mint managers, hand out
+ * team scopes, or set delegates/activity flags.
+ */
+async function createScopedTeamEmployee(req, body) {
+  const actorSlug = req.user?.roleId?.slug
+    ?? (await Role.findById(req.user?.roleId)?.select('slug').lean())?.slug;
+  if (actorSlug !== SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
+    const error = new Error('Only reporting managers can add team members without full user access.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const employeeRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.EMPLOYEE }).select('_id').lean();
+  if (!employeeRole) {
+    const error = new Error('Employee role is not configured.');
+    error.statusCode = 500;
+    throw error;
+  }
+  if (body.roleId && String(body.roleId) !== String(employeeRole._id)) {
+    const error = new Error('Reporting managers can only create Employee accounts.');
+    error.statusCode = 403;
+    throw error;
+  }
+  body.roleId = employeeRole._id.toString();
+  const managedIds = await getActorManagedDepartmentIds(req.user);
+  if (managedIds.length === 0) {
+    const error = new Error('No managed departments are assigned to your account. Ask an admin to assign one before adding team members.');
+    error.statusCode = 403;
+    throw error;
+  }
+  // Stringify: the input schema validates ObjectIds in string form (JSON
+  // request bodies always arrive as strings; direct ObjectIds would fail).
+  body.reportingManagerId = req.user._id.toString();
+  body.managedDepartmentIds = [];
+  body.delegateApproverId = null;
+  body.isActive = true;
+  return createEmployee(body, req.user._id, {
+    departmentScope: { all: false, departmentIds: managedIds },
+  });
+}
+
+/**
  * Admin-role check that works whether roleId is populated or raw: a populated
  * role document's bare toString() never equals the id, so compare _id first.
  */
@@ -132,6 +177,28 @@ function isAdminRoleHolder(userDoc, adminRole) {
   const roleId =
     userDoc?.roleId?._id?.toString() ?? userDoc?.roleId?.toString?.() ?? null;
   return roleId !== null && roleId === adminRole._id.toString();
+}
+
+/**
+ * Only role administrators may grant the Admin system role (single register
+ * + profile role changes): holders of the Admin role slug or the
+ * roles.manage permission. The register/edit pages show the option to the
+ * same set, and this backstops direct API calls. (A roles.manage holder can
+ * already craft equivalent power via custom roles, so excluding them here
+ * would only produce 403-on-submit dead ends.)
+ */
+async function assertCanAssignRole(actor, roleId, permissions = []) {
+  if (!roleId) return;
+  const role = await Role.findById(roleId).select('slug').lean();
+  if (role?.slug !== SYSTEM_ROLE_SLUGS.ADMIN) return;
+  if (hasPermission(permissions, PERMISSIONS.ROLES_MANAGE)) return;
+  const actorSlug = actor?.roleId?.slug
+    ?? (await Role.findById(actor?.roleId)?.select('slug').lean())?.slug;
+  if (actorSlug !== SYSTEM_ROLE_SLUGS.ADMIN) {
+    const error = new Error('Only admins can assign the Admin role.');
+    error.statusCode = 403;
+    throw error;
+  }
 }
 
 async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
@@ -251,7 +318,14 @@ export async function registerEmployee(req, res) {
     body.password = tempPassword;
   }
 
-  const employee = await createEmployee(body, req.user._id);
+  await assertCanAssignRole(req.user, body.roleId, req.userPermissions);
+
+  // Full writers create anywhere; reporting-manager team creators are
+  // department/role-scoped inside createScopedTeamEmployee.
+  const canWriteAll = hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE);
+  const employee = canWriteAll
+    ? await createEmployee(body, req.user._id)
+    : await createScopedTeamEmployee(req, body);
 
   let credentialsEmail = null;
   if (sendCredentialsEmail && tempPassword) {
@@ -279,6 +353,7 @@ export async function registerEmployee(req, res) {
     reportingManagerId: employee.reportingManagerId,
     mustChangePassword: sendCredentialsEmail,
     credentialsEmailSent: credentialsEmail?.sent ?? null,
+    scopedCreation: !canWriteAll,
   });
   res.status(201).json({
     employee: { ...employee, mustChangePassword: sendCredentialsEmail },
@@ -441,7 +516,17 @@ export async function getEmployee(req, res) {
   }
 
   const inScope = await assertEmployeeInTeamScope(req, employee._id);
-  if (!inScope) {
+  // Visibility is wider than authority: an RM also sees themself, managed
+  // members, and fellow RMs (roster), even where they cannot act.
+  const visible = inScope
+    || await isUserVisibleToActor(
+      req.user,
+      req.userPermissions,
+      employee._id,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
+  if (!visible) {
     return res.status(404).json({ message: 'Employee not found.' });
   }
 
@@ -623,6 +708,7 @@ export async function updateEmployee(req, res) {
   };
 
   if (parsed.roleId !== undefined) {
+    await assertCanAssignRole(req.user, parsed.roleId, req.userPermissions);
     const role = await resolveRole(parsed.roleId);
     employee.roleId = role._id;
     employee.role = legacyRoleFromSlug(role.slug);
