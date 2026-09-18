@@ -261,7 +261,7 @@ test('create without role or email fails validation', async () => {
     createdBy(),
   );
   assert.equal(noEmail.results[0].status, 'validation_error');
-  assert.match(noEmail.results[0].message, /Email/);
+  assert.match(noEmail.results[0].message, /email/i);
 });
 
 test('duplicate email within file discards the second row', async () => {
@@ -357,15 +357,31 @@ test('mobile change on update is a validation error identifying the employee', a
   assert.equal(refreshed.lastName, existing.lastName);
 });
 
-test('employeeCode change on update is a validation error identifying the employee', async () => {
+test('employeeCode change on update is applied when code is unique', async () => {
   const existing = await seedUser();
+  const newCode = `TST${String(900 + sequence + 100)}`; // guaranteed unique
   const { results } = await importEmployeesFromRowsUpsert(
-    [row(6, { email: existing.email, lastName: 'User', employeeCode: 'TST002' })],
+    [row(6, { email: existing.email, lastName: 'User', employeeCode: newCode })],
+    createdBy(),
+  );
+
+  assert.equal(results[0].status, 'updated');
+  assert.ok(results[0].changedFields.some((change) => change.field === 'employeeCode'));
+  const refreshed = await User.findById(existing._id).lean();
+  assert.equal(refreshed.employeeCode, newCode);
+  assert.equal(refreshed.lastName, 'User');
+});
+
+test('employeeCode change on update fails when code is taken by another employee', async () => {
+  const existing = await seedUser();
+  const taken = await seedUser();
+  const { results } = await importEmployeesFromRowsUpsert(
+    [row(6, { email: existing.email, lastName: 'User', employeeCode: taken.employeeCode })],
     createdBy(),
   );
 
   assert.equal(results[0].status, 'validation_error');
-  assert.match(results[0].message, /Employee ID cannot be changed via bulk upload/);
+  assert.match(results[0].message, /already used by another employee/);
   const refreshed = await User.findById(existing._id).lean();
   assert.equal(refreshed.employeeCode, existing.employeeCode);
   assert.equal(refreshed.lastName, existing.lastName);
@@ -440,14 +456,17 @@ test('admin matched by email stays blocked from bulk modification', async () => 
   assert.match(results[0].message, /cannot be modified via bulk import/);
 });
 
-test('new email with an already-used mobile is discarded as duplicate', async () => {
+test('new email with an already-used mobile is matched to existing and blocks email change', async () => {
   const existing = await seedUser();
   const { results } = await importEmployeesFromRowsUpsert(
     [row(6, baseCreate({ mobile: existing.mobile }))],
     createdBy(),
   );
 
-  assert.equal(results[0].status, 'duplicate');
+  assert.equal(results[0].status, 'validation_error');
+  assert.match(results[0].message, /Email cannot be changed via bulk upload/);
+  const refreshed = await User.findById(existing._id).lean();
+  assert.equal(refreshed.email, existing.email);
 });
 
 test('directory export has the new 14-column layout with role and no secrets', async () => {

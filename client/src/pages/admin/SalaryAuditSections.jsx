@@ -17,16 +17,23 @@ function currentIstYear() {
   return Number(getTodayMonthIst().split('-')[0]);
 }
 
-function buildYearOptions() {
+function buildYearOptions(minYear) {
   const currentYear = currentIstYear();
+  const COMPANY_ESTABLISHED_YEAR = 2024;
+  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
   const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
+  for (let year = currentYear; year >= floor; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;
 }
 
-const HISTORY_YEAR_OPTIONS = buildYearOptions();
+function getJoinYearFromDate(joiningDate) {
+  if (!joiningDate) return null;
+  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
+  const match = dateStr.match(/^(\d{4})/);
+  return match ? Number(match[1]) : null;
+}
 
 const AUDIT_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
   value: String(index + 1).padStart(2, '0'),
@@ -90,6 +97,10 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
   const [detailError, setDetailError] = useState('');
   const [detailOpen, setDetailOpen] = useState(false);
 
+  const joinYear = getJoinYearFromDate(history?.employee?.joiningDate);
+
+  const yearOptions = useMemo(() => buildYearOptions(joinYear), [joinYear]);
+
   function closeDetail() {
     setDetailOpen(false);
     setDetailMonth(null);
@@ -101,6 +112,15 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     setSelectedId(fixedUserId);
     closeDetail();
   }, [fixedUserId]);
+
+  useEffect(() => {
+    if (joinYear != null) {
+      const yearNum = Number(year);
+      if (Number.isFinite(yearNum) && yearNum < joinYear) {
+        setYear(String(joinYear));
+      }
+    }
+  }, [joinYear, year]);
 
   const loadEmployees = useCallback(async (query) => {
     setLoadingEmployees(true);
@@ -201,7 +221,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
             <SelectField
               value={year}
               onChange={setYear}
-              options={HISTORY_YEAR_OPTIONS}
+              options={yearOptions}
               aria-label="History year"
               disabled={loading}
             />
@@ -350,6 +370,27 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const [auditDetailMonth, setAuditDetailMonth] = useState(null);
   const tableWrapRef = useRef(null);
 
+  const earliestJoinYear = useMemo(() => {
+    if (employees.length === 0) return null;
+    let earliest = null;
+    for (const emp of employees) {
+      const jy = getJoinYearFromDate(emp.joiningDate);
+      if (jy != null && (earliest == null || jy < earliest)) {
+        earliest = jy;
+      }
+    }
+    return earliest;
+  }, [employees]);
+
+  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
+
+  useEffect(() => {
+    const yearNum = Number(yearFilter);
+    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
+      setYearFilter(String(earliestJoinYear));
+    }
+  }, [earliestJoinYear, yearFilter]);
+
   function closeAuditDetail() {
     setAuditDetailOpen(false);
     setAuditDetail(null);
@@ -458,7 +499,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                 <SelectField
                   value={yearFilter}
                   onChange={setYearFilter}
-                  options={HISTORY_YEAR_OPTIONS}
+                  options={yearOptions}
                   aria-label="Audit year"
                   disabled={loading}
                 />

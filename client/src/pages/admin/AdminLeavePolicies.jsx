@@ -41,8 +41,9 @@ const emptyPolicyForm = {
 };
 
 function buildYearOptions() {
+  const COMPANY_ESTABLISHED_YEAR = 2024;
   const years = [];
-  for (let year = currentCalendarYear - 2; year <= currentCalendarYear + 1; year += 1) {
+  for (let year = currentCalendarYear; year >= COMPANY_ESTABLISHED_YEAR; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;

@@ -11365,6 +11365,13 @@ body::-webkit-scrollbar-thumb {
   min-width: 8.5rem;
 }
 
+.employees-toolbar__clearrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding-top: 0.25rem;
+}
+
 .employees-toolbar__actions {
   /* Content-sized row 2, left-aligned (never shrink-to-overflow): at any
      viewport the buttons stack inside the card instead of spilling past

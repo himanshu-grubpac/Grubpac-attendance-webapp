@@ -17,6 +17,7 @@ import {
   countWorkingDaysIST,
   getISTDateInputValue,
   getISTYear,
+  isWeekendIST,
   listWorkingDaysIST,
   parseDateInputAsISTDay,
   parseMonthInputAsISTRange,
@@ -296,6 +297,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     employeeCode: user.employeeCode ?? null,
     monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
+    joiningDate: user.joiningDate ?? null,
     workingDaysInMonth,
     presentDays,
     paidLeaveDays,
@@ -378,8 +380,14 @@ export async function listSalarySummariesForMonth(month) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const employees = await User.find({ isActive: true, monthlySalary: { $ne: null, $gt: 0 } })
-    .select('name employeeCode monthlySalary salaryEffectiveFrom')
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+  const baseQuery = { isActive: true, monthlySalary: { $ne: null, $gt: 0 } };
+  if (adminRole) {
+    baseQuery.roleId = { $ne: adminRole._id };
+  }
+
+  const employees = await User.find(baseQuery)
+    .select('name employeeCode monthlySalary salaryEffectiveFrom joiningDate')
     .sort({ name: 1 });
 
   const summaries = [];
@@ -482,6 +490,7 @@ function salaryTransferToJSON(transfer) {
     userId,
     userName: user?.name ?? null,
     employeeCode: user?.employeeCode ?? null,
+    joiningDate: user?.joiningDate ?? null,
     periodKey: transfer.periodKey,
     amount: transfer.amount,
     currency: transfer.currency ?? 'INR',
@@ -509,7 +518,7 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
 
   const [transfers, total, stats] = await Promise.all([
     SalaryTransfer.find(query)
-      .populate('userId', 'name employeeCode')
+      .populate('userId', 'name employeeCode joiningDate')
       .sort({ updatedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -738,23 +747,60 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '' })
 }
 
 export function buildSalaryExportWorkbook(summaries, month) {
-  const rows = summaries.map((item) => ({
-    Month: item.month,
+  const [year, mon] = (month || '').split('-');
+  const fromDate = `${year}-${mon}-01`;
+  const monthEnd = new Date(Date.UTC(Number(year), Number(mon), 0));
+  const toDate = `${year}-${mon}-${String(monthEnd.getUTCDate()).padStart(2, '0')}`;
+  const asOfDate = new Date().toISOString().slice(0, 10);
+
+  const overviewRows = summaries.map((item) => ({
     'Employee Name': item.userName,
     'Employee Code': item.employeeCode ?? '',
-    'Monthly Salary (INR)': item.monthlySalary ?? '',
-    'Working Days': item.workingDaysInMonth,
-    Present: item.presentDays,
-    'Paid Leave': item.paidLeaveDays,
-    'Payable Days': item.payableDays,
-    'LOP Days': item.lopDays,
-    'Per Day (INR)': item.perDaySalary ?? '',
-    'Payable Estimate (INR)': item.payableEstimate ?? '',
+    Year: year,
+    Month: mon,
+    'From Date': fromDate,
+    'To Date': toDate,
+    'As Of Date': asOfDate,
+    'Total Salary (INR)': item.monthlySalary ?? '',
+    'LOP Reason': (item.lopDates || []).map((d) => `${d.date} (${d.unpaidDays} day${d.unpaidDays !== 1 ? 's' : ''})`).join(', ') || '—',
+    'Amount Deducted (INR)': item.lopDeduction ?? '',
+    'Remaining Salary (INR)': item.payableEstimate ?? '',
   }));
 
+  const detailedRows = summaries.flatMap((item) => {
+    const lopMap = new Map((item.lopDates || []).map((d) => [d.date, d.unpaidDays]));
+    const rows = [];
+    for (let day = 1; day <= new Date(Date.UTC(Number(year), Number(mon), 0)).getUTCDate(); day++) {
+      const dateStr = `${year}-${mon}-${String(day).padStart(2, '0')}`;
+      const isWorkingDay = !isWeekendIST(new Date(dateStr));
+      if (!isWorkingDay) continue;
+      const unpaid = lopMap.get(dateStr) || 0;
+      rows.push({
+        'Employee Name': item.userName,
+        'Employee Code': item.employeeCode ?? '',
+        Year: year,
+        Month: mon,
+        'From Date': fromDate,
+        'To Date': toDate,
+        'As Of Date': asOfDate,
+        Date: dateStr,
+        'Per Day Salary (INR)': item.perDaySalary ?? '',
+        'Working Day': isWorkingDay ? 'Yes' : 'No',
+        'LOP Days': unpaid,
+        'Day Payable': unpaid > 0 ? roundMoney((item.perDaySalary ?? 0) * (1 - unpaid)) : (item.perDaySalary ?? ''),
+        'Total Salary (INR)': item.monthlySalary ?? '',
+        'Amount Deducted (INR)': item.lopDeduction ?? '',
+        'Remaining Salary (INR)': item.payableEstimate ?? '',
+      });
+    }
+    return rows;
+  });
+
   const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Salary Summary');
+  const overviewSheet = XLSX.utils.json_to_sheet(overviewRows);
+  XLSX.utils.book_append_sheet(workbook, overviewSheet, 'Overview');
+  const detailedSheet = XLSX.utils.json_to_sheet(detailedRows);
+  XLSX.utils.book_append_sheet(workbook, detailedSheet, 'Detailed');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
 

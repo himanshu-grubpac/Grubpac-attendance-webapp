@@ -153,7 +153,8 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['• The "email" column is the unique employee identifier. Do NOT edit email values.'],
     ['• Rows whose email matches an existing employee will UPDATE that record.'],
     ['• Rows with a NEW email will CREATE a new employee.'],
-    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE via bulk import. Any change to mobile or employeeCode fails that row with a validation error naming the employee.'],
+    ['• The "email" and "mobile" columns are IMMUTABLE via bulk import. Any change to these fields fails that row with a validation error naming the employee.'],
+    ['• The "employeeCode" column IS updatable. If changed, uniqueness is validated. If taken by another employee, the row fails with a clear error.'],
     ['• Exception: a malformed stored mobile (not a valid 10-digit number) can be healed by entering a valid 10-digit mobile in the file.'],
     ['• To change email or mobile, use the individual employee edit form.'],
     ['• There are NO password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.'],
@@ -958,6 +959,19 @@ async function upsertExistingEmployee(row, user, options = {}) {
   const changedFields = [];
   const ignoredFields = [];
 
+  // Email is immutable via bulk upload. If the file row was matched by mobile
+  // or employeeCode but the email column differs, block the change.
+  const newEmail = String(row.data.email ?? '').trim().toLowerCase();
+  if (newEmail && newEmail !== user.email) {
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Email cannot be changed via bulk upload for ${user.email} (file has ${newEmail}). Update it from the employee profile instead.`,
+    };
+  }
+
   const newMobile = normalizeMobile(row.data.mobile);
   const storedMobileDigits = normalizeMobile(user.mobile);
   const currentMobileValid = indianMobileSchema.safeParse(user.mobile ?? '').success;
@@ -1005,13 +1019,18 @@ async function upsertExistingEmployee(row, user, options = {}) {
 
   const newFileCode = normalizeEmployeeCode(row.data.employeeCode);
   if (newFileCode && newFileCode !== (user.employeeCode || '')) {
-    return {
-      rowNumber: row.rowNumber,
-      id: rawId,
-      email: user.email,
-      status: 'validation_error',
-      message: `Employee ID cannot be changed via bulk upload for ${user.email} (existing ${user.employeeCode || '—'}, file has ${newFileCode}).`,
-    };
+    const codeTaken = await User.exists({ employeeCode: newFileCode, _id: { $ne: user._id } });
+    if (codeTaken) {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: `Employee code "${newFileCode}" is already used by another employee. Choose a unique code.`,
+      };
+    }
+    changedFields.push({ field: 'employeeCode', from: user.employeeCode || '', to: newFileCode });
+    user.employeeCode = newFileCode;
   }
 
   const rawRole = String(row.data.role ?? '').trim();
@@ -1352,24 +1371,34 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
 
   for (const row of uniqueRows) {
     const email = String(row.data.email ?? '').trim().toLowerCase();
+    const mobile = String(row.data.mobile ?? '').replace(/\D/g, '').slice(0, 10);
+    const employeeCode = normalizeEmployeeCode(row.data.employeeCode);
 
-    if (!email) {
+    if (!email && !mobile && !employeeCode) {
       results.push({
         rowNumber: row.rowNumber,
         id: '',
         status: 'validation_error',
         email: row.data.email ?? '',
-        message: 'Email is required — it identifies the employee. Rows without an email are skipped.',
+        message: 'At least one identifier (Email, Mobile, or Employee Code) is required to match or create an employee.',
       });
       continue;
     }
 
     try {
-      const existing = await User.findOne({ email }).populate([
-        { path: 'roleId', select: 'name slug permissions isSystem' },
-        { path: 'departmentId', select: 'name code isActive' },
-        { path: 'reportingManagerId', select: 'name email employeeCode' },
-      ]);
+      // Match existing employee by email, employee code, or mobile (all permutations).
+      const matchConditions = [];
+      if (email) matchConditions.push({ email });
+      if (mobile) matchConditions.push({ mobile });
+      if (employeeCode) matchConditions.push({ employeeCode });
+
+      const existing = matchConditions.length > 0
+        ? await User.findOne({ $or: matchConditions }).populate([
+            { path: 'roleId', select: 'name slug permissions isSystem' },
+            { path: 'departmentId', select: 'name code isActive' },
+            { path: 'reportingManagerId', select: 'name email employeeCode' },
+          ])
+        : null;
 
       if (existing) {
         const result = await upsertExistingEmployee(row, existing, { dryRun });
@@ -1516,8 +1545,9 @@ export function buildEmployeeTemplateWorkbook() {
     [''],
     ['IMPORTANT RULES:'],
     ['• Each row will CREATE a new employee.'],
-    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE. Any changes will be rejected.'],
-    ['• To change email, mobile, or employeeCode later, use the individual employee edit form.'],
+    ['• The "email" and "mobile" columns are IMMUTABLE. Any changes will be rejected.'],
+    ['• The "employeeCode" column IS updatable. Uniqueness is validated.'],
+    ['• To change email or mobile, use the individual employee edit form.'],
     ['• A temporary password will be automatically generated and emailed to the new employee.'],
     ['• Required fields: firstName, email, mobile, designation, joiningDate, department, reportingManagerEmail.'],
     ['• "employeeCode" format: 2–5 letters followed by 3–6 digits (e.g. EMP001, TL001). Leave blank to auto-generate.'],
