@@ -191,10 +191,11 @@ export default function AdminLopCalculation() {
   return (
     <div className="page page--salary">
       <p className="salary-disclaimer muted small">
-        Month-to-date payable after LOP deductions, as of {viewingDateLabel}. Salary is spread
-        across a fixed 30-day pool (monthly salary ÷ 30). LOP applies only on working days
-        (Mon–Fri minus holidays) for absent, half-day, or unpaid leave — weekends and holidays
-        are paid. LOP detail shows deductions only — no payable total on that screen.
+        Month-to-date payable after loss of pay deductions, as of {viewingDateLabel}. Salary is
+        spread across a fixed 30-day pool (monthly salary ÷ 30). Loss of pay applies only on
+        working days (Monday to Friday minus holidays) for absent, half-day, or unpaid leave —
+        weekends and holidays are paid. Loss of pay detail shows deductions only — no payable
+        total on that screen.
       </p>
 
       <section className="salary-panel card card--table" aria-label="Salary calculation and LOP">
@@ -254,8 +255,8 @@ export default function AdminLopCalculation() {
                       #
                     </th>
                     <th>Employee name</th>
-                    <th className="salary-table__num">Total salary</th>
-                    <th className="salary-table__num">This month</th>
+                    <th className="salary-table__num">Monthly salary</th>
+                    <th className="salary-table__num">Month-to-date payable</th>
                     <th className="cell-actions-col--text">Loss of Pay</th>
                   </tr>
                 </thead>
@@ -285,14 +286,14 @@ export default function AdminLopCalculation() {
                             <div className="muted small">{row.employeeCode}</div>
                           ) : null}
                         </td>
-                        <td data-label="Total salary" className="salary-table__num">
+                        <td data-label="Monthly salary" className="salary-table__num">
                           {formatINRCurrency(row.totalSalary)}
                         </td>
-                        <td data-label="This month" className="salary-table__num salary-table__net">
+                        <td data-label="Month-to-date payable" className="salary-table__num salary-table__net">
                           {formatINRCurrency(row.mtdPayable)}
                           {row.totalLopDeduction > 0 ? (
                             <div className="muted small">
-                              LOP −{formatINRCurrency(row.totalLopDeduction)}
+                              Loss of pay till date −{formatINRCurrency(row.totalLopDeduction)}
                             </div>
                           ) : null}
                         </td>
