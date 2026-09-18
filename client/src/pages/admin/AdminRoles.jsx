@@ -2,14 +2,17 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createRoleSchema, updateRoleSchema } from '@shared/validation/roles.js';
 import { SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { validateForm } from '../../utils/validation.js';
+import { broadcastPermissionsSync } from '../../utils/portalSync.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
+import RbacPermissionGrid from '../../components/RbacPermissionGrid.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 
 const emptyForm = {
@@ -30,92 +33,18 @@ function TableSkeleton() {
   );
 }
 
-function PermissionMatrix({ groups, selected, onChange, disabled = false, hideActions = false }) {
-  function togglePermission(key) {
-    if (disabled) return;
-    onChange(
-      selected.includes(key)
-        ? selected.filter((item) => item !== key)
-        : [...selected, key],
-    );
-  }
-
-  function toggleGroup(group) {
-    if (disabled) return;
-    const keys = group.permissions.map((permission) => permission.key);
-    const allSelected = keys.every((key) => selected.includes(key));
-    if (allSelected) {
-      onChange(selected.filter((key) => !keys.includes(key)));
-      return;
-    }
-    onChange([...new Set([...selected, ...keys])]);
-  }
-
-  return (
-    <div className="roles-permissions">
-      {groups.map((group) => {
-        const groupKeys = group.permissions.map((permission) => permission.key);
-        const selectedCount = groupKeys.filter((key) => selected.includes(key)).length;
-        const allSelected = selectedCount === groupKeys.length && groupKeys.length > 0;
-        const someSelected = selectedCount > 0 && !allSelected;
-
-        return (
-          <section key={group.label} className="permission-group">
-            <div className="permission-group__header">
-              <div className="permission-group__heading">
-                <h3 className="permission-group__title">{group.label}</h3>
-                <span className="permission-group__count muted" aria-live="polite">
-                  {selectedCount}/{groupKeys.length}
-                </span>
-              </div>
-              {hideActions ? null : (
-                <button
-                  type="button"
-                  className="permission-group__action"
-                  disabled={disabled || groupKeys.length === 0}
-                  onClick={() => toggleGroup(group)}
-                >
-                  {allSelected ? 'Clear group' : 'Select all'}
-                </button>
-              )}
-            </div>
-            <div className="permission-grid" role="group" aria-label={`${group.label} permissions`}>
-              {group.permissions.map((permission) => (
-                <label
-                  key={permission.key}
-                  className={`checkbox-row${selected.includes(permission.key) ? ' checkbox-row--checked' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(permission.key)}
-                    disabled={disabled}
-                    onChange={() => togglePermission(permission.key)}
-                  />
-                  <span className="checkbox-row__label">{permission.label}</span>
-                </label>
-              ))}
-            </div>
-            {someSelected ? (
-              <p className="permission-group__meta muted">
-                {selectedCount} of {groupKeys.length} selected in this group
-              </p>
-            ) : null}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
 export default function AdminRoles() {
   const { showSuccess } = useToast();
+  const { user, refreshUser } = useAuth();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const createModalTitleId = useId();
   const editModalTitleId = useId();
   const viewModalTitleId = useId();
 
   const [roles, setRoles] = useState([]);
-  const [permissionGroups, setPermissionGroups] = useState([]);
+  const [permissionCatalog, setPermissionCatalog] = useState([]);
+  const [permissionMetadata, setPermissionMetadata] = useState({});
+  const [totalSlugs, setTotalSlugs] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
 
@@ -151,13 +80,15 @@ export default function AdminRoles() {
     setError('');
 
     try {
-      const [rolesData, permissionsData] = await Promise.all([
+      const [rolesData, catalogData] = await Promise.all([
         adminApi.listRoles(),
-        adminApi.listPermissions(),
+        adminApi.getRbacCatalog(),
       ]);
       if (requestKeyRef.current !== requestKey) return;
       setRoles(rolesData.roles ?? []);
-      setPermissionGroups(permissionsData.groups ?? []);
+      setPermissionCatalog(catalogData.catalog ?? []);
+      setPermissionMetadata(catalogData.metadata ?? {});
+      setTotalSlugs(catalogData.totalSlugs ?? 0);
     } catch (err) {
       if (requestKeyRef.current !== requestKey) return;
       setError(getErrorMessage(err));
@@ -211,6 +142,13 @@ export default function AdminRoles() {
 
   useEscapeKey(Boolean(modal), closeModal);
 
+  async function refreshPermissionsIfNeeded(savedRole) {
+    const actorRoleId = user?.roleId ?? null;
+    if (actorRoleId && savedRole?.id === actorRoleId) {
+      await refreshUser();
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     if (!modal || modal.mode === 'view') return;
@@ -230,10 +168,12 @@ export default function AdminRoles() {
       setFieldErrors({});
 
       try {
-        await adminApi.createRole(validation.data);
+        const result = await adminApi.createRole(validation.data);
+        broadcastPermissionsSync();
         showSuccess(`Role "${validation.data.name}" created.`);
         closeModal();
         await loadData();
+        await refreshPermissionsIfNeeded(result.role);
       } catch (err) {
         setModalError(getErrorMessage(err));
       } finally {
@@ -242,8 +182,6 @@ export default function AdminRoles() {
       return;
     }
 
-    // Permissions are fully dynamic for every role except Admin (superadmin
-    // lockout protection — the server 403s Admin permission changes too).
     const isAdminRole = modal.role?.slug === SYSTEM_ROLE_SLUGS.ADMIN;
     const validation = validateForm(
       updateRoleSchema,
@@ -265,10 +203,12 @@ export default function AdminRoles() {
     setFieldErrors({});
 
     try {
-      await adminApi.updateRole(modal.role.id, validation.data);
+      const result = await adminApi.updateRole(modal.role.id, validation.data);
+      broadcastPermissionsSync();
       showSuccess(`Role "${validation.data.name}" updated.`);
       closeModal();
       await loadData();
+      await refreshPermissionsIfNeeded(result.role);
     } catch (err) {
       setModalError(getErrorMessage(err));
     } finally {
@@ -284,6 +224,7 @@ export default function AdminRoles() {
       variant: 'danger',
       onConfirm: async () => {
         await adminApi.deleteRole(role.id);
+        broadcastPermissionsSync();
         showSuccess(`Role "${role.name}" deleted.`);
         await loadData();
       },
@@ -445,7 +386,7 @@ export default function AdminRoles() {
               </h2>
               <p className="modal__lead muted">
                 {modal.mode === 'create'
-                  ? 'Define a role with a unique slug and the permissions it should grant.'
+                  ? 'Tick what this role may do. Anything left unticked is denied.'
                   : isViewMode
                     ? 'Read-only view of the permissions granted to this role.'
                     : slugLocked
@@ -459,19 +400,15 @@ export default function AdminRoles() {
                 <div className="modal__body">
                   <div className="modal__field roles-modal__permissions-field">
                     <span className="label">Permissions</span>
-                    {permissionGroups.length === 0 ? (
-                      <p className="muted">Loading permission groups…</p>
-                    ) : viewPermissions.length === 0 ? (
-                      <p className="muted">No permissions assigned to this role.</p>
-                    ) : (
-                      <PermissionMatrix
-                        groups={permissionGroups}
-                        selected={viewPermissions}
-                        onChange={() => {}}
-                        disabled
-                        hideActions
-                      />
-                    )}
+                    <RbacPermissionGrid
+                      catalog={permissionCatalog}
+                      metadata={permissionMetadata}
+                      totalSlugs={totalSlugs}
+                      selected={viewPermissions}
+                      onChange={() => {}}
+                      disabled
+                      hideActions
+                    />
                   </div>
                 </div>
 
@@ -497,6 +434,11 @@ export default function AdminRoles() {
                       maxLength={80}
                       placeholder="e.g. Office admin"
                     />
+                    {modal.mode === 'edit' ? (
+                      <span className="roles-modal__key-caption muted">
+                        key: <code>{form.slug}</code>
+                      </span>
+                    ) : null}
                     <FieldError message={fieldErrors.name} />
                   </label>
 
@@ -514,12 +456,7 @@ export default function AdminRoles() {
                       />
                       <FieldError message={fieldErrors.slug} />
                     </label>
-                  ) : (
-                    <div className="modal__field form-field--sm">
-                      <span className="label">Slug</span>
-                      <code className="roles-modal__slug-readonly">{form.slug}</code>
-                    </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <label className="modal__field">
@@ -541,17 +478,15 @@ export default function AdminRoles() {
                   ) : isSystemEdit ? (
                     <p className="muted">Changes apply to this role immediately on save.</p>
                   ) : null}
-                  {permissionGroups.length === 0 ? (
-                    <p className="muted">Loading permission groups…</p>
-                  ) : (
-                    <PermissionMatrix
-                      groups={permissionGroups}
-                      selected={form.permissions}
-                      onChange={(permissions) => setForm({ ...form, permissions })}
-                      disabled={isPermissionsLocked}
-                      hideActions={isPermissionsLocked}
-                    />
-                  )}
+                  <RbacPermissionGrid
+                    catalog={permissionCatalog}
+                    metadata={permissionMetadata}
+                    totalSlugs={totalSlugs}
+                    selected={form.permissions}
+                    onChange={(permissions) => setForm({ ...form, permissions })}
+                    disabled={isPermissionsLocked}
+                    hideActions={isPermissionsLocked}
+                  />
                   <FieldError message={fieldErrors.permissions} />
                 </div>
               </div>
