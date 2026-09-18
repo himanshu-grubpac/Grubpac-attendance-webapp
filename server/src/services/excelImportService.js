@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
@@ -464,6 +464,43 @@ export function generateBulkPassword(firstName, employeeCode) {
   throw error;
 }
 
+/**
+ * Bulk-upload department scope (§6.18–6.20): full admins (read-all) may
+ * upload any department; everyone else is confined to their own +
+ * managed departments. Rows outside scope become per-row validation
+ * errors — identically in dry-run preview and sync. Callers that omit
+ * actor info skip enforcement (legacy/test paths).
+ */
+export async function resolveBulkDepartmentScope(actorId, actorPermissions) {
+  if (actorPermissions === undefined) return null;
+  if (hasPermission(actorPermissions, PERMISSIONS.ATTENDANCE_READ_ALL)) {
+    return { all: true, departmentIds: [] };
+  }
+  const actor = actorId
+    ? await User.findById(actorId).select('departmentId managedDepartmentIds').lean()
+    : null;
+  const ids = new Set();
+  if (actor?.departmentId) ids.add(String(actor.departmentId));
+  for (const id of actor?.managedDepartmentIds ?? []) ids.add(String(id));
+  return { all: false, departmentIds: [...ids] };
+}
+
+function isDepartmentInScope(scope, departmentId) {
+  if (!scope || scope.all) return true;
+  if (!departmentId) return false;
+  return scope.departmentIds.includes(String(departmentId));
+}
+
+function buildScopeError(rowNumber, id, email, departmentName) {
+  return {
+    rowNumber,
+    id,
+    email,
+    status: 'validation_error',
+    message: `Department "${departmentName}" is outside your assigned scope.`,
+  };
+}
+
 export async function createEmployee(data, createdBy, options = {}) {
   const isBulkImport = options.bulkImport === true;
   let bulkAutoCode = false;
@@ -513,6 +550,15 @@ export async function createEmployee(data, createdBy, options = {}) {
   // No PIN via bulk import: new employees set it up afterwards.
   const pin4Hash = null;
   const department = await resolveDepartment(parsed);
+  if (
+    options.departmentScope &&
+    department &&
+    !isDepartmentInScope(options.departmentScope, department._id)
+  ) {
+    const error = new Error(`Department "${department.name}" is outside your assigned scope.`);
+    error.statusCode = 400;
+    throw error;
+  }
   const manager = parsed.reportingManagerId
     ? await resolveReportingManager(parsed.reportingManagerId)
     : null;
@@ -539,9 +585,9 @@ export async function createEmployee(data, createdBy, options = {}) {
  * The password is returned ONLY here (shown once in upload results) — it is
  * never persisted or logged anywhere.
  */
-export async function createEmployeeAndPassword(data, createdBy) {
+export async function createEmployeeAndPassword(data, createdBy, options = {}) {
   const box = { firstName: String(data.firstName ?? ''), current: null };
-  const employee = await createEmployee(data, createdBy, { bulkImport: true, passwordBox: box });
+  const employee = await createEmployee(data, createdBy, { bulkImport: true, passwordBox: box, ...options });
   return { employee, generatedPassword: box.current };
 }
 
@@ -552,7 +598,7 @@ export async function createEmployeeAndPassword(data, createdBy) {
  * the preview (dry-run) step so the review table matches what sync will do.
  * Returns `{ name, employeeCode }` for the preview row; throws on invalid.
  */
-export async function validateNewEmployeeForPreview(data) {
+export async function validateNewEmployeeForPreview(data, options = {}) {
   const input = { ...data };
   const bulkRole = await resolveRoleByNameOrSlug(input.role);
   const role = await resolveRole(bulkRole._id.toString());
@@ -574,6 +620,15 @@ export async function validateNewEmployeeForPreview(data) {
   }).parse(stripBulkReferenceFields(prepared));
 
   const department = await resolveDepartment(parsed);
+  if (
+    options.departmentScope &&
+    department &&
+    !isDepartmentInScope(options.departmentScope, department._id)
+  ) {
+    const error = new Error(`Department "${department.name}" is outside your assigned scope.`);
+    error.statusCode = 400;
+    throw error;
+  }
   if (parsed.reportingManagerId) {
     await resolveReportingManager(parsed.reportingManagerId);
   }
@@ -1201,6 +1256,17 @@ async function upsertExistingEmployee(row, user, options = {}) {
   }
 
   const rawDepartment = String(row.data.department ?? '').trim();
+  const departmentScope = options.departmentScope ?? null;
+  if (!rawDepartment) {
+    // No department change: the row still touches this employee, so their
+    // current department must be inside the uploader's scope.
+    const currentDeptId = user.departmentId?._id?.toString() ?? user.departmentId?.toString() ?? null;
+    const currentDeptName =
+      user.departmentId?.name || user.department || 'this department';
+    if (departmentScope && !isDepartmentInScope(departmentScope, currentDeptId)) {
+      return buildScopeError(row.rowNumber, rawId, user.email, currentDeptName);
+    }
+  }
   if (rawDepartment) {
     const dept = await Department.findOne({
       name: { $regex: new RegExp(`^${rawDepartment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
@@ -1212,8 +1278,11 @@ async function upsertExistingEmployee(row, user, options = {}) {
         id: rawId,
         email: user.email,
         status: 'validation_error',
-        message: `Department "${rawDepartment}" not found or inactive.`,
+        message: "Department doesn't exist.",
       };
+    }
+    if (departmentScope && !isDepartmentInScope(departmentScope, dept._id)) {
+      return buildScopeError(row.rowNumber, rawId, user.email, dept.name);
     }
     const currentDeptId = user.departmentId?._id?.toString() ?? user.departmentId?.toString() ?? '';
     if (dept._id.toString() !== currentDeptId) {
@@ -1365,6 +1434,11 @@ function handleCreateError(row, error) {
 
 export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {}) {
   const dryRun = options.dryRun === true;
+  const departmentScope = await resolveBulkDepartmentScope(
+    options.actorId ?? createdBy,
+    options.actorPermissions,
+  );
+  const scopeOptions = departmentScope ? { departmentScope } : {};
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);
   const results = [...fileDuplicates];
   const createdEmployees = [];
@@ -1401,10 +1475,10 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
         : null;
 
       if (existing) {
-        const result = await upsertExistingEmployee(row, existing, { dryRun });
+        const result = await upsertExistingEmployee(row, existing, { dryRun, ...scopeOptions });
         results.push(result);
       } else if (dryRun) {
-        const preview = await validateNewEmployeeForPreview(row.data);
+        const preview = await validateNewEmployeeForPreview(row.data, scopeOptions);
         results.push({
           rowNumber: row.rowNumber,
           id: '',
@@ -1419,7 +1493,7 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
             'Will create this employee on sync. Login credentials will be emailed and the temporary password must be changed on first sign-in.',
         });
       } else {
-        const created = await createEmployeeAndPassword(row.data, createdBy);
+        const created = await createEmployeeAndPassword(row.data, createdBy, scopeOptions);
         results.push({
           rowNumber: row.rowNumber,
           id: created.employee.id,

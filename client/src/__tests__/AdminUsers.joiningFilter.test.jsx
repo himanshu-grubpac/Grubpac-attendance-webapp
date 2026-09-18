@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React, { StrictMode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { PERMISSIONS } from '@shared/permissions.js';
 import AdminUsers from '../pages/admin/AdminUsers.jsx';
@@ -10,10 +11,8 @@ import { ToastProvider } from '../context/ToastContext.jsx';
 const FILTER_STORAGE_KEY = 'grubpac.adminUsers.filters.v1';
 
 const ROWS = [
-  { id: 'e1', name: 'Aarav Kapoor', email: 'aarav@test.example', mobile: '971019678', isActive: false, joiningDate: '2026-08-12' },
-  { id: 'e2', name: 'Ankit Joshi', email: 'ankit@test.example', mobile: '8499868522', isActive: false, joiningDate: '2022-05-11' },
-  { id: 'e3', name: 'Kajal Shetty', email: 'kajal@test.example', mobile: '913651262', isActive: false, joiningDate: '2025-04-15' },
-  { id: 'e4', name: 'Kirti Jain', email: 'kirti@test.example', mobile: '996991351', isActive: false, joiningDate: '2026-03-17' },
+  { id: 'e1', name: 'Aarav Kapoor', email: 'aarav@test.example', mobile: '971019678', isActive: true, joiningDate: '2026-09-05' },
+  { id: 'e2', name: 'Ankit Joshi', email: 'ankit@test.example', mobile: '8499868522', isActive: true, joiningDate: '2022-05-11' },
 ];
 
 vi.mock('../services/api.js', () => ({
@@ -84,9 +83,9 @@ if (typeof window.IntersectionObserver === 'undefined') {
   };
 }
 
-function setup() {
+function setup(entries) {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={entries}>
       <ToastProvider>
         <AuthProvider>
           <AdminUsers />
@@ -96,50 +95,59 @@ function setup() {
   );
 }
 
-describe('AdminUsers new-this-month filter', () => {
+describe('AdminUsers joining-date filter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
   });
 
-  it('combines the month filter with status and says so in the notice', async () => {
+  it('sends the persisted joining range on first load', async () => {
     sessionStorage.setItem(
       FILTER_STORAGE_KEY,
-      JSON.stringify({ statusFilter: 'false', newThisMonthFilter: true }),
+      JSON.stringify({ joiningFrom: '2026-09-01', joiningTo: '2026-09-30' }),
     );
     setup();
 
     await screen.findByRole('table');
 
-    // Registration-based predicate (createdAt), sent alongside the status.
     await waitFor(() => {
       expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
-        expect.objectContaining({ createdAfter: '2026-09-01', isActive: 'false' }),
+        expect.objectContaining({ joiningFrom: '2026-09-01', joiningTo: '2026-09-30' }),
       );
     });
-
-    // Stat counts registrations; the notice reconciles it with the table.
-    expect(screen.getByText('116')).toBeInTheDocument();
-    expect(screen.getByText('Registered since Sept 1st')).toBeInTheDocument();
-    expect(
-      screen.getByText('Showing 4 of 116 employees registered since sept 1st — other filters applied.'),
-    ).toBeInTheDocument();
   });
 
-  it('combines the month filter with the default Active status', async () => {
-    sessionStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({ newThisMonthFilter: true }));
-    setup();
+  it('honors the dashboard role deep-link over remembered filters', async () => {
+    const roleId = '507f1f77bcf86cd799439011';
+    setup([`/admin/users?role=${roleId}`]);
 
     await screen.findByRole('table');
 
     await waitFor(() => {
       expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
-        expect.objectContaining({ createdAfter: '2026-09-01', isActive: 'true' }),
+        expect.objectContaining({ roleId }),
       );
     });
-    // Default Active is not an "other" filter, so the plain notice shows.
-    expect(
-      screen.getByText('Showing employees registered since sept 1st.'),
-    ).toBeInTheDocument();
+  });
+
+  it('clear filters resets the joining range', async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem(
+      FILTER_STORAGE_KEY,
+      JSON.stringify({ joiningFrom: '2026-09-01', joiningTo: '2026-09-30' }),
+    );
+    setup();
+
+    await screen.findByRole('table');
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await waitFor(() => {
+      expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ joiningFrom: expect.anything(), joiningTo: expect.anything() }),
+      );
+    });
+    const params = adminApi.listEmployees.mock.calls.at(-1)[0];
+    expect(params.joiningFrom).toBeUndefined();
+    expect(params.joiningTo).toBeUndefined();
   });
 });

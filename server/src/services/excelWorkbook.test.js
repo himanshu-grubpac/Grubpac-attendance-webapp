@@ -170,6 +170,27 @@ test('buildEmployeeInputSchema requires departmentId when org has departments', 
   assert.ok(result.error.issues.some((issue) => issue.path.includes('departmentId')));
 });
 
+test('buildEmployeeInputSchema skips departmentId for the Admin role', () => {
+  const schema = buildEmployeeInputSchema({
+    roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+    hasDepartments: true,
+    bulkImport: true,
+  });
+
+  const result = schema.safeParse({
+    firstName: 'Root',
+    lastName: 'Admin',
+    email: 'root.admin@example.com',
+    mobile: '9876543210',
+    password: 'Employee@123',
+    designation: 'Administrator',
+    joiningDate: '2025-06-01',
+    endingDate: '',
+  });
+
+  assert.equal(result.success, true);
+});
+
 test('buildEmployeeInputSchema requires reportingManagerId for employees', () => {
   const schema = buildEmployeeInputSchema({
     roleSlug: SYSTEM_ROLE_SLUGS.EMPLOYEE,

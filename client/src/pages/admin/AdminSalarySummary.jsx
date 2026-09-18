@@ -20,6 +20,8 @@ import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 import InrInput from '../../components/InrInput.jsx';
 import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -148,24 +150,6 @@ function clampYearToCurrent(year) {
     return String(currentYear);
   }
   return String(parsed);
-}
-
-function buildYearOptions(minYear) {
-  const currentYear = getCurrentIstYear();
-  const COMPANY_ESTABLISHED_YEAR = 2024;
-  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
-  const years = [];
-  for (let year = currentYear; year >= floor; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-function getJoinYearFromDate(joiningDate) {
-  if (!joiningDate) return null;
-  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
-  const match = dateStr.match(/^(\d{4})/);
-  return match ? Number(match[1]) : null;
 }
 
 const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
@@ -302,6 +286,12 @@ function MonthlyPayrollTab({
   setSelectedId,
 }) {
   const debouncedSearch = useDebouncedValue(search, 350);
+  const currentYear = getCurrentIstYear();
+  const oldestYear = useOldestJoiningYear();
+  const yearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestYear, currentYear),
+    [oldestYear, currentYear],
+  );
 
   const filtered = useMemo(() => {
     const query = debouncedSearch.trim().toLowerCase();
@@ -359,27 +349,6 @@ function MonthlyPayrollTab({
   const detailTitleId = 'monthly-payroll-detail-title';
 
   const hasActiveFilters = Boolean(debouncedSearch.trim());
-
-  const earliestJoinYear = useMemo(() => {
-    if (summaries.length === 0) return null;
-    let earliest = null;
-    for (const item of summaries) {
-      const jy = getJoinYearFromDate(item.joiningDate);
-      if (jy != null && (earliest == null || jy < earliest)) {
-        earliest = jy;
-      }
-    }
-    return earliest;
-  }, [summaries]);
-
-  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
-
-  useEffect(() => {
-    const yearNum = Number(yearFilter);
-    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
-      setYearFilter(String(earliestJoinYear));
-    }
-  }, [earliestJoinYear, yearFilter]);
 
   const emptyTitle = useMemo(() => {
     if (hasActiveFilters) return 'No employees match your search';
@@ -1026,27 +995,12 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
   const [failReason, setFailReason] = useState('');
   const [failError, setFailError] = useState('');
   const failModalTitleId = 'salary-transfer-fail-title';
-
-  const earliestJoinYear = useMemo(() => {
-    if (transfers.length === 0) return null;
-    let earliest = null;
-    for (const t of transfers) {
-      const jy = getJoinYearFromDate(t.joiningDate);
-      if (jy != null && (earliest == null || jy < earliest)) {
-        earliest = jy;
-      }
-    }
-    return earliest;
-  }, [transfers]);
-
-  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
-
-  useEffect(() => {
-    const yearNum = Number(yearFilter);
-    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
-      setYearFilter(String(earliestJoinYear));
-    }
-  }, [earliestJoinYear, yearFilter]);
+  const currentYear = getCurrentIstYear();
+  const oldestYear = useOldestJoiningYear();
+  const yearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestYear, currentYear),
+    [oldestYear, currentYear],
+  );
 
   const loadTransfers = useCallback(async () => {
     setLoading(true);

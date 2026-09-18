@@ -11,6 +11,8 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 import RequestsTabs from '../../components/RequestsTabs.jsx';
@@ -213,16 +215,6 @@ function clampYearToCurrent(year) {
   return String(parsed);
 }
 
-function buildYearOptions() {
-  const currentYear = getCurrentIstYear();
-  const COMPANY_ESTABLISHED_YEAR = 2024;
-  const years = [];
-  for (let year = currentYear; year >= COMPANY_ESTABLISHED_YEAR; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
 const MONTH_PART_OPTIONS = [
   { value: '', label: 'All months' },
   ...Array.from({ length: 12 }, (_, index) => ({
@@ -334,7 +326,11 @@ export default function AdminLeaveApprovals() {
     [yearFilter, monthPartFilter],
   );
 
-  const yearOptions = useMemo(() => buildYearOptions(), []);
+  const oldestYear = useOldestJoiningYear();
+  const yearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestYear, getCurrentIstYear()),
+    [oldestYear],
+  );
 
   // Employee filter options derive from the loaded (already scope-filtered)
   // queue rows — never from the directory. A reporting manager therefore only

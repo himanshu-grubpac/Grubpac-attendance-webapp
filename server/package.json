@@ -24,6 +24,7 @@
     "test:e2e:attendance-flow": "node --env-file=.env.e2e scripts/dev/e2e-attendance-flow.mjs",
     "test:e2e:ui-password-reset": "node scripts/dev/e2e-ui-password-reset.mjs",
     "jobs:auto-checkout": "node scripts/autoCheckoutJob.mjs",
+    "jobs:employment-end": "node scripts/employmentEndJob.mjs",
     "jobs:audit-archive": "node scripts/auditArchiveJob.mjs"
   },
   "dependencies": {

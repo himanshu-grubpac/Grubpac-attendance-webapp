@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock.js';
 
 /**
  * Accessible confirmation modal.
@@ -28,15 +29,20 @@ export default function ConfirmDialog({
 
   useEscapeKey(open && !busy, onCancel);
 
+  // Shared reference-counted scroll lock (see useBodyScrollLock): confirms
+  // often stack above another modal (e.g. bulk-upload review popup), so the
+  // lock must not depend on `busy` and must tolerate any close order.
+  // Previously the naive save/restore re-ran on every busy toggle and left
+  // `body { overflow: hidden }` behind after nested closes, breaking the
+  // sticky app sidebar.
+  useBodyScrollLock(open);
+
   useEffect(() => {
     if (!open) return undefined;
 
     previouslyFocused.current = document.activeElement;
     const focusTarget = variant === 'danger' ? cancelRef.current : confirmRef.current;
     focusTarget?.focus();
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
 
     function handleKeyDown(event) {
       if (event.key !== 'Tab' || busy) return;
@@ -60,7 +66,6 @@ export default function ConfirmDialog({
 
     return () => {
       dialogRef.current?.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
       if (previouslyFocused.current instanceof HTMLElement) {
         previouslyFocused.current.focus();
       }

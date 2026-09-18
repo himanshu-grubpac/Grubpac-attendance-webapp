@@ -369,6 +369,10 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const limit =
     Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
   const searchNeedle = String(options.search ?? '').trim().toLowerCase();
+  // Department/role narrowing (same team-scope membership as the Employee
+  // List: filters only ever narrow the scoped roster, never widen it).
+  const departmentFilter = options.departmentId ? String(options.departmentId) : '';
+  const roleFilter = options.roleId ? String(options.roleId) : '';
 
   const emptySummary = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
@@ -387,7 +391,16 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     // members render as inactive rows, never as absent) and both totals
     // reconcile.
     const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
-    const rosterQuery = adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+    const adminRoleId = adminRole?._id?.toString() ?? null;
+    // Admins stay out of the default roster (directory parity) but appear
+    // when explicitly requested via the role filter — mirrors the Employee
+    // List, where picking the Admin role lists admins.
+    const includeAdmins = adminRoleId ? roleFilter === adminRoleId : roleFilter === 'admin';
+    const rosterQuery = includeAdmins
+      ? {}
+      : adminRole
+        ? { roleId: { $ne: adminRole._id } }
+        : { role: { $ne: 'admin' } };
     const roster = await User.find(rosterQuery).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
@@ -520,12 +533,24 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   // Alphabetical by name so team tables render A–Z (UI shows no manual sort).
   // Inactive roster members are included (directory parity) and mapped to an
   // explicit inactive status further below — never counted absent.
-  const users = await User.find({ _id: { $in: userIds } })
+  const allUsers = await User.find({ _id: { $in: userIds } })
     .select('firstName lastName name email employeeCode departmentId roleId isActive')
     .populate('departmentId', 'name code')
     .populate('roleId', 'name slug')
     .sort({ name: 1, _id: 1 })
     .lean();
+
+  const users = allUsers.filter((user) => {
+    if (departmentFilter) {
+      const deptId = user.departmentId?._id?.toString?.() ?? user.departmentId?.toString?.() ?? '';
+      if (deptId !== departmentFilter) return false;
+    }
+    if (roleFilter) {
+      const rId = user.roleId?._id?.toString?.() ?? user.roleId?.toString?.() ?? '';
+      if (rId !== roleFilter) return false;
+    }
+    return true;
+  });
 
   const teamStatus = users.map((user) => {
     const userIdStr = user._id.toString();

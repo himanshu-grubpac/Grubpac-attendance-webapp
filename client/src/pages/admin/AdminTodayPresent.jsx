@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PERMISSIONS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useTableColumns } from '../../hooks/useTableColumns.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import TodayPresentRoster from '../../components/TodayPresentRoster.jsx';
 
 const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
 const TODAY_PRESENT_PAGE_SIZE = 25;
@@ -22,20 +25,13 @@ const TODAY_PRESENT_COLUMNS = [
 const TODAY_PRESENT_DEFAULT_COLUMNS = ['name', 'department', 'role', 'status'];
 const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
-function isPresent(member) {
-  return member.status === 'checked_in' || member.status === 'wfh';
-}
-
-function isOnLeave(member) {
-  return member.status === 'on_leave';
-}
-
-function isInactive(member) {
-  return member.status === 'inactive';
-}
-
 export default function AdminTodayPresent() {
   const { setMeta } = usePageMetaContext();
+  const { hasPermission } = useAuth();
+  // Department filter mirrors the Employee List (full-read only); the role
+  // filter is available to every scoped viewer. Server-side team scope
+  // applies on top, so neither filter can widen visibility.
+  const canFilterByDepartment = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
   const [teamStatus, setTeamStatus] = useState([]);
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [pagination, setPagination] = useState(null);
@@ -44,7 +40,11 @@ export default function AdminTodayPresent() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const debouncedSearch = useDebouncedValue(query, 350);
+  const debouncedSearch = useDebouncedValue(query, 200);
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [departments, setDepartments] = useState([]);
+  const [roles, setRoles] = useState([]);
   const loadMoreRef = useRef(null);
   const tableWrapRef = useRef(null);
   const requestKeyRef = useRef('');
@@ -56,7 +56,6 @@ export default function AdminTodayPresent() {
     editorOpen,
     openColumnEditor,
     cancelColumnEdit,
-    isColumnVisible,
     isDraftColumnVisible,
     handleDraftColumnToggle,
     applyColumnPreferences,
@@ -73,18 +72,30 @@ export default function AdminTodayPresent() {
     });
   }, [setMeta]);
 
-  const load = useCallback(async ({ search = '', nextPage = 1, append = false } = {}) => {
-    const requestKey = `${search}|${nextPage}|${append}`;
+  const load = useCallback(async ({
+    search = '',
+    nextPage = 1,
+    append = false,
+    nextDepartment = '',
+    nextRole = '',
+    // Quiet keystroke refreshes keep the current rows on screen and swap in
+    // results when they land — no skeleton flash per keystroke (same as the
+    // Employee List search bar).
+    quiet = false,
+  } = {}) => {
+    const requestKey = `${search}|${nextPage}|${append}|${nextDepartment}|${nextRole}`;
     requestKeyRef.current = requestKey;
     if (append) {
       setLoadingMore(true);
-    } else {
+    } else if (!quiet) {
       setLoading(true);
     }
     setError('');
     try {
       const params = { page: nextPage, limit: TODAY_PRESENT_PAGE_SIZE };
       if (search.trim()) params.search = search.trim();
+      if (nextDepartment) params.departmentId = nextDepartment;
+      if (nextRole) params.roleId = nextRole;
       const data = await adminApi.getTeamTodayStatus(params);
       if (requestKeyRef.current !== requestKey) return;
       setTeamStatus((current) => {
@@ -117,13 +128,49 @@ export default function AdminTodayPresent() {
     load({ search: '', nextPage: 1 });
   }, [load]);
 
+  // Refs mirror the Employee List pattern: the debounced keystroke effect
+  // must not refire for dropdown changes (those load directly below).
+  const departmentFilterRef = useRef(departmentFilter);
+  departmentFilterRef.current = departmentFilter;
+  const roleFilterRef = useRef(roleFilter);
+  roleFilterRef.current = roleFilter;
+
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {
       skipDebouncedSearchRef.current = false;
       return;
     }
-    load({ search: debouncedSearch, nextPage: 1 });
+    load({
+      search: debouncedSearch,
+      nextPage: 1,
+      nextDepartment: departmentFilterRef.current,
+      nextRole: roleFilterRef.current,
+      quiet: true,
+    });
   }, [debouncedSearch, load]);
+
+  function handleDepartmentChange(value) {
+    setDepartmentFilter(value);
+    load({ search: query, nextPage: 1, nextDepartment: value, nextRole: roleFilter });
+  }
+
+  function handleRoleChange(value) {
+    setRoleFilter(value);
+    load({ search: query, nextPage: 1, nextDepartment: departmentFilter, nextRole: value });
+  }
+
+  useEffect(() => {
+    // Department/role option lists mirror the Employee List sources;
+    // fail silent so scoped viewers without list rights still get the table.
+    adminApi
+      .listDepartments()
+      .then((data) => setDepartments(data.departments ?? []))
+      .catch(() => setDepartments([]));
+    adminApi
+      .listRoles()
+      .then((data) => setRoles(data.roles ?? []))
+      .catch(() => setRoles([]));
+  }, []);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -134,7 +181,13 @@ export default function AdminTodayPresent() {
         const [entry] = entries;
         if (!entry?.isIntersecting || loading || loadingMore) return;
         if (!pagination || page >= pagination.totalPages) return;
-        load({ search: debouncedSearch, nextPage: page + 1, append: true });
+        load({
+          search: debouncedSearch,
+          nextPage: page + 1,
+          append: true,
+          nextDepartment: departmentFilterRef.current,
+          nextRole: roleFilterRef.current,
+        });
       },
       { rootMargin: '120px' },
     );
@@ -171,21 +224,33 @@ export default function AdminTodayPresent() {
       <section className="card card--table" aria-label="Team present status">
         <div className="card__toolbar today-present-toolbar" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
           <h2 className="card__title">Team Attendance Today</h2>
-          <div className="today-present-toolbar__row">
-            <div className="search-input today-present-toolbar__search">
-              <svg className="search-input__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <input
-                type="search"
-                className="input search-input__field"
-                placeholder="Search name, code, department, role"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                aria-label="Search team members"
-              />
-            </div>
+        </div>
+
+        {error ? <div className="alert alert--error">{error}</div> : null}
+        {columnsError ? <div className="alert alert--error">{columnsError}</div> : null}
+
+        <TodayPresentRoster
+          rows={teamStatus}
+          loading={loading}
+          search={query}
+          onSearchChange={setQuery}
+          visibleColumns={visibleColumns}
+          tableWrapRef={tableWrapRef}
+          hasActiveSearch={Boolean(query.trim())}
+          onDepartmentChange={handleDepartmentChange}
+          departmentValue={departmentFilter}
+          showDepartmentFilter={canFilterByDepartment}
+          departmentOptions={[
+            { value: '', label: 'All departments' },
+            ...departments.map((dept) => ({ value: dept.id, label: dept.name })),
+          ]}
+          onRoleChange={handleRoleChange}
+          roleValue={roleFilter}
+          roleOptions={[
+            { value: '', label: 'All roles' },
+            ...roles.map((role) => ({ value: role.id, label: role.name })),
+          ]}
+          toolbarActions={(
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -193,107 +258,20 @@ export default function AdminTodayPresent() {
             >
               Edit columns
             </button>
-          </div>
-        </div>
-
-        {error ? <div className="alert alert--error">{error}</div> : null}
-        {columnsError ? <div className="alert alert--error">{columnsError}</div> : null}
-
-        {loading ? (
-          <div className="employees-table-skeleton" aria-busy="true" aria-label="Loading team status">
-            <div className="skeleton skeleton--row" />
-            <div className="skeleton skeleton--row" />
-            <div className="skeleton skeleton--row" />
-          </div>
-        ) : (
-          <>
-            <div ref={tableWrapRef} className="table-wrap table-wrap--responsive today-present-table-wrap">
-              <table className="table data-table today-present-table">
-                <thead>
-                  <tr>
-                    <th scope="col" className="today-present-table__col-num">#</th>
-                    {isColumnVisible('name') && <th scope="col">Employee</th>}
-                    {isColumnVisible('department') && <th scope="col">Department</th>}
-                    {isColumnVisible('role') && <th scope="col">Role</th>}
-                    {isColumnVisible('status') && <th scope="col">Status</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {teamStatus.length === 0 ? (
-                    <tr>
-                      <td colSpan={visibleColumns.length + 1} className="muted small today-present-table__empty">
-                        {query.trim() ? 'No team members match this search.' : 'No team members found.'}
-                      </td>
-                    </tr>
-                  ) : (
-                    teamStatus.map((member, index) => {
-                      const present = isPresent(member);
-                      const onLeave = !present && isOnLeave(member);
-                      const inactive = !present && !onLeave && isInactive(member);
-                      // Note: kept as if/else (not nested ternary) — oxlint's
-                      // parser rejects nested ternaries with a false error.
-                      let badgeTone = 'absent';
-                      let badgeLabel = 'Absent';
-                      if (present) {
-                        badgeTone = 'present';
-                        badgeLabel = 'Present';
-                      } else if (onLeave) {
-                        badgeTone = 'leave';
-                        badgeLabel = 'On Leave';
-                      } else if (inactive) {
-                        badgeTone = 'inactive';
-                        badgeLabel = 'Inactive';
-                      }
-                      // Fall back to a positional key: rows without a userId must
-                      // never share a key (or mergeAppendUnique would drop them).
-                      const rowKey = member.userId ?? `row-${index}`;
-                      return (
-                        <tr key={rowKey}>
-                          <td className="today-present-table__col-num">{index + 1}</td>
-                          {isColumnVisible('name') && (
-                            <td data-label="Employee" className="today-present-table__employee">
-                              <span className="today-present-table__name">
-                                {member.firstName ||
-                                  member.name?.split(' ')[0] ||
-                                  'Team Member'}
-                              </span>
-                              {member.employeeCode && (
-                                <span className="today-present-table__code muted small">
-                                  {' '}
-                                  ({member.employeeCode})
-                                </span>
-                              )}
-                            </td>
-                          )}
-                          {isColumnVisible('department') && <td data-label="Department">{member.department ?? '—'}</td>}
-                          {isColumnVisible('role') && <td data-label="Role">{member.roleName ?? '—'}</td>}
-                          {isColumnVisible('status') && (
-                            <td data-label="Status">
-                              <span
-                                className={`today-present-table__badge today-present-table__badge--${badgeTone}`}
-                              >
-                                {badgeLabel}
-                              </span>
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />
-
-            {pagination && teamStatus.length > 0 ? (
-              <p className="employees-scroll-hint muted small" role="status">
-                Showing {teamStatus.length} of {pagination.total} team members
-                {loadingMore ? ' · Loading more…' : ''}
-              </p>
-            ) : null}
-            <div ref={loadMoreRef} className="employees-scroll-sentinel" aria-hidden="true" />
-          </>
-        )}
+          )}
+          footer={(
+            <>
+              <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />
+              {pagination && teamStatus.length > 0 ? (
+                <p className="employees-scroll-hint muted small" role="status">
+                  Showing {teamStatus.length} of {pagination.total} team members
+                  {loadingMore ? ' · Loading more…' : ''}
+                </p>
+              ) : null}
+            </>
+          )}
+        />
+        <div ref={loadMoreRef} className="employees-scroll-sentinel" aria-hidden="true" />
       </section>
 
       <ColumnEditorPanel

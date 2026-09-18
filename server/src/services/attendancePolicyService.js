@@ -240,6 +240,9 @@ export function isExhaustionRelatedLv(timestamp, policy, weekendDays = [0, 6]) {
   return checkInMinutes > graceMinutes && checkInMinutes < halfDayMinutes;
 }
 
+/** Cap so a bulk reset audit row stays a bounded payload. */
+const AUDIT_CLEARED_RECORD_ID_CAP = 500;
+
 /**
  * Clear current-IST-quarter late warnings (Late Warning page) for the given users.
  * - Sets warningIssued=false and quarterWarningIndex=null on warning check-ins.
@@ -270,10 +273,19 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
     timestamp: { $gte: quarterInfo.start, $lte: quarterInfo.end },
   };
 
-  const warningResult = await AttendanceRecord.updateMany(
-    { ...baseMatch, warningIssued: true },
-    { $set: { warningIssued: false, quarterWarningIndex: null } },
-  );
+  // Enumerate first so the audit row can trace exactly which check-in
+  // records were cleared (capped; bulk resets stay a bounded payload).
+  const warnedRecords = await AttendanceRecord.find({ ...baseMatch, warningIssued: true })
+    .select('_id')
+    .lean();
+  const warnedIds = warnedRecords.map((record) => record._id);
+  const warningResult =
+    warnedIds.length > 0
+      ? await AttendanceRecord.updateMany(
+          { _id: { $in: warnedIds } },
+          { $set: { warningIssued: false, quarterWarningIndex: null } },
+        )
+      : { modifiedCount: 0 };
 
   const lvRecords = await AttendanceRecord.find({
     ...baseMatch,
@@ -301,11 +313,17 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
     reclassifiedLv = lvResult.modifiedCount ?? 0;
   }
 
+  const clearedRecordIds = warnedIds.map((id) => id.toString());
+  const truncated = clearedRecordIds.length > AUDIT_CLEARED_RECORD_ID_CAP;
   return {
     quarter: quarterInfo,
     clearedWarnings: warningResult.modifiedCount ?? 0,
     reclassifiedLv,
     userIds: uniqueIds,
+    clearedRecordIds: truncated
+      ? clearedRecordIds.slice(0, AUDIT_CLEARED_RECORD_ID_CAP)
+      : clearedRecordIds,
+    clearedRecordIdsTruncated: truncated,
   };
 }
 

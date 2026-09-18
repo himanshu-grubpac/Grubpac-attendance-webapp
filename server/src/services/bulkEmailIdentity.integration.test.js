@@ -25,6 +25,7 @@ import {
   resolveRoleByNameOrSlug,
 } from './excelImportService.js';
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
+import { PERMISSIONS } from '../../../shared/permissions.js';
 
 let memoryServer;
 let sequence = 0;
@@ -545,4 +546,89 @@ test('bulk update switching department keeps the ref resolvable', async () => {
     .lean();
   assert.equal(String(stored.departmentId?._id ?? stored.departmentId), UiUx._id.toString());
   assert.equal(stored.departmentId?.name ?? stored.department ?? null, 'UI/UX Designing');
+});
+
+async function createScopedActor() {
+  sequence += 1;
+  return User.create({
+    role: 'employee',
+    roleId: roles.rm._id,
+    firstName: 'Scope',
+    lastName: 'Actor',
+    name: 'Scope Actor',
+    email: `scope.actor.${sequence}@bulk.test`,
+    mobile: nextMobile(),
+    passwordHash: 'hash',
+    employeeCode: `SCP${String(800 + sequence)}`,
+    departmentId: department._id,
+    managedDepartmentIds: [department._id],
+    reportingManagerId: manager._id,
+    isActive: true,
+  });
+}
+
+const SCOPED_PERMS = [PERMISSIONS.USERS_WRITE];
+
+test('scoped uploader creates in-scope rows and rejects out-of-scope rows', async () => {
+  const actor = await createScopedActor();
+  const design = await Department.create({ name: 'Design', code: `DSG${sequence}`, isActive: true });
+  const actorOpts = { actorId: actor._id.toString(), actorPermissions: SCOPED_PERMS };
+
+  const { results } = await importEmployeesFromRowsUpsert(
+    [
+      row(6, baseCreate()),
+      row(7, baseCreate({ department: 'Design' })),
+    ],
+    createdBy(),
+    actorOpts,
+  );
+
+  assert.equal(results[0].status, 'created');
+  const rejected = results.find((item) => item.rowNumber === 7);
+  assert.equal(rejected.status, 'validation_error');
+  assert.match(rejected.message, /outside your assigned scope/);
+  assert.equal(await User.countDocuments({ departmentId: design._id }), 0);
+});
+
+test('scoped uploader cannot touch employees outside their scope', async () => {
+  const actor = await createScopedActor();
+  const design = await Department.create({ name: 'Design', code: `DSN${sequence}`, isActive: true });
+  const outsider = await seedUser({ departmentId: design._id });
+
+  const { results } = await importEmployeesFromRowsUpsert(
+    [row(6, { email: outsider.email, designation: 'New Title' })],
+    createdBy(),
+    { actorId: actor._id.toString(), actorPermissions: SCOPED_PERMS },
+  );
+
+  assert.equal(results[0].status, 'validation_error');
+  assert.match(results[0].message, /outside your assigned scope/);
+});
+
+test('dry-run preview enforces scope exactly like sync', async () => {
+  const actor = await createScopedActor();
+  await Department.create({ name: 'Design', code: `DSP${sequence}`, isActive: true });
+
+  const preview = await importEmployeesFromRowsUpsert(
+    [row(6, baseCreate({ department: 'Design' }))],
+    createdBy(),
+    { dryRun: true, actorId: actor._id.toString(), actorPermissions: SCOPED_PERMS },
+  );
+
+  const previewRow = preview.results.find((item) => item.rowNumber === 6);
+  assert.equal(previewRow.status, 'validation_error');
+  assert.match(previewRow.message, /outside your assigned scope/);
+});
+
+test('read-all actor bypasses department scope', async () => {
+  const actor = await createScopedActor();
+  await Department.create({ name: 'Design', code: `DSB${sequence}`, isActive: true });
+
+  const { results } = await importEmployeesFromRowsUpsert(
+    [row(6, baseCreate({ department: 'Design' }))],
+    createdBy(),
+    { actorId: actor._id.toString(), actorPermissions: [PERMISSIONS.ATTENDANCE_READ_ALL] },
+  );
+
+  assert.equal(results[0].status, 'created');
 });

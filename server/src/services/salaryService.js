@@ -807,6 +807,12 @@ export function buildSalaryExportWorkbook(summaries, month) {
 export async function updateUserSalary(userId, payload, actorId) {
   const user = await loadSalarySubject(userId);
 
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+  const subjectRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString?.() ?? null;
+  if (adminRole && subjectRoleId && subjectRoleId === adminRole._id.toString()) {
+    throwError('Cannot modify the system admin account here.', 400);
+  }
+
   if (payload.monthlySalary !== undefined) {
     user.monthlySalary = payload.monthlySalary;
   }

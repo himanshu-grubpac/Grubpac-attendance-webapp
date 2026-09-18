@@ -52,7 +52,6 @@ import {
 } from '../services/userOrgService.js';
 import {
   applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
-  getActorManagedDepartmentIds,
   isUserInTeamScope,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
@@ -80,6 +79,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
   };
 }
 import { auditActionMatchers, auditAllActionMatchers, auditRequest, auditRequestSync, getRequestAuditContext, resolveAuditDisplayEmail, resolveAuditDisplayRole, resolveAuditModule } from '../utils/auditLog.js';
+import { formatDeviceFullLabel, formatDeviceOwnerLabel, getBrowserFromUserAgent, getDeviceTypeFromUserAgent, getOsFromUserAgent } from '../utils/deviceType.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 const attendanceQuerySchema = paginationSchema
@@ -113,14 +113,44 @@ const employeeListQuerySchema = paginationSchema.extend({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'createdAfter must be YYYY-MM-DD.')
     .optional(),
+  joiningFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'joiningFrom must be YYYY-MM-DD.')
+    .optional(),
+  joiningTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'joiningTo must be YYYY-MM-DD.')
+    .optional(),
 });
 
-async function buildEmployeeDirectoryQuery() {
+/**
+ * Admin-role check that works whether roleId is populated or raw: a populated
+ * role document's bare toString() never equals the id, so compare _id first.
+ */
+function isAdminRoleHolder(userDoc, adminRole) {
+  if (!adminRole) return false;
+  const roleId =
+    userDoc?.roleId?._id?.toString() ?? userDoc?.roleId?.toString?.() ?? null;
+  return roleId !== null && roleId === adminRole._id.toString();
+}
+
+async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
+  if (includeAdmins) return {};
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter }) {
+async function buildEmployeeDirectoryQueryWithRoleFilter(requestedRoleId) {
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+  const adminRoleId = adminRole?._id?.toString() ?? null;
+  // Admins are listed when the role filter is All — or when the Admin role
+  // itself is selected (previously that combination matched nothing).
+  const includeAdmins = !requestedRoleId || (adminRoleId && String(requestedRoleId) === adminRoleId);
+  if (includeAdmins) return {};
+  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+}
+
+async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo }) {
   if (typeof isActive === 'boolean') {
     query.isActive = isActive;
   }
@@ -140,17 +170,51 @@ async function applyEmployeeListFilters(query, { search, isActive, departmentId,
     }
   }
 
+  if (joiningFrom || joiningTo) {
+    const range = {};
+    if (joiningFrom) {
+      const fromDay = parseDateInputAsISTDay(joiningFrom);
+      if (fromDay) range.$gte = startOfDayIST(fromDay);
+    }
+    if (joiningTo) {
+      const toDay = parseDateInputAsISTDay(joiningTo);
+      if (toDay) range.$lte = endOfDayIST(toDay);
+    }
+    if (Object.keys(range).length > 0) {
+      query.joiningDate = range;
+    }
+  }
+
   if (search) {
-    const regex = new RegExp(escapeRegex(search), 'i');
-    const matchingDepts = await Department.find({ name: regex }).select('_id').lean();
+    const trimmed = search.trim();
+    // Token-AND matching: every whitespace-separated token must match
+    // name/email/mobile/code (partial, case-insensitive), so "Anand Abhishek"
+    // finds "Abhishek Anand" and single keystrokes narrow live.
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    const tokenClauses = tokens.map((token) => {
+      const tokenRegex = new RegExp(escapeRegex(token), 'i');
+      return {
+        $or: [
+          { name: tokenRegex },
+          { firstName: tokenRegex },
+          { lastName: tokenRegex },
+          { email: tokenRegex },
+          { mobile: tokenRegex },
+          { employeeCode: tokenRegex },
+        ],
+      };
+    });
+    const fullRegex = new RegExp(escapeRegex(trimmed), 'i');
+    const matchingDepts = await Department.find({ name: fullRegex }).select('_id').lean();
     const deptIds = matchingDepts.map((d) => d._id);
-    query.$or = [
-      { name: regex },
-      { email: regex },
-      { mobile: regex },
-      { employeeCode: regex },
-      ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
-    ];
+    query.$and = query.$and ?? [];
+    query.$and.push({
+      $or: [
+        // All tokens match (single token behaves exactly like before).
+        ...(tokenClauses.length > 1 ? [{ $and: tokenClauses }] : tokenClauses),
+        ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
+      ],
+    });
   }
 
   return query;
@@ -223,7 +287,7 @@ export async function registerEmployee(req, res) {
 }
 
 export async function listEmployees(req, res) {
-  const { page, limit, search, isActive, departmentId, roleId, createdAfter } =
+  const { page, limit, search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo } =
     employeeListQuerySchema.parse(req.query);
 
   // Auto-deactivate employees whose ending date has passed.
@@ -234,12 +298,14 @@ export async function listEmployees(req, res) {
   );
 
   const query = await applyTeamScopeToEmployeeQuery(
-    await applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
+    await applyEmployeeListFilters(await buildEmployeeDirectoryQueryWithRoleFilter(roleId), {
       search,
       isActive,
       departmentId,
       roleId,
       createdAfter,
+      joiningFrom,
+      joiningTo,
     }),
     req,
   );
@@ -272,6 +338,8 @@ pagination: {
 
 const teamTodayQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
+  departmentId: objectIdSchema.optional(),
+  roleId: objectIdSchema.optional(),
 });
 
 export async function getTeamTodayStatusAdmin(req, res) {
@@ -281,28 +349,59 @@ export async function getTeamTodayStatusAdmin(req, res) {
     page: parsed.page,
     limit: parsed.limit,
     search: parsed.search ?? '',
+    departmentId: parsed.departmentId ?? undefined,
+    roleId: parsed.roleId ?? undefined,
   });
   res.json(result);
 }
 
 export async function getEmployeeStats(req, res) {
-  // Auto-deactivate employees whose ending date has passed.
-  const now = new Date();
-  await User.updateMany(
-    { endingDate: { $lte: now }, isActive: true },
-    { $set: { isActive: false } },
+  const baseQuery = await applyTeamScopeToEmployeeQuery(
+    await buildEmployeeDirectoryQuery({ includeAdmins: true }),
+    req,
   );
-
-  const baseQuery = await applyTeamScopeToEmployeeQuery(await buildEmployeeDirectoryQuery(), req);
   const monthKey = getISTDateInputValue().slice(0, 7);
   const { start: monthStart } = parseMonthInputAsISTRange(monthKey);
 
-  const [total, active, inactive, newThisMonth] = await Promise.all([
+  const [total, active, inactive, newThisMonth, oldestJoining, roleBreakdown] = await Promise.all([
     User.countDocuments(baseQuery),
     User.countDocuments({ ...baseQuery, isActive: true }),
     User.countDocuments({ ...baseQuery, isActive: false }),
     User.countDocuments({ ...baseQuery, createdAt: { $gte: monthStart } }),
+    User.findOne({ ...baseQuery, joiningDate: { $ne: null } })
+      .sort({ joiningDate: 1 })
+      .select('joiningDate')
+      .lean(),
+    User.aggregate([
+      { $match: baseQuery },
+      { $group: { _id: '$roleId', count: { $sum: 1 } } },
+      {
+        $lookup: {
+          from: 'roles',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'role',
+        },
+      },
+      { $unwind: { path: '$role', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          roleId: { $toString: '$_id' },
+          slug: '$role.slug',
+          name: '$role.name',
+          count: 1,
+        },
+      },
+      { $sort: { count: -1 } },
+    ]),
   ]);
+
+  // Lower bound for every year dropdown (dynamic §8 rule): oldest joining
+  // year in scope, null when no dated employees exist.
+  const oldestJoiningYear = oldestJoining?.joiningDate
+    ? Number(getISTDateInputValue(new Date(oldestJoining.joiningDate)).slice(0, 4))
+    : null;
 
   res.json({
     stats: {
@@ -311,6 +410,8 @@ export async function getEmployeeStats(req, res) {
       inactive,
       newThisMonth,
       monthKey,
+      oldestJoiningYear: Number.isInteger(oldestJoiningYear) ? oldestJoiningYear : null,
+      roleBreakdown: Array.isArray(roleBreakdown) ? roleBreakdown : [],
     },
   });
 }
@@ -335,7 +436,7 @@ export async function getEmployee(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(404).json({ message: 'Employee not found.' });
   }
 
@@ -478,8 +579,7 @@ export async function updateEmployee(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  const isAdmin = adminRole && employee.roleId?.toString?.() === adminRole._id.toString();
-  if (isAdmin) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot modify the system admin account here.' });
   }
 
@@ -649,7 +749,7 @@ export async function resetEmployeePassword(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset password for the system admin here.' });
   }
 
@@ -686,7 +786,7 @@ export async function resetEmployeePin(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
   }
 
@@ -715,6 +815,17 @@ export async function downloadEmployeeTemplate(req, res) {
   );
   res.setHeader('Content-Length', buffer.byteLength ?? buffer.length);
   res.end(buffer);
+}
+
+/**
+ * Managed department IDs for an actor, as strings. Local fallback until
+ * teamScopeService exposes this resolver — same contract the bulk scope
+ * check below relies on (empty array = unrestricted).
+ */
+async function getActorManagedDepartmentIds(actor) {
+  if (!actor?._id) return [];
+  const doc = await User.findById(actor._id).select('managedDepartmentIds').lean();
+  return (doc?.managedDepartmentIds ?? []).map((id) => id.toString());
 }
 
 /**
@@ -779,7 +890,10 @@ export async function bulkUploadEmployees(req, res) {
   }
 
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
-  const result = await importEmployeesFromRowsUpsert(rows, req.user._id);
+  const result = await importEmployeesFromRowsUpsert(rows, req.user._id, {
+    actorId: req.user._id.toString(),
+    actorPermissions: req.userPermissions ?? [],
+  });
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
   }
@@ -834,7 +948,11 @@ export async function previewBulkUploadEmployees(req, res) {
   }
 
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
-  const result = await importEmployeesFromRowsUpsert(rows, req.user._id, { dryRun: true });
+  const result = await importEmployeesFromRowsUpsert(rows, req.user._id, {
+    dryRun: true,
+    actorId: req.user._id.toString(),
+    actorPermissions: req.userPermissions ?? [],
+  });
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
   }
@@ -1059,10 +1177,14 @@ export async function resetQuarterWarnings(req, res) {
 
   auditRequest(req, 'quarter_warnings_reset', {
     adminId: req.user._id.toString(),
+    roleId: req.user?.roleId?._id?.toString?.() ?? req.user?.roleId?.toString?.() ?? undefined,
     userIds: result.userIds,
     quarter: result.quarter?.label ?? null,
     clearedWarnings: result.clearedWarnings,
     reclassifiedLv: result.reclassifiedLv,
+    clearedRecordIds: result.clearedRecordIds ?? [],
+    clearedRecordIdsTruncated: result.clearedRecordIdsTruncated ?? false,
+    reason: 'manual_reset',
   });
 
   res.json(result);
@@ -1221,7 +1343,28 @@ export function resolveAuditRecordId(log) {
   return null;
 }
 
-function mapAuditLogResponse(log, conflict) {
+/**
+ * Batch-resolves actor display names for a page of audit logs (one query).
+ * Returns a Map of userId string → name. Unknown/deleted users are absent.
+ */
+async function resolveAuditActorNames(logs) {
+  const ids = [
+    ...new Set(
+      (logs ?? [])
+        .map((log) => log?.userId?.toString?.() ?? null)
+        .filter(Boolean),
+    ),
+  ];
+  if (ids.length === 0) return new Map();
+  const users = await User.find({ _id: { $in: ids } })
+    .select('name')
+    .lean();
+  return new Map(
+    users.map((user) => [user._id.toString(), user.name ?? null]),
+  );
+}
+
+function mapAuditLogResponse(log, conflict, actorName = null) {
   const metadata = log.metadata ?? null;
   return {
     id: log._id.toString(),
@@ -1229,6 +1372,10 @@ function mapAuditLogResponse(log, conflict) {
     userId: log.userId?.toString() ?? null,
     email: log.email ?? null,
     role: log.role ?? null,
+    actorName: actorName ?? null,
+    deviceType: getDeviceTypeFromUserAgent(log.userAgent),
+    browser: getBrowserFromUserAgent(log.userAgent),
+    os: getOsFromUserAgent(log.userAgent),
     ip: log.ip ?? null,
     deviceId: log.deviceId ?? null,
     userAgent: log.userAgent ?? null,
@@ -1409,7 +1556,11 @@ function flattenAuditMetadata(metadata) {
   }
 }
 
-export function auditLogExportRows(logs) {
+export function auditLogExportRows(logs, actorNames = new Map()) {
+  const actorNameFor = (log) => {
+    const id = log?.userId?.toString?.() ?? null;
+    return (id && actorNames.get(id)) || null;
+  };
   return logs.map((log) => ({
     Timestamp: log.timestamp ? new Date(log.timestamp).toISOString() : '',
     Action: log.action ?? '',
@@ -1426,6 +1577,12 @@ export function auditLogExportRows(logs) {
       log.metadata?.next ?? log.metadata?.changes ?? log.metadata?.after,
     ),
     IP: log.ip ?? 'Not recorded',
+    Device:
+      formatDeviceFullLabel(actorNameFor(log), {
+        deviceType: getDeviceTypeFromUserAgent(log.userAgent),
+        browser: getBrowserFromUserAgent(log.userAgent),
+        os: getOsFromUserAgent(log.userAgent),
+      }) ?? 'Not recorded',
     DeviceId: log.deviceId ?? 'Not recorded',
   }));
 }
@@ -1441,7 +1598,7 @@ export async function exportAuditLogs(req, res) {
     const conflictMap = await enrichAuditLogsWithConflicts(logs);
     logs = logs.filter((log) => conflictMap.get(log._id.toString())?.ipConflict);
   }
-  const rows = auditLogExportRows(logs);
+  const rows = auditLogExportRows(logs, await resolveAuditActorNames(logs));
   const stamp = getISTDateInputValue().slice(0, 10);
 
   auditRequest(req, 'audit_logs_exported', {
@@ -1534,6 +1691,7 @@ export async function listAuditLogs(req, res) {
     total = conflictLogs.length;
     logs = conflictLogs.slice(skip, skip + limit);
     const conflictMapForPage = await enrichAuditLogsWithConflicts(logs);
+    const actorNames = await resolveAuditActorNames(logs);
 
     res.json({
       logs: logs.map((log) => {
@@ -1541,7 +1699,7 @@ export async function listAuditLogs(req, res) {
           ipConflict: false,
           conflictWithUsers: [],
         };
-        return mapAuditLogResponse(log, conflict);
+        return mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null);
       }),
       pagination: {
         page,
@@ -1560,6 +1718,7 @@ export async function listAuditLogs(req, res) {
   ]);
 
   const conflictMap = await enrichAuditLogsWithConflicts(logs);
+  const actorNames = await resolveAuditActorNames(logs);
 
   res.json({
     logs: logs.map((log) => {
@@ -1567,7 +1726,7 @@ export async function listAuditLogs(req, res) {
         ipConflict: false,
         conflictWithUsers: [],
       };
-      return mapAuditLogResponse(log, conflict);
+      return mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null);
     }),
     pagination: {
       page,

@@ -182,7 +182,9 @@ export function applyEmployeeOrgContextRules(data, context, ctx) {
   const roleSlug = context.roleSlug ?? null;
   const hasDepartments = Boolean(context.hasDepartments);
 
-  if (hasDepartments && !data.departmentId) {
+  // Admin accounts carry no department (3.10): the field stays hidden for
+  // the Admin role wherever it cannot be selected, and validation skips it.
+  if (hasDepartments && !data.departmentId && roleSlug !== SYSTEM_ROLE_SLUGS.ADMIN) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['departmentId'],

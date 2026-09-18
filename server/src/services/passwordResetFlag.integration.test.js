@@ -166,6 +166,28 @@ test('migration preview counts and clear-all ungates every account', async () =>
   assert.equal(reloaded.toSafeJSON().mustChangePassword, false);
 });
 
+test('admin-role holder can change their own password (self-service)', async () => {
+  const admin = await createEmployee();
+  await User.updateOne(
+    { _id: admin._id },
+    { $set: { role: 'admin', mustChangePassword: true } },
+  );
+
+  const result = await changePassword(admin._id, {
+    currentPassword: 'Original@123',
+    newPassword: 'AdminChanged@789',
+    confirmPassword: 'AdminChanged@789',
+  });
+
+  assert.equal(result.message, 'Password changed successfully.');
+  const reloaded = await User.findById(admin._id);
+  assert.equal(
+    await bcrypt.compare('AdminChanged@789', reloaded.passwordHash),
+    true,
+  );
+  assert.equal(reloaded.toSafeJSON().mustChangePassword, false);
+});
+
 test('changing the password clears both flags', async () => {
   const employee = await createEmployee();
   await User.updateOne(

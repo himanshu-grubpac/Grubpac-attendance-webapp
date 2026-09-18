@@ -9,6 +9,7 @@ import {
 import {
   ADMIN_PORTAL_PERMISSIONS,
   PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
   hasAnyPermission as userHasAnyPermission,
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
@@ -188,6 +189,9 @@ export function AuthProvider({ children }) {
       hasAdminPortalAccess: userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS),
       hasEmployeePortalAccess: userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
       canSwitchPortal:
+        // TEMP: hide the portal switch for the Admin role — drop the role
+        // check below to restore it. HR / RM / dual-portal users unaffected.
+        user?.role !== SYSTEM_ROLE_SLUGS.ADMIN &&
         userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS) &&
         userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
       hasPermission: (permission) => userHasPermission(user?.permissions, permission),

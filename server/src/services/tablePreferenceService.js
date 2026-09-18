@@ -4,8 +4,8 @@ import { PERMISSIONS, hasAnyPermission } from '../../../shared/permissions.js';
 const DEFAULT_COLUMNS = {
   employeeList: [
     { key: 'name', order: 0, width: 200, pinned: null },
-    { key: 'employeeCode', order: 1, width: 140, pinned: null },
-    { key: 'email', order: 2, width: 200, pinned: null },
+    { key: 'email', order: 1, width: 200, pinned: null },
+    { key: 'employeeCode', order: 2, width: 130, pinned: null },
     { key: 'mobile', order: 3, width: 140, pinned: null },
     { key: 'department', order: 4, width: 150, pinned: null },
     { key: 'designation', order: 5, width: 150, pinned: null },
@@ -17,8 +17,7 @@ const DEFAULT_COLUMNS = {
     { key: 'reportingManager', order: 11, width: 160, pinned: null },
     { key: 'managerDepartments', order: 12, width: 180, pinned: null },
     { key: 'status', order: 13, width: 100, pinned: null },
-    { key: 'updatedAt', order: 14, width: 140, pinned: null },
-    { key: 'lastLogin', order: 15, width: 140, pinned: null },
+    { key: 'lastLogin', order: 14, width: 140, pinned: null },
   ],
   attendanceToday: [
     { key: 'name', order: 0, width: 200, pinned: null },
@@ -62,6 +61,7 @@ const COLUMN_PERMISSIONS = {
   employeeList: {
     employeeCode: [PERMISSIONS.USERS_READ],
     email: [PERMISSIONS.USERS_READ],
+    employeeCode: [PERMISSIONS.USERS_READ],
     mobile: [PERMISSIONS.USERS_READ],
     designation: [PERMISSIONS.USERS_READ],
     role: [PERMISSIONS.USERS_READ],

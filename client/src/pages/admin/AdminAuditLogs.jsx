@@ -201,7 +201,29 @@ function formatShortDeviceId(deviceId) {
   return deviceId.slice(0, 8);
 }
 
+const DEVICE_TYPE_LABELS = { mobile: 'Mobile', tablet: 'Tablet', desktop: 'Desktop' };
+
+function formatDeviceOwnerLabel(actorName, deviceType) {
+  const label = DEVICE_TYPE_LABELS[deviceType] ?? null;
+  if (!label) return null;
+  const name = typeof actorName === 'string' ? actorName.trim() : '';
+  if (!name) return label;
+  return `${/s$/i.test(name) ? `${name}'` : `${name}'s`} ${label}`;
+}
+
 function formatDeviceDisplay(log) {
+  // Preferred: "<Name>'s <Mobile|Tablet|Desktop> — <Browser> / <OS>" from the
+  // server-classified fields. Falls back to the legacy raw-ID rendering when
+  // the response predates those fields.
+  const ownerLabel =
+    log.deviceType !== undefined
+      ? formatDeviceOwnerLabel(log.actorName ?? null, log.deviceType)
+      : null;
+  if (ownerLabel) {
+    const detail = [log.browser, log.os].filter(Boolean).join(' / ');
+    return { text: detail ? `${ownerLabel} — ${detail}` : ownerLabel, muted: false };
+  }
+  if (log.deviceType !== undefined) return { text: 'Not recorded', muted: true };
   const shortDeviceId = formatShortDeviceId(log.deviceId);
   if (shortDeviceId) return { text: shortDeviceId, muted: false };
   if (log.userAgent) return { text: 'Browser', muted: false };

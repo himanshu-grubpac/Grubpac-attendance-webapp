@@ -10,6 +10,8 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -81,6 +83,11 @@ function TableSkeleton({ label }) {
 export function SalaryHistorySection({ fixedUserId = null, title = 'Salary history' }) {
   const { user } = useAuth();
   const currentYear = currentIstYear();
+  const oldestYear = useOldestJoiningYear();
+  const historyYearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestYear, currentYear),
+    [oldestYear, currentYear],
+  );
   const [year, setYear] = useState(String(currentYear));
   const [employees, setEmployees] = useState([]);
   const [search, setSearch] = useState('');
@@ -221,7 +228,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
             <SelectField
               value={year}
               onChange={setYear}
-              options={yearOptions}
+              options={historyYearOptions}
               aria-label="History year"
               disabled={loading}
             />
@@ -352,6 +359,12 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
  */
 export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary audit' }) {
   const { showSuccess } = useToast();
+  const currentAuditYear = Number(getTodayMonthIst().split('-')[0]);
+  const oldestAuditYear = useOldestJoiningYear();
+  const auditYearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestAuditYear, currentAuditYear),
+    [oldestAuditYear, currentAuditYear],
+  );
   const [yearFilter, setYearFilter] = useState(() => getTodayMonthIst().split('-')[0]);
   const [monthPartFilter, setMonthPartFilter] = useState(() => getTodayMonthIst().split('-')[1]);
   const [departmentId, setDepartmentId] = useState('');
@@ -499,7 +512,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                 <SelectField
                   value={yearFilter}
                   onChange={setYearFilter}
-                  options={yearOptions}
+                  options={auditYearOptions}
                   aria-label="Audit year"
                   disabled={loading}
                 />
