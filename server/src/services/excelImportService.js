@@ -34,8 +34,38 @@ import {
 import { getISTDateInputValue, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { COMPANY_START_DATE } from '../config/company.js';
 import { sendWelcomeEmail } from './emailService.js';
+import {
+  assertDepartmentFilterAllowed,
+  isUserInTeamScope,
+  resolveAccessibleDepartmentIds,
+} from './teamScopeService.js';
 
 export { normalizeMobile };
+
+async function validateBulkImportScope(actor, permissions, { departmentId, targetUserId } = {}) {
+  if (!actor || !permissions) {
+    return null;
+  }
+
+  const accessibleDepts = await resolveAccessibleDepartmentIds(actor, permissions);
+
+  if (departmentId) {
+    try {
+      assertDepartmentFilterAllowed(accessibleDepts, departmentId);
+    } catch (error) {
+      return error.message;
+    }
+  }
+
+  if (targetUserId) {
+    const inScope = await isUserInTeamScope(actor, permissions, targetUserId);
+    if (!inScope) {
+      return 'Employee is outside your team access scope.';
+    }
+  }
+
+  return null;
+}
 
 const ID_COLUMN_FILL = 'FFFFFBF0';
 const BULK_EXPORT_HEADERS = [
@@ -512,6 +542,14 @@ export async function createEmployee(data, createdBy, options = {}) {
   // No PIN via bulk import: new employees set it up afterwards.
   const pin4Hash = null;
   const department = await resolveDepartment(parsed);
+  const scopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
+    departmentId: department?._id ?? null,
+  });
+  if (scopeMessage) {
+    const error = new Error(scopeMessage);
+    error.statusCode = 403;
+    throw error;
+  }
   const manager = parsed.reportingManagerId
     ? await resolveReportingManager(parsed.reportingManagerId)
     : null;
@@ -538,9 +576,14 @@ export async function createEmployee(data, createdBy, options = {}) {
  * The password is returned ONLY here (shown once in upload results) — it is
  * never persisted or logged anywhere.
  */
-export async function createEmployeeAndPassword(data, createdBy) {
+export async function createEmployeeAndPassword(data, createdBy, scopeContext = null) {
   const box = { firstName: String(data.firstName ?? ''), current: null };
-  const employee = await createEmployee(data, createdBy, { bulkImport: true, passwordBox: box });
+  const employee = await createEmployee(data, createdBy, {
+    bulkImport: true,
+    passwordBox: box,
+    actor: scopeContext?.actor ?? null,
+    permissions: scopeContext?.permissions ?? null,
+  });
   return { employee, generatedPassword: box.current };
 }
 
@@ -551,7 +594,7 @@ export async function createEmployeeAndPassword(data, createdBy) {
  * the preview (dry-run) step so the review table matches what sync will do.
  * Returns `{ name, employeeCode }` for the preview row; throws on invalid.
  */
-export async function validateNewEmployeeForPreview(data) {
+export async function validateNewEmployeeForPreview(data, scopeContext = null) {
   const input = { ...data };
   const bulkRole = await resolveRoleByNameOrSlug(input.role);
   const role = await resolveRole(bulkRole._id.toString());
@@ -573,6 +616,14 @@ export async function validateNewEmployeeForPreview(data) {
   }).parse(stripBulkReferenceFields(prepared));
 
   const department = await resolveDepartment(parsed);
+  const scopeMessage = await validateBulkImportScope(scopeContext?.actor, scopeContext?.permissions, {
+    departmentId: department?._id ?? null,
+  });
+  if (scopeMessage) {
+    const error = new Error(scopeMessage);
+    error.statusCode = 403;
+    throw error;
+  }
   if (parsed.reportingManagerId) {
     await resolveReportingManager(parsed.reportingManagerId);
   }
@@ -943,6 +994,19 @@ async function upsertExistingEmployee(row, user, options = {}) {
   // mobile may be healed by supplying a valid 10-digit replacement.
   const rawId = user._id.toString();
 
+  const scopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
+    targetUserId: user._id,
+  });
+  if (scopeMessage) {
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: scopeMessage,
+    };
+  }
+
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const userRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString() ?? '';
   if (adminRole && userRoleId === adminRole._id.toString()) {
@@ -1196,6 +1260,18 @@ async function upsertExistingEmployee(row, user, options = {}) {
         message: `Department "${rawDepartment}" not found or inactive.`,
       };
     }
+    const deptScopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
+      departmentId: dept._id,
+    });
+    if (deptScopeMessage) {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: deptScopeMessage,
+      };
+    }
     const currentDeptId = user.departmentId?._id?.toString() ?? user.departmentId?.toString() ?? '';
     if (dept._id.toString() !== currentDeptId) {
       changedFields.push({
@@ -1325,13 +1401,15 @@ function handleCreateError(row, error) {
     };
   }
 
-  if (error.statusCode === 400) {
+  if (error.statusCode === 400 || error.statusCode === 403) {
     return {
       rowNumber: row.rowNumber,
       id: '',
       status: 'validation_error',
       email: row.data.email ?? '',
-      message: `New employee: ${error.message ?? 'Validation failed.'}`,
+      message: error.statusCode === 403
+        ? (error.message ?? 'You do not have permission for this row.')
+        : `New employee: ${error.message ?? 'Validation failed.'}`,
     };
   }
 
@@ -1346,6 +1424,10 @@ function handleCreateError(row, error) {
 
 export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {}) {
   const dryRun = options.dryRun === true;
+  const scopeContext = {
+    actor: options.actor ?? null,
+    permissions: options.permissions ?? null,
+  };
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);
   const results = [...fileDuplicates];
   const createdEmployees = [];
@@ -1372,10 +1454,10 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
       ]);
 
       if (existing) {
-        const result = await upsertExistingEmployee(row, existing, { dryRun });
+        const result = await upsertExistingEmployee(row, existing, { dryRun, ...scopeContext });
         results.push(result);
       } else if (dryRun) {
-        const preview = await validateNewEmployeeForPreview(row.data);
+        const preview = await validateNewEmployeeForPreview(row.data, scopeContext);
         results.push({
           rowNumber: row.rowNumber,
           id: '',
@@ -1390,7 +1472,7 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
             'Will create this employee on sync. Login credentials will be emailed and the temporary password must be changed on first sign-in.',
         });
       } else {
-        const created = await createEmployeeAndPassword(row.data, createdBy);
+        const created = await createEmployeeAndPassword(row.data, createdBy, scopeContext);
         results.push({
           rowNumber: row.rowNumber,
           id: created.employee.id,

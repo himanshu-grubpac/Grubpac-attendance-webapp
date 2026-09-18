@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatISTDate, getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
+import { broadcastLeaveItemSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
@@ -30,6 +32,8 @@ export default function EmployeeMyLeaveRequests() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const pageRef = useRef(page);
+  pageRef.current = page;
 
   async function loadRequests(nextPage = page, { quiet = false } = {}) {
     if (!quiet) {
@@ -51,6 +55,13 @@ export default function EmployeeMyLeaveRequests() {
   useEffect(() => {
     loadRequests(page);
   }, [page]);
+
+  usePortalSync(
+    () => {
+      loadRequests(pageRef.current, { quiet: true });
+    },
+    { topics: [PORTAL_TOPICS.LEAVE] },
+  );
 
   // Settle polling: while any row carries a staged (undoable) cancellation,
   // silently refetch so the row settles to its finalized status promptly.
@@ -91,6 +102,7 @@ export default function EmployeeMyLeaveRequests() {
               try {
                 await leaveApi.undoCancellation(item.id);
                 showSuccess('Cancellation undone. Leave restored.');
+                broadcastLeaveItemSync(item);
                 loadRequests(page);
               } catch (err) {
                 showError(getErrorMessage(err));
@@ -105,6 +117,7 @@ export default function EmployeeMyLeaveRequests() {
       } else {
         showSuccess('Leave request cancelled.');
       }
+      broadcastLeaveItemSync(item);
       loadRequests(page);
     } catch (err) {
       setError(getErrorMessage(err));

@@ -162,7 +162,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
 export const User = mongoose.model('User', userSchema);
 
 export const USER_POPULATE_FIELDS = [
-  { path: 'roleId', select: 'name slug permissions isSystem' },
+  { path: 'roleId', select: 'name slug permissions isSystem permissionsVersion' },
   { path: 'departmentId', select: 'name code isActive' },
   { path: 'reportingManagerId', select: 'name email delegateApproverId' },
   { path: 'delegateApproverId', select: 'name email' },

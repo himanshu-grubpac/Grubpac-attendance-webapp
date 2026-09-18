@@ -14,19 +14,16 @@ const router = Router();
 
 router.use(authenticate);
 
-// Role-filtered active items for users with read or manage permission.
 router.get(
   '/',
-  requirePermission(PERMISSIONS.DEMO_FAQ_READ, PERMISSIONS.DEMO_FAQ_MANAGE),
+  requirePermission(PERMISSIONS.EMP_FAQ_R, PERMISSIONS.OPS_FAQ_R, PERMISSIONS.OPS_GUIDE_R),
   asyncHandler(listForRole),
 );
 
-// Admin manage view — all items including inactive.
-router.get('/manage', requirePermission(PERMISSIONS.DEMO_FAQ_MANAGE), asyncHandler(listAll));
+router.get('/manage', requirePermission(PERMISSIONS.OPS_FAQ_R), asyncHandler(listAll));
 
-// CRUD — admin only.
-router.post('/', requirePermission(PERMISSIONS.DEMO_FAQ_MANAGE), asyncHandler(createItem));
-router.put('/:id', requirePermission(PERMISSIONS.DEMO_FAQ_MANAGE), asyncHandler(updateItem));
-router.delete('/:id', requirePermission(PERMISSIONS.DEMO_FAQ_MANAGE), asyncHandler(deleteItem));
+router.post('/', requirePermission(PERMISSIONS.OPS_FAQ_C), asyncHandler(createItem));
+router.put('/:id', requirePermission(PERMISSIONS.OPS_FAQ_U), asyncHandler(updateItem));
+router.delete('/:id', requirePermission(PERMISSIONS.OPS_FAQ_D), asyncHandler(deleteItem));
 
 export default router;

@@ -126,6 +126,14 @@ test('computeLopDeductionRows — full absent day deducts 100% perDay', () => {
   assert.equal(rows[0].days, 1);
 });
 
+test('attendanceCreditForTag — P=1, HD/LV=0.5', async () => {
+  const { attendanceCreditForTag } = await import('./salaryService.js');
+  assert.equal(attendanceCreditForTag('P'), 1);
+  assert.equal(attendanceCreditForTag(null), 1);
+  assert.equal(attendanceCreditForTag('HD'), 0.5);
+  assert.equal(attendanceCreditForTag('LV'), 0.5);
+});
+
 test('computeLopDeductionRows — half day deducts 50% perDay', () => {
   const rows = computeLopDeductionRows({
     workingDayList: ['2026-06-02'],

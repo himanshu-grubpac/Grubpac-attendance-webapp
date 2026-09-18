@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createCompOffRequestSchema } from '@shared/validation/compOff.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { compOffApi, leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
+import { broadcastLeavePayrollSync } from '../../utils/portalSync.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import { showFormError } from '../../utils/formErrors.js';
@@ -220,6 +221,10 @@ export default function EmployeeCompOff() {
       } else {
         showSuccess('Comp off request submitted.');
       }
+      broadcastLeavePayrollSync({
+        userId: req.userId,
+        startDate: validation.data.startDate ?? req.startDate,
+      });
       loadRequests(page);
     } catch (err) {
       showFormError({
@@ -240,6 +245,7 @@ export default function EmployeeCompOff() {
     try {
       await compOffApi.withdraw(id);
       if (snapshot) setForm(snapshot);
+      broadcastLeavePayrollSync({ startDate: snapshot?.startDate });
       showToast('Request withdrawn. Edit and submit again when ready.', { variant: 'info' });
       loadRequests(page);
     } catch (err) {
@@ -274,6 +280,10 @@ export default function EmployeeCompOff() {
     try {
       const response = await compOffApi.withdraw(item.id);
       if (response?.deleted) {
+        broadcastLeavePayrollSync({
+          userId: item.userId,
+          startDate: item.startDate,
+        });
         showSuccess('Comp off request withdrawn.');
         loadRequests(page);
         return;

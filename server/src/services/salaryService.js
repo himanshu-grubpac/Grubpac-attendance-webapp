@@ -1,7 +1,17 @@
 import mongoose from 'mongoose';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
+import {
+  applyTeamScopeToUserIdQuery,
+  isUserInTeamScope,
+  resolveTeamScopedUserIds,
+} from './teamScopeService.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
 import { formatInrNumber } from '../../../shared/utils/formatInr.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
@@ -102,6 +112,17 @@ export function salaryAppliesForMonth(user, monthEnd) {
   return user.salaryEffectiveFrom <= monthEnd;
 }
 
+/**
+ * Allowed check-in credit for salary/LOP: P (or legacy untagged) = 1, HD/LV = 0.5.
+ * No check-in is 0 and is handled by absence in computeLopDeductionRows.
+ */
+export function attendanceCreditForTag(attendanceTag) {
+  if (attendanceTag === 'HD' || attendanceTag === 'LV') {
+    return 0.5;
+  }
+  return 1;
+}
+
 async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   const records = await AttendanceRecord.find({
     userId,
@@ -113,7 +134,7 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   const creditByDay = new Map();
   for (const record of records) {
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = attendanceCreditForTag(record.attendanceTag);
     // A day can only have one allowed check-in, but retaining the highest credit
     // keeps historic/duplicate records from creating an accidental deduction.
     creditByDay.set(dayKey, Math.max(creditByDay.get(dayKey) ?? 0, credit));
@@ -620,39 +641,26 @@ export async function loadSalarySubject(userId, { allowInactive = false } = {}) 
   return user;
 }
 
-export function canViewSalarySummary(actor, subject, permissions) {
+export async function canViewSalarySummary(actor, subject, permissions) {
   const actorId = actor._id.toString();
   const subjectId = subject._id.toString();
 
   if (actorId === subjectId) {
-    return hasPermission(permissions, PERMISSIONS.SALARY_READ);
+    return hasPermission(permissions, PERMISSIONS.EMP_PAY_R);
   }
 
   if (
-    hasPermission(permissions, PERMISSIONS.SALARY_READ) &&
-    (hasPermission(permissions, PERMISSIONS.USERS_READ) ||
-      hasPermission(permissions, PERMISSIONS.USERS_WRITE))
+    hasPermission(permissions, PERMISSIONS.SALARY_PAYROLL_R) &&
+    hasCompanyWideScope(permissions)
   ) {
     return true;
   }
 
-  if (hasPermission(permissions, PERMISSIONS.SALARY_READ_TEAM)) {
-    const managerId =
-      subject.reportingManagerId?._id?.toString() ??
-      subject.reportingManagerId?.toString?.() ??
-      null;
-    if (managerId === actorId) {
-      return true;
-    }
-
-    const subjectDept =
-      subject.departmentId?._id?.toString?.() ??
-      subject.departmentId?.toString?.() ??
-      null;
-    if (Array.isArray(actor.managedDepartmentIds) && actor.managedDepartmentIds.length > 0) {
-      return actor.managedDepartmentIds.some((id) => id.toString() === subjectDept);
-    }
-    return false;
+  if (
+    hasPermission(permissions, PERMISSIONS.SALARY_TEAM_AUDIT_R) ||
+    hasPermission(permissions, PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R)
+  ) {
+    return isUserInTeamScope(actor, permissions, subjectId);
   }
 
   return false;
@@ -662,7 +670,7 @@ export async function getSalarySummaryForUser(actor, permissions, userId, month)
   // Reads tolerate deactivated subjects (empty-state downstream); writes keep
   // the strict loader so inactive records stay uneditable.
   const subject = await loadSalarySubject(userId, { allowInactive: true });
-  if (!canViewSalarySummary(actor, subject, permissions)) {
+  if (!(await canViewSalarySummary(actor, subject, permissions))) {
     throwError('You do not have permission to view this salary summary.', 403);
   }
   if (!subject.isActive) {
@@ -672,13 +680,18 @@ export async function getSalarySummaryForUser(actor, permissions, userId, month)
   return { summary };
 }
 
-export async function listSalarySummariesForMonth(month) {
+export async function listSalarySummariesForMonth(month, scopeContext = null) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const employees = await User.find({ isActive: true, monthlySalary: { $ne: null, $gt: 0 } })
+  const query = { isActive: true, monthlySalary: { $ne: null, $gt: 0 } };
+  if (scopeContext?.actor && scopeContext?.permissions) {
+    await applyTeamScopeToUserIdQuery(query, scopeContext.actor, scopeContext.permissions);
+  }
+
+  const employees = await User.find(query)
     .select('name employeeCode monthlySalary salaryEffectiveFrom')
     .sort({ name: 1 });
 
@@ -768,8 +781,12 @@ export function computeSalaryTransferStatsFromRows(rows) {
   };
 }
 
-export async function getSalaryTransferStats(periodKey) {
-  const rows = await SalaryTransfer.find({ periodKey }).select('status amount');
+export async function getSalaryTransferStats(periodKey, scopeUserIds = null) {
+  const query = { periodKey };
+  if (scopeUserIds !== null) {
+    query.userId = { $in: scopeUserIds };
+  }
+  const rows = await SalaryTransfer.find(query).select('status amount');
   return computeSalaryTransferStatsFromRows(rows);
 }
 
@@ -794,7 +811,14 @@ function salaryTransferToJSON(transfer) {
   };
 }
 
-export async function listSalaryTransfers({ month, status, page = 1, limit = 20 }) {
+export async function listSalaryTransfers({
+  month,
+  status,
+  page = 1,
+  limit = 20,
+  actor = null,
+  permissions = null,
+}) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -803,6 +827,13 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
   const query = { periodKey: month };
   if (status) {
     query.status = status;
+  }
+  let scopedIds = null;
+  if (actor && permissions) {
+    scopedIds = await resolveTeamScopedUserIds(actor, permissions);
+    if (scopedIds !== null) {
+      query.userId = { $in: scopedIds };
+    }
   }
 
   const skip = (page - 1) * limit;
@@ -814,7 +845,7 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
       .skip(skip)
       .limit(limit),
     SalaryTransfer.countDocuments(query),
-    getSalaryTransferStats(month),
+    getSalaryTransferStats(month, scopedIds),
   ]);
 
   return {
@@ -830,13 +861,18 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
   };
 }
 
-export async function generatePendingSalaryTransfers(month, actorId, session = null) {
+export async function generatePendingSalaryTransfers(
+  month,
+  actorId,
+  session = null,
+  scopeContext = null,
+) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const summaries = await listSalarySummariesForMonth(month);
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const eligible = summaries.filter(
     (item) => item.payableEstimate != null || item.monthlySalary != null,
   );
@@ -998,8 +1034,17 @@ async function buildSalaryStructureQuery(search) {
   return query;
 }
 
-export async function listSalaryStructure({ page = 1, limit = 20, search = '' }) {
+export async function listSalaryStructure({
+  page = 1,
+  limit = 20,
+  search = '',
+  actor = null,
+  permissions = null,
+}) {
   const query = await buildSalaryStructureQuery(search);
+  if (actor && permissions) {
+    await applyTeamScopeToUserIdQuery(query, actor, permissions);
+  }
   const skip = (page - 1) * limit;
 
   const [employees, total] = await Promise.all([
@@ -1099,7 +1144,14 @@ function validateLopAsOfDate(month, asOf) {
   }
 }
 
-export async function listLopSummaries({ month, asOf, page = 1, limit = 20 }) {
+export async function listLopSummaries({
+  month,
+  asOf,
+  page = 1,
+  limit = 20,
+  actor = null,
+  permissions = null,
+}) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -1110,6 +1162,9 @@ export async function listLopSummaries({ month, asOf, page = 1, limit = 20 }) {
     isActive: true,
     monthlySalary: { $ne: null, $gt: 0 },
   };
+  if (actor && permissions) {
+    await applyTeamScopeToUserIdQuery(query, actor, permissions);
+  }
   const skip = (page - 1) * limit;
 
   const [employees, total] = await Promise.all([
@@ -1150,10 +1205,15 @@ export async function listAllLopSummariesForMonth(month, asOf, options = {}) {
   }
   validateLopAsOfDate(month, asOf);
 
-  const employees = await User.find({
+  const query = {
     isActive: true,
     monthlySalary: { $ne: null, $gt: 0 },
-  })
+  };
+  if (options.actor && options.permissions) {
+    await applyTeamScopeToUserIdQuery(query, options.actor, options.permissions);
+  }
+
+  const employees = await User.find(query)
     .select('name employeeCode monthlySalary salaryEffectiveFrom')
     .sort({ name: 1, _id: 1 });
 
@@ -1172,7 +1232,7 @@ export async function listAllLopSummariesForMonth(month, asOf, options = {}) {
 
 export async function getLopDetailForUser(actor, permissions, userId, month, asOf) {
   const subject = await loadSalarySubject(userId);
-  if (!canViewSalarySummary(actor, subject, permissions)) {
+  if (!(await canViewSalarySummary(actor, subject, permissions))) {
     throwError('You do not have permission to view this LOP detail.', 403);
   }
   validateLopAsOfDate(month, asOf);

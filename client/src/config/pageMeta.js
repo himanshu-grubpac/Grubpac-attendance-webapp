@@ -13,6 +13,11 @@ const PAGE_META = [
   },
   { match: '/admin/users', title: 'Employee List', subtitle: 'Manage and monitor your workforce.' },
   {
+    match: '/admin/roles/new',
+    title: 'Add role',
+    subtitle: 'Tick what this role may do. Anything left unticked is denied.',
+  },
+  {
     match: '/admin/roles',
     title: 'Roles & Permissions',
     subtitle: 'Define access levels with permission sets for system and custom roles.',
@@ -96,6 +101,13 @@ export function getPageMeta(pathname) {
   if (/^\/admin\/users\/[a-f\d]{24}$/i.test(normalized)) {
     return {
       title: 'Employee details',
+      subtitle: '',
+    };
+  }
+
+  if (/^\/admin\/roles\/[a-f\d]{24}$/i.test(normalized)) {
+    return {
+      title: 'Edit role',
       subtitle: '',
     };
   }

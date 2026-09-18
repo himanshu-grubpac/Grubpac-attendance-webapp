@@ -25,10 +25,12 @@ import {
   computeMtdSalaryMetrics,
   resolveSalaryAsOfDate,
   salaryAppliesForMonth,
+  attendanceCreditForTag,
 } from './salaryService.js';
 import { getHolidayDateSet } from './leaveService.js';
 import { getPaidLeaveQuota } from './leaveBalanceService.js';
 import {
+  assertDepartmentInAccessibleSet,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
@@ -50,12 +52,7 @@ function roundMoney(value) {
  * Returns null for unscoped (admin read-all), [] for no access, or array of ObjectIds.
  */
 async function getAuditScope(actor, permissions) {
-  return resolveTeamScopedUserIds(
-    actor,
-    permissions,
-    PERMISSIONS.SALARY_READ,
-    PERMISSIONS.SALARY_READ_TEAM,
-  );
+  return resolveTeamScopedUserIds(actor, permissions);
 }
 
 /**
@@ -74,7 +71,7 @@ function validatePeriodKey(periodKey) {
 /**
  * Bulk-fetches attendance credit by user for a month.
  * Returns Map<userId_string, Map<dayKey, credit>>.
- * credit = 1.0 for Present, 0.5 for HD.
+ * credit = 1.0 for Present, 0.5 for HD/LV.
  */
 async function bulkFetchAttendanceByUser(userIds, monthStart, monthEnd) {
   if (userIds.length === 0) return new Map();
@@ -92,7 +89,7 @@ async function bulkFetchAttendanceByUser(userIds, monthStart, monthEnd) {
     if (!outerMap.has(uid)) outerMap.set(uid, new Map());
     const dayMap = outerMap.get(uid);
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = attendanceCreditForTag(record.attendanceTag);
     dayMap.set(dayKey, Math.max(dayMap.get(dayKey) ?? 0, credit));
   }
   return outerMap;
@@ -640,6 +637,10 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
  */
 export async function getMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   validatePeriodKey(periodKey);
+
+  if (options.departmentId) {
+    await assertDepartmentInAccessibleSet(actor, permissions, options.departmentId);
+  }
 
   const scopedIds = await getAuditScope(actor, permissions);
 

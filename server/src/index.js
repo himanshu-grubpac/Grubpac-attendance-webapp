@@ -18,6 +18,7 @@ import helpRoutes from './routes/helpRoutes.js';
 import salaryRoutes from './routes/salaryRoutes.js';
 import demoFaqRoutes from './routes/demoFaqRoutes.js';
 import tablePreferenceRoutes from './routes/tablePreferenceRoutes.js';
+import rbacRoutes from './routes/rbacRoutes.js';
 import { startAutoCheckoutScheduler } from './jobs/autoCheckoutJob.js';
 import { startLeaveDecisionNotifyScheduler, startMonthEndSettlementScheduler } from './jobs/leaveJobs.js';
 import { cleanupStalePendingAttachments } from './services/helpAttachmentService.js';
@@ -102,6 +103,7 @@ app.use('/api/help', helpRoutes);
 app.use('/api/salary', salaryRoutes);
 app.use('/api/demo-faq', demoFaqRoutes);
 app.use('/api/preferences', tablePreferenceRoutes);
+app.use('/api/rbac', rbacRoutes);
 
 app.use(errorHandler);
 

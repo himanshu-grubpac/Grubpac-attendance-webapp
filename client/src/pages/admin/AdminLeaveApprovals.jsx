@@ -14,6 +14,8 @@ import { useTableColumns } from '../../hooks/useTableColumns.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 import RequestsTabs from '../../components/RequestsTabs.jsx';
+import { broadcastLeaveItemSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
 
 const REQUEST_TABS = ['leave', 'wfh', 'compoff'];
 
@@ -405,6 +407,13 @@ export default function AdminLeaveApprovals() {
     loadRequests({ nextPage: 1 });
   }, [loadRequests]);
 
+  usePortalSync(
+    () => {
+      loadRequests({ nextPage: page, quiet: true });
+    },
+    { topics: [PORTAL_TOPICS.LEAVE] },
+  );
+
   // Settle polling: while any visible row carries a staged (undoable) action,
   // silently refetch so PENDING flips to the finalized status as soon as the
   // server finalizer commits it. Stops automatically once nothing is staged
@@ -569,6 +578,7 @@ export default function AdminLeaveApprovals() {
               try {
                 await leaveApi.undoDecision(id);
                 showSuccess('Leave decision undone.');
+                broadcastLeaveItemSync(item);
                 await loadRequests({ nextPage: page });
                 setDecisionModal({ open: true, item: item, comment: note });
               } catch (err) {
@@ -588,6 +598,7 @@ export default function AdminLeaveApprovals() {
           delete next[id];
           return next;
         });
+        broadcastLeaveItemSync(item);
         await loadRequests({ nextPage: page });
       } catch (err) {
         showError(getErrorMessage(err));
@@ -611,6 +622,7 @@ export default function AdminLeaveApprovals() {
               try {
                 await leaveApi.undoDecision(id);
                 showSuccess('Leave decision undone.');
+                broadcastLeaveItemSync(item);
                 await loadRequests({ nextPage: page });
                 setDecisionModal({ open: true, item: item, comment: note });
               } catch (err) {
@@ -630,6 +642,7 @@ export default function AdminLeaveApprovals() {
         delete next[id];
         return next;
       });
+      broadcastLeaveItemSync(item);
       await loadRequests({ nextPage: page });
     } catch (err) {
       showError(getErrorMessage(err));
@@ -659,6 +672,7 @@ export default function AdminLeaveApprovals() {
               try {
                 await leaveApi.undoCancellation(item.id);
                 showSuccess('Cancellation undone. Leave restored.');
+                broadcastLeaveItemSync(item);
                 await loadRequests({ nextPage: page });
               } catch (err) {
                 showError(getErrorMessage(err));
@@ -670,6 +684,7 @@ export default function AdminLeaveApprovals() {
       } else {
         showSuccess('Approved leave cancelled.');
       }
+      broadcastLeaveItemSync(item);
       await loadRequests({ nextPage: page });
     } catch (err) {
       showError(getErrorMessage(err));

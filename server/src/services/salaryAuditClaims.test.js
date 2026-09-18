@@ -488,7 +488,7 @@ test('claim4: attendance bulk fetch produces Map<userId, Map<dayKey, credit>>', 
     if (!outerMap.has(uid)) outerMap.set(uid, new Map());
     const dayMap = outerMap.get(uid);
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = record.attendanceTag === 'HD' || record.attendanceTag === 'LV' ? 0.5 : 1;
     dayMap.set(dayKey, Math.max(dayMap.get(dayKey) ?? 0, credit));
   }
 

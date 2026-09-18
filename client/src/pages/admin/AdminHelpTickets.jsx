@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastHelpSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 import { Link } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
@@ -33,7 +35,7 @@ export default function AdminHelpTickets() {
   const [updatingPriorityId, setUpdatingPriorityId] = useState('');
   const { showSuccess, showError } = useToast();
 
-  async function loadTickets(nextPage = page) {
+  const loadTickets = useCallback(async (nextPage = page) => {
     setLoading(true);
     setError('');
     try {
@@ -47,7 +49,7 @@ export default function AdminHelpTickets() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [page, statusFilter]);
 
   useEffect(() => {
     setPage(1);
@@ -55,7 +57,11 @@ export default function AdminHelpTickets() {
 
   useEffect(() => {
     loadTickets(page);
-  }, [page, statusFilter]);
+  }, [loadTickets, page]);
+
+  usePortalSync(() => {
+    void loadTickets(page);
+  }, { topics: [PORTAL_TOPICS.HELP] });
 
   const handlePriorityChange = useCallback(async (ticketId, newPriority) => {
     setUpdatingPriorityId(ticketId);
@@ -64,6 +70,7 @@ export default function AdminHelpTickets() {
       setTickets((prev) =>
         prev.map((t) => (t.id === ticketId ? { ...t, priority: newPriority } : t)),
       );
+      broadcastHelpSync();
       showSuccess('Priority updated.');
     } catch (err) {
       showError(getErrorMessage(err));

@@ -1,5 +1,10 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
@@ -377,8 +382,8 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const todayKey = getISTDateInputValue();
   const istToday = todayKey;
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
 
   let userIds = [];
   if (canReadAll) {
@@ -845,10 +850,10 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         enforceOfficeRadius,
       });
 
-      const businessReasons = [];
+  const businessReasons = [];
       if (type === 'check_in') {
         if (today.checkIn) {
-          businessReasons.push('You have already checked in today.');
+    businessReasons.push('You have already checked in today.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
         } else {
@@ -857,14 +862,14 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           const compOffGateError = await compOffCheckInGateError(userId, office, istToday, session);
           if (compOffGateError) businessReasons.push(compOffGateError);
         }
-      }
-      if (type === 'check_out' && !today.canCheckOut) {
-        if (!today.checkIn) {
-          businessReasons.push('Check-in is required before check-out.');
-        } else {
-          businessReasons.push('You have already checked out today.');
-        }
-      }
+  }
+  if (type === 'check_out' && !today.canCheckOut) {
+    if (!today.checkIn) {
+      businessReasons.push('Check-in is required before check-out.');
+    } else {
+      businessReasons.push('You have already checked out today.');
+    }
+  }
       if (type === 'check_out' && today.checkIn && !today.checkOut) {
         const dayStart = startOfDayIST();
         const dayEnd = endOfDayIST();
@@ -876,12 +881,12 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           timestamp: { $gte: today.checkIn.timestamp, $lte: dayEnd },
         }).session(session);
         if (duplicateCheckOut) {
-          businessReasons.push('You have already checked out today.');
-        }
-      }
+      businessReasons.push('You have already checked out today.');
+    }
+  }
 
-      const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
-      const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
+  const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
+  const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
 
       let policyFields = {};
       if (type === 'check_in' && status === 'allowed') {
@@ -891,19 +896,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       const [record] = await AttendanceRecord.create(
         [
           {
-            userId,
-            type,
+    userId,
+    type,
             attendanceMode,
-            timestamp: new Date(),
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            accuracyMeters: payload.accuracyMeters,
-            distanceMeters: geo.distanceMeters,
-            officeLatitude: office.latitude,
-            officeLongitude: office.longitude,
-            radiusMeters: office.radiusMeters,
-            status,
-            rejectionReasons,
+    timestamp: new Date(),
+    latitude: payload.latitude,
+    longitude: payload.longitude,
+    accuracyMeters: payload.accuracyMeters,
+    distanceMeters: geo.distanceMeters,
+    officeLatitude: office.latitude,
+    officeLongitude: office.longitude,
+    radiusMeters: office.radiusMeters,
+    status,
+    rejectionReasons,
             lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
             leaveStatus:
               type === 'check_in' && (wfhPendingToday || wfhApprovalPendingToday)
@@ -1053,16 +1058,11 @@ export async function getAdminAttendance({
     searchUserIds = matched.map((user) => user._id);
   }
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
 
   if (!canReadAll && canReadTeam && actor?._id) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      actor,
-      permissions,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
+    const scopedIds = await resolveTeamScopedUserIds(actor, permissions);
 
     if (userId) {
       const allowed = scopedIds === null || scopedIds.some((id) => id.toString() === userId.toString());
@@ -1366,8 +1366,8 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
     return actor._id;
   }
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
+  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
 
   if (!canReadAll && !canReadTeam) {
     throwError('You do not have permission to view this employee\'s attendance.', 403);

@@ -12,7 +12,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 
 const router = Router();
 
-router.use(authenticate, requirePermission(PERMISSIONS.NOTIFICATIONS_READ));
+router.use(authenticate, requirePermission(PERMISSIONS.PORTAL_EMPLOYEE, PERMISSIONS.PORTAL_ADMIN));
 
 router.get('/', asyncHandler(listForCurrentUser));
 router.get('/unread-count', asyncHandler(getUnreadCountForCurrentUser));

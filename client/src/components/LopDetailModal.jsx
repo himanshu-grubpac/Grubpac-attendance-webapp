@@ -6,6 +6,8 @@ import { formatINRCurrency, formatISTDate } from '../utils/datetime.js';
 import { formatMonthLabel } from './MonthField.jsx';
 import SelectField from './SelectField.jsx';
 import EmptyState, { EMPTY_ICONS } from './EmptyState.jsx';
+import { usePortalSync } from '../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../utils/portalSync.js';
 
 function TableSkeleton() {
   return (
@@ -65,6 +67,17 @@ export default function LopDetailModal({
       setLoading(false);
     }
   }, [asOf, month, onDetailLoaded, userId]);
+
+  const handleAttendanceSalarySync = useCallback(() => {
+    if (!open) return;
+    loadDetail();
+  }, [loadDetail, open]);
+
+  usePortalSync(handleAttendanceSalarySync, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    userId,
+    month,
+  });
 
   useEffect(() => {
     if (!open) {

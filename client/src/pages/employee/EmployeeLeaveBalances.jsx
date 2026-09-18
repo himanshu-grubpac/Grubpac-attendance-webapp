@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 export default function EmployeeLeaveBalances() {
   const [year, setYear] = useState(getISTYear());
@@ -10,7 +12,7 @@ export default function EmployeeLeaveBalances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -25,11 +27,15 @@ export default function EmployeeLeaveBalances() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [year]);
 
   useEffect(() => {
     loadData();
-  }, [year]);
+  }, [loadData]);
+
+  usePortalSync(() => {
+    void loadData();
+  }, { topics: [PORTAL_TOPICS.LEAVE, PORTAL_TOPICS.PAYROLL, PORTAL_TOPICS.POLICY] });
 
   return (
     <div className="page">

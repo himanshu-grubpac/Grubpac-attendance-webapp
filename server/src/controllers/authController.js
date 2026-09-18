@@ -27,6 +27,7 @@ import {
 } from '../../../shared/validation/auth.js';
 import { normalizeMobile } from '../../../shared/validation/common.js';
 import { auditLog } from '../utils/auditLog.js';
+import { resolveRolePermissionsVersion } from '../services/rolePermissionsVersionService.js';
 
 const COOKIE_NAME = 'attendance_token';
 
@@ -123,7 +124,7 @@ export async function loginUser(body, portal, auditContext = {}) {
     throw error;
   }
 
-  if (portal === 'employee' && !hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_OWN)) {
+  if (portal === 'employee' && !hasPermission(permissions, PERMISSIONS.PORTAL_EMPLOYEE)) {
     auditLog('login_failed', {
       identifier: parsed.identifier,
       reason: 'wrong_portal',
@@ -180,6 +181,10 @@ export async function loginUser(body, portal, auditContext = {}) {
     csrfToken,
     user: {
       ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
+      permissions,
+      permissionsVersion: resolveRolePermissionsVersion(
+        user.roleId && typeof user.roleId === 'object' ? user.roleId : null,
+      ),
       loginPortal: portal,
       // Single source of truth with toSafeJSON: either flag forces the
       // first-login gate (covers legacy rows where only one was ever set).
@@ -227,7 +232,27 @@ export async function getCurrentUser(userId) {
     error.statusCode = 404;
     throw error;
   }
-  return user.toSafeJSON({ canViewSalary: canViewSalaryFields(resolveUserPermissions(user)) });
+  const permissions = resolveUserPermissions(user);
+  const roleDoc = user.roleId && typeof user.roleId === 'object' ? user.roleId : null;
+  return {
+    ...user.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
+    permissions,
+    permissionsVersion: resolveRolePermissionsVersion(roleDoc),
+  };
+}
+
+export async function getPermissionsVersion(userId) {
+  const user = await loadAuthenticatedUser(userId);
+  if (!user) {
+    const error = new Error('User not found.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const roleDoc = user.roleId && typeof user.roleId === 'object' ? user.roleId : null;
+  return {
+    permissionsVersion: resolveRolePermissionsVersion(roleDoc),
+    roleId: roleDoc?._id?.toString?.() ?? user.roleId?.toString?.() ?? null,
+  };
 }
 
 export async function updateProfile(userId, body) {
@@ -278,7 +303,13 @@ export async function updateProfile(userId, body) {
     },
   });
 
-  return refreshed.toSafeJSON({ canViewSalary: canViewSalaryFields(resolveUserPermissions(refreshed)) });
+  const permissions = resolveUserPermissions(refreshed);
+  const roleDoc = refreshed.roleId && typeof refreshed.roleId === 'object' ? refreshed.roleId : null;
+  return {
+    ...refreshed.toSafeJSON({ canViewSalary: canViewSalaryFields(permissions) }),
+    permissions,
+    permissionsVersion: resolveRolePermissionsVersion(roleDoc),
+  };
 }
 
 export async function changePassword(userId, body) {

@@ -198,6 +198,7 @@ export const authApi = {
   },
   logout: () => api.post('/auth/logout').then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
+  permissionsVersion: () => api.get('/auth/me/permissions-version').then((r) => r.data),
   // Sliding renewal: re-issues the JWT + CSRF cookies ahead of their 2h
   // expiry. The response interceptor records the renewal for keepalive
   // scheduling; failures reject so callers (keepalive) can stay silent.
@@ -220,6 +221,7 @@ export const authApi = {
 
 export const adminApi = {
   listPermissions: () => api.get('/admin/permissions').then((r) => r.data),
+  getRbacCatalog: () => api.get('/rbac/catalog').then((r) => r.data),
   listRoles: (params = {}) => api.get('/admin/roles', { params }).then((r) => r.data),
   createRole: (payload) => api.post('/admin/roles', payload).then((r) => r.data),
   updateRole: (id, payload) => api.patch(`/admin/roles/${id}`, payload).then((r) => r.data),

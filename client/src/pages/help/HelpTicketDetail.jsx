@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
@@ -12,6 +12,8 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastHelpSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const STATUS_OPTIONS = [
   { value: 'open', label: 'Open' },
@@ -99,7 +101,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
   const [attachmentError, setAttachmentError] = useState('');
   const [uploadingFiles, setUploadingFiles] = useState(false);
 
-  async function loadTicket() {
+  const loadTicket = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -114,11 +116,15 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
   useEffect(() => {
-    loadTicket();
-  }, [id]);
+    void loadTicket();
+  }, [loadTicket]);
+
+  usePortalSync(() => {
+    void loadTicket();
+  }, { topics: [PORTAL_TOPICS.HELP] });
 
   useEffect(() => {
     if (!ticket) return undefined;
@@ -220,6 +226,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
       setCommentBody('');
       setSelectedFiles([]);
       setAttachmentError('');
+      broadcastHelpSync();
       await loadTicket();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -246,6 +253,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
           setError('');
           try {
             await helpApi.updateTicketStatus(id, { status: statusValue, priority: priorityValue });
+            broadcastHelpSync();
             showSuccess('Ticket updated.');
             await loadTicket();
           } catch (err) {
@@ -262,6 +270,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
     setError('');
     try {
       await helpApi.updateTicketStatus(id, { status: statusValue, priority: priorityValue });
+      broadcastHelpSync();
       showSuccess('Ticket updated.');
       await loadTicket();
     } catch (err) {

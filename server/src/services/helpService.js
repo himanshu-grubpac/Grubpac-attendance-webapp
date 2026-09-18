@@ -278,11 +278,20 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
   const previousStatus = ticket.status;
   const previousPriority = ticket.priority;
 
-  if (payload.status !== undefined) {
+  if (payload.status !== undefined && payload.status !== previousStatus) {
+    if (
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_X1) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_U)
+    ) {
+      throwError('You do not have permission to change ticket status.', 403);
+    }
     ticket.status = payload.status;
   }
 
-  if (payload.priority !== undefined) {
+  if (payload.priority !== undefined && payload.priority !== previousPriority) {
+    if (!hasPermission(permissions, PERMISSIONS.HELP_TICKET_X0)) {
+      throwError('You do not have permission to change ticket priority.', 403);
+    }
     ticket.priority = payload.priority;
   }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
+import { broadcastLeavePayrollSync } from '../../utils/portalSync.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -378,6 +379,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
 
       showSuccess(`Saved ${result.summary.success} leave adjustment(s).`);
       for (const item of adjustments) {
+        broadcastLeavePayrollSync({ userId: item.userId });
         const key = adjustmentKey(item.userId, item.leaveTypeId);
         originalRef.current.set(key, item.carried);
         editedRef.current.delete(key);
@@ -473,6 +475,9 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
           `Saved ${result.summary.success} of ${result.summary.total} changes. Review errors and retry remaining rows.`,
         );
       } else {
+        for (const item of adjustments) {
+          broadcastLeavePayrollSync({ userId: item.userId });
+        }
         showSuccess(`Saved ${result.summary.success} leave adjustment(s).`);
         setError('');
       }

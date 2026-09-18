@@ -2,6 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatISTDate, formatISTDateTime, getISTDateInputValue } from '../../utils/datetime.js';
 import { compOffApi, getErrorMessage } from '../../services/api.js';
+import { broadcastLeaveItemSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -295,6 +297,13 @@ export default function AdminCompOffRequests() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  usePortalSync(
+    () => {
+      loadRequests({ nextPage: pageRef.current, quiet: true });
+    },
+    { topics: [PORTAL_TOPICS.LEAVE] },
+  );
+
   useEffect(() => {
     setExpandedIds({});
   }, [page, queueStatus, employeeFilter, yearFilter, monthPartFilter]);
@@ -428,6 +437,7 @@ export default function AdminCompOffRequests() {
             try {
               await compOffApi.undo(id);
               showSuccess('Comp off decision undone.');
+              broadcastLeaveItemSync(item);
               await loadRequests({ nextPage: pageRef.current });
               setDecisionModal({ open: true, item, comment: note });
             } catch (err) {
@@ -440,6 +450,7 @@ export default function AdminCompOffRequests() {
       } else {
         showSuccess(`Comp off request ${decision === 'reject' ? 'declined' : 'approved'}.`);
       }
+      broadcastLeaveItemSync(item);
       await loadRequests({ nextPage: pageRef.current });
     } catch (err) {
       showError(getErrorMessage(err));
@@ -473,6 +484,7 @@ export default function AdminCompOffRequests() {
             try {
               await compOffApi.undo(item.id);
               showSuccess('Cancellation undone. Comp off restored to approved.');
+              broadcastLeaveItemSync(item);
               await loadRequests({ nextPage: pageRef.current });
             } catch (err) {
               showError(getErrorMessage(err));
@@ -484,6 +496,7 @@ export default function AdminCompOffRequests() {
       } else {
         showSuccess('Approved comp off cancelled.');
       }
+      broadcastLeaveItemSync(item);
       await loadRequests({ nextPage: pageRef.current });
     } catch (err) {
       showError(getErrorMessage(err));
@@ -525,6 +538,7 @@ export default function AdminCompOffRequests() {
             try {
               await compOffApi.undoAssess(item.id);
               showSuccess('Comp off assessment undone.');
+              broadcastLeaveItemSync(item);
               await loadRequests({ nextPage: pageRef.current });
             } catch (err) {
               showError(getErrorMessage(err));
@@ -536,6 +550,7 @@ export default function AdminCompOffRequests() {
       } else {
         showSuccess('Comp off assessment recorded.');
       }
+      broadcastLeaveItemSync(item);
       await loadRequests({ nextPage: pageRef.current });
     } catch (err) {
       showError(getErrorMessage(err));

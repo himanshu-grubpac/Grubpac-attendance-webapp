@@ -6,6 +6,7 @@ import { getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import { broadcastLeavePayrollSync } from '../../utils/portalSync.js';
 import { showFormError, buildDocCertificateError } from '../../utils/formErrors.js';
 import {
   buildApplyLeaveNotice,
@@ -327,6 +328,10 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       const req = response?.request ?? {};
 
       if (isEditing) {
+        broadcastLeavePayrollSync({
+          userId: req.userId,
+          startDate: validation.data.startDate ?? req.startDate,
+        });
         showSuccess(isWfhMode ? 'WFH request updated.' : 'Leave request updated.');
         navigate('/employee/leave/requests');
         return;
@@ -352,6 +357,10 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       } else {
         showSuccess(isWfhMode ? 'WFH request submitted.' : 'Leave request submitted.');
       }
+      broadcastLeavePayrollSync({
+        userId: req.userId,
+        startDate: validation.data.startDate ?? req.startDate,
+      });
       const year = new Date().getFullYear();
       leaveApi
         .getMyBalances({ year })
@@ -379,6 +388,9 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       await leaveApi.withdrawSubmitted(id);
       if (snapshot) {
         setForm(snapshot);
+        broadcastLeavePayrollSync({ startDate: snapshot.startDate });
+      } else {
+        broadcastLeavePayrollSync({});
       }
       showToast('Request reverted. Edit and submit again when ready.', { variant: 'info' });
     } catch (err) {

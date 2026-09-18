@@ -16,6 +16,8 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { dayKeyInMonth, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -133,31 +135,66 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     loadHistory(selectedId, year);
   }, [selectedId, year, loadHistory]);
 
+  const fetchDetailPayload = useCallback(async (userId, periodKey) => {
+    const isSelf = userId === user?.id;
+    const [summaryData, balanceData] = await Promise.all([
+      salaryApi.getSummary({ month: periodKey, userId }),
+      isSelf
+        ? leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
+        : leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) }),
+    ]);
+    return {
+      summary: summaryData.summary ?? null,
+      balances: balanceData.balances ?? [],
+      inactive: summaryData.inactive === true,
+    };
+  }, [user?.id]);
+
   const loadDetail = useCallback(async (userId, periodKey) => {
     setDetailOpen(true);
     setDetailMonth(periodKey);
     setDetailLoading(true);
     setDetailError('');
     try {
-      const isSelf = userId === user?.id;
-      const [summaryData, balanceData] = await Promise.all([
-        salaryApi.getSummary({ month: periodKey, userId }),
-        isSelf
-          ? leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
-          : leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) }),
-      ]);
-      setDetail({
-        summary: summaryData.summary ?? null,
-        balances: balanceData.balances ?? [],
-        inactive: summaryData.inactive === true,
-      });
+      setDetail(await fetchDetailPayload(userId, periodKey));
     } catch (err) {
       setDetail(null);
       setDetailError(getErrorMessage(err));
     } finally {
       setDetailLoading(false);
     }
-  }, [user?.id]);
+  }, [fetchDetailPayload]);
+
+  const refetchOpenDetail = useCallback(async () => {
+    if (!detailOpen || !selectedId || !detailMonth) return;
+    setDetailLoading(true);
+    setDetailError('');
+    try {
+      setDetail(await fetchDetailPayload(selectedId, detailMonth));
+    } catch (err) {
+      setDetail(null);
+      setDetailError(getErrorMessage(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [detailMonth, detailOpen, fetchDetailPayload, selectedId]);
+
+  const handleAttendanceSalarySync = useCallback(
+    (detail) => {
+      if (!selectedId) return;
+      if (detail?.dayKey && !detail.dayKey.startsWith(`${year}-`)) return;
+      loadHistory(selectedId, year);
+      if (detailOpen && detailMonth && dayKeyInMonth(detail.dayKey, detailMonth)) {
+        refetchOpenDetail();
+      }
+    },
+    [detailMonth, detailOpen, loadHistory, refetchOpenDetail, selectedId, year],
+  );
+
+  usePortalSync(handleAttendanceSalarySync, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    userId: selectedId ?? undefined,
+  });
 
   const employeeOptions = useMemo(
     () =>
@@ -374,6 +411,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const [auditDetailError, setAuditDetailError] = useState('');
   const [auditDetailOpen, setAuditDetailOpen] = useState(false);
   const [auditDetailMonth, setAuditDetailMonth] = useState(null);
+  const [auditDetailEmployeeId, setAuditDetailEmployeeId] = useState(null);
   const tableWrapRef = useRef(null);
 
   function closeAuditDetail() {
@@ -381,34 +419,52 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     setAuditDetail(null);
     setAuditDetailError('');
     setAuditDetailMonth(null);
+    setAuditDetailEmployeeId(null);
   }
+
+  const fetchAuditDetailPayload = useCallback(async (employeeId, periodKey) => {
+    const [summaryData, balanceData] = await Promise.all([
+      salaryApi.getSummary({ month: periodKey, userId: employeeId }),
+      leaveApi
+        .getBalances({ userId: employeeId, year: Number(String(periodKey).split('-')[0]) })
+        .catch(() => leaveApi.getMyBalances({ year: Number(String(periodKey).split('-')[0]) })),
+    ]);
+    return {
+      summary: summaryData.summary ?? null,
+      balances: balanceData.balances ?? [],
+      inactive: summaryData.inactive === true,
+    };
+  }, []);
 
   const openAuditDetail = useCallback(async (row) => {
     setAuditDetailOpen(true);
     setAuditDetailMonth(row.periodKey);
+    setAuditDetailEmployeeId(row.employeeId);
     setAuditDetailLoading(true);
     setAuditDetailError('');
     try {
-      const [summaryData, balanceData] = await Promise.all([
-        salaryApi.getSummary({ month: row.periodKey, userId: row.employeeId }),
-        leaveApi
-          .getBalances({ userId: row.employeeId, year: Number(String(row.periodKey).split('-')[0]) })
-          .catch(() =>
-            leaveApi.getMyBalances({ year: Number(String(row.periodKey).split('-')[0]) }),
-          ),
-      ]);
-      setAuditDetail({
-        summary: summaryData.summary ?? null,
-        balances: balanceData.balances ?? [],
-        inactive: summaryData.inactive === true,
-      });
+      setAuditDetail(await fetchAuditDetailPayload(row.employeeId, row.periodKey));
     } catch (err) {
       setAuditDetail(null);
       setAuditDetailError(getErrorMessage(err));
     } finally {
       setAuditDetailLoading(false);
     }
-  }, []);
+  }, [fetchAuditDetailPayload]);
+
+  const refetchOpenAuditDetail = useCallback(async () => {
+    if (!auditDetailOpen || !auditDetailEmployeeId || !auditDetailMonth) return;
+    setAuditDetailLoading(true);
+    setAuditDetailError('');
+    try {
+      setAuditDetail(await fetchAuditDetailPayload(auditDetailEmployeeId, auditDetailMonth));
+    } catch (err) {
+      setAuditDetail(null);
+      setAuditDetailError(getErrorMessage(err));
+    } finally {
+      setAuditDetailLoading(false);
+    }
+  }, [auditDetailEmployeeId, auditDetailMonth, auditDetailOpen, fetchAuditDetailPayload]);
 
   // Close stale modal when the audit period changes.
 
@@ -451,6 +507,36 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   useEffect(() => {
     loadAudit(periodKey, departmentId);
   }, [periodKey, departmentId, loadAudit]);
+
+  const handleAttendanceSalarySync = useCallback(
+    (detail) => {
+      loadAudit(periodKey, departmentId);
+      if (
+        auditDetailOpen &&
+        auditDetailMonth &&
+        auditDetailEmployeeId &&
+        detail?.userId &&
+        String(detail.userId) === String(auditDetailEmployeeId) &&
+        dayKeyInMonth(detail.dayKey, auditDetailMonth)
+      ) {
+        refetchOpenAuditDetail();
+      }
+    },
+    [
+      auditDetailEmployeeId,
+      auditDetailMonth,
+      auditDetailOpen,
+      departmentId,
+      loadAudit,
+      periodKey,
+      refetchOpenAuditDetail,
+    ],
+  );
+
+  usePortalSync(handleAttendanceSalarySync, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    month: periodKey,
+  });
 
   async function handleDownload() {
     setExporting(true);

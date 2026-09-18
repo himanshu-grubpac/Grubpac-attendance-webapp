@@ -7,18 +7,23 @@ import {
   useState,
 } from 'react';
 import {
-  ADMIN_PORTAL_PERMISSIONS,
   PERMISSIONS,
+  hasAdminPortalAccess as userHasAdminPortalAccess,
   hasAnyPermission as userHasAnyPermission,
+  hasEmployeePortalAccess as userHasEmployeePortalAccess,
   hasPermission as userHasPermission,
 } from '@shared/permissions.js';
 import { authApi, startSessionKeepalive } from '../services/api.js';
+import { usePortalSync } from '../hooks/usePortalSync.js';
 import { coldStartPing, restoreSession } from '../utils/coldStartPing.js';
 import { resolveLoginPortal } from '../config/nav.js';
+import { PORTAL_TOPICS } from '../utils/portalSync.js';
 
 const AuthContext = createContext(null);
 
 const LOGIN_PORTAL_KEY = 'attendance.loginPortal';
+/** Poll / focus-check interval for cross-user permission refresh after role edits. */
+const PERMISSIONS_SYNC_MS = 30 * 1000;
 
 function readStoredLoginPortal() {
   try {
@@ -123,12 +128,60 @@ export function AuthProvider({ children }) {
     return result.user;
   }, []);
 
+  // Same-tab / cross-tab refresh when an admin saves role permissions.
+  const syncPermissionsFromServer = useCallback(async () => {
+    try {
+      const { permissionsVersion } = await authApi.permissionsVersion();
+      if (permissionsVersion !== user?.permissionsVersion) {
+        await refreshUser();
+      }
+    } catch {
+      // Network blip or expired session — 30s poll / focus retry.
+    }
+  }, [refreshUser, user?.permissionsVersion]);
+
+  usePortalSync(syncPermissionsFromServer, {
+    topics: [PORTAL_TOPICS.PERMISSIONS],
+    enabled: Boolean(user),
+  });
+
   // Sliding session renewal: while signed in, keep the 2h auth cookies alive
   // so long-lived pages (e.g. Pending Requests triage) never 401 mid-action.
   useEffect(() => {
     if (!user) return undefined;
     return startSessionKeepalive();
   }, [user]);
+
+  // When an admin edits role permissions, other sessions with that role keep
+  // stale nav until re-login. Poll a lightweight version stamp and refresh.
+  useEffect(() => {
+    if (!user) return undefined;
+
+    let syncing = false;
+    const checkPermissionsVersion = async () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        await syncPermissionsFromServer();
+      } finally {
+        syncing = false;
+      }
+    };
+
+    const onVisible = () => {
+      void checkPermissionsVersion();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    const interval = setInterval(checkPermissionsVersion, PERMISSIONS_SYNC_MS);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+      clearInterval(interval);
+    };
+  }, [user?.id, syncPermissionsFromServer]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,11 +238,9 @@ export function AuthProvider({ children }) {
       switchPortal,
       permissions: user?.permissions ?? [],
       isAdmin: loginPortal === 'admin',
-      hasAdminPortalAccess: userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS),
-      hasEmployeePortalAccess: userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
-      canSwitchPortal:
-        userHasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS) &&
-        userHasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
+      hasAdminPortalAccess: userHasAdminPortalAccess(user?.permissions),
+      hasEmployeePortalAccess: userHasEmployeePortalAccess(user?.permissions),
+      canSwitchPortal: userHasPermission(user?.permissions, PERMISSIONS.PORTAL_SWITCH),
       hasPermission: (permission) => userHasPermission(user?.permissions, permission),
       hasAnyPermission: (permissions) => userHasAnyPermission(user?.permissions, permissions),
     }),

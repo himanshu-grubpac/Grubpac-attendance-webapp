@@ -6,6 +6,8 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { mergeAppendUnique } from '../../utils/listMerge.js';
 import ColumnEditorPanel from '../../components/ColumnEditorPanel.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const TODAY_PRESENT_TABLE_KEY = 'attendanceToday';
 const TODAY_PRESENT_PAGE_SIZE = 25;
@@ -116,6 +118,13 @@ export default function AdminTodayPresent() {
   useEffect(() => {
     load({ search: '', nextPage: 1 });
   }, [load]);
+
+  usePortalSync(
+    () => {
+      load({ search: debouncedSearch, nextPage: 1 });
+    },
+    { topics: [PORTAL_TOPICS.ATTENDANCE, PORTAL_TOPICS.LEAVE] },
+  );
 
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {

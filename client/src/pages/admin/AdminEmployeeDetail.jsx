@@ -5,6 +5,7 @@ import { adminResetPasswordSchema, adminResetPinSchema } from '@shared/validatio
 import { buildEmployeeProfileUpdateSchema } from '@shared/validation/employee.js';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { adminApi, getErrorMessage, getFieldErrors, salaryApi } from '../../services/api.js';
+import { broadcastEmployeeSync, broadcastSalaryPayrollSync } from '../../utils/portalSync.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
@@ -718,9 +719,14 @@ export default function AdminEmployeeDetail() {
         }
         if (Object.keys(salaryPayload).length > 0) {
           await salaryApi.updateUserSalary(employee.id, salaryPayload);
+          broadcastSalaryPayrollSync({
+            userId: employee.id,
+            salaryEffectiveFrom: salaryPayload.salaryEffectiveFrom,
+          });
         }
       }
 
+      broadcastEmployeeSync({ userId: employee.id });
       showSuccess('Employment details updated.');
       await loadEmployee();
       closeOrgEdit();

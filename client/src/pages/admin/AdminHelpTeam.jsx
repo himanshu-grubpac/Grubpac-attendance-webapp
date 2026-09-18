@@ -8,6 +8,8 @@ import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastHelpSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const PRIORITY_OPTIONS = [
   { value: 'low', label: 'Low' },
@@ -24,7 +26,7 @@ export default function AdminHelpTeam() {
   const [updatingPriorityId, setUpdatingPriorityId] = useState('');
   const { showSuccess, showError } = useToast();
 
-  async function loadTickets(nextPage = page) {
+  const loadTickets = useCallback(async (nextPage = page) => {
     setLoading(true);
     setError('');
     try {
@@ -36,11 +38,15 @@ export default function AdminHelpTeam() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [page]);
 
   useEffect(() => {
     loadTickets(page);
-  }, [page]);
+  }, [loadTickets, page]);
+
+  usePortalSync(() => {
+    void loadTickets(page);
+  }, { topics: [PORTAL_TOPICS.HELP] });
 
   const handlePriorityChange = useCallback(async (ticketId, newPriority) => {
     setUpdatingPriorityId(ticketId);
@@ -49,6 +55,7 @@ export default function AdminHelpTeam() {
       setTickets((prev) =>
         prev.map((t) => (t.id === ticketId ? { ...t, priority: newPriority } : t)),
       );
+      broadcastHelpSync();
       showSuccess('Priority updated.');
     } catch (err) {
       showError(getErrorMessage(err));

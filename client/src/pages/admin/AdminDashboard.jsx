@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const KPI_CARDS = [
   {
@@ -86,7 +88,7 @@ export default function AdminDashboard() {
   }).map((card) => (card.key === 'openTickets' ? { ...card, to: openTicketsTo } : card));
 
 
-  useEffect(() => {
+  const loadDashboard = useCallback(() => {
     setLoading(true);
     setReportsError('');
     Promise.allSettled([adminApi.getReportsSummary(), leaveApi.getApprovalsPendingCounts()])
@@ -107,6 +109,19 @@ export default function AdminDashboard() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  usePortalSync(loadDashboard, {
+    topics: [
+      PORTAL_TOPICS.ATTENDANCE,
+      PORTAL_TOPICS.LEAVE,
+      PORTAL_TOPICS.EMPLOYEE,
+      PORTAL_TOPICS.HELP,
+    ],
+  });
 
 
 

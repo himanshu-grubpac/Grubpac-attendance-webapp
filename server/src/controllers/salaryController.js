@@ -113,7 +113,8 @@ export async function getSalarySummaryHandler(req, res) {
 
 export async function listSalarySummariesHandler(req, res) {
   const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const meta = await buildSalaryMonthMeta(month, summaries);
   res.json({ month, summaries, meta });
 }
@@ -146,13 +147,18 @@ export async function updateSalarySettingsHandler(req, res) {
 
 export async function listSalaryStructureHandler(req, res) {
   const parsed = salaryStructureQuerySchema.parse(req.query);
-  const result = await listSalaryStructure(parsed);
+  const result = await listSalaryStructure({
+    ...parsed,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   res.json(result);
 }
 
 export async function exportSalaryHandler(req, res) {
   const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const buffer = buildSalaryExportWorkbook(summaries, month);
 
   res.setHeader(
@@ -191,13 +197,23 @@ export async function getUserSalaryHandler(req, res) {
 
 export async function listSalaryTransfersHandler(req, res) {
   const parsed = salaryTransferListQuerySchema.parse(req.query);
-  const result = await listSalaryTransfers(parsed);
+  const result = await listSalaryTransfers({
+    ...parsed,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   res.json(result);
 }
 
 export async function generateSalaryTransfersHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
-  const result = await generatePendingSalaryTransfers(parsed.month, req.user._id);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const result = await generatePendingSalaryTransfers(
+    parsed.month,
+    req.user._id,
+    null,
+    scopeContext,
+  );
 
   auditRequest(req, 'salary_transfers_generated', {
     adminId: req.user._id.toString(),
@@ -210,6 +226,8 @@ export async function generateSalaryTransfersHandler(req, res) {
     month: parsed.month,
     page: 1,
     limit: 20,
+    actor: req.user,
+    permissions: req.userPermissions,
   });
 
   res.status(result.created > 0 ? 201 : 200).json({
@@ -223,6 +241,21 @@ export async function generateSalaryTransfersHandler(req, res) {
 
 export async function updateSalaryTransferHandler(req, res) {
   const parsed = updateSalaryTransferStatusSchema.parse(req.body);
+  const status = parsed.status;
+  if (status === 'paid' && !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_X1)) {
+    return res.status(403).json({ message: 'You do not have permission to mark transfers as paid.' });
+  }
+  if (status === 'failed' && !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_X2)) {
+    return res.status(403).json({ message: 'You do not have permission to mark transfers as failed.' });
+  }
+  if (
+    status !== 'paid' &&
+    status !== 'failed' &&
+    !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_U)
+  ) {
+    return res.status(403).json({ message: 'You do not have permission to update salary transfers.' });
+  }
+
   const transfer = await updateSalaryTransferStatus(req.params.id, parsed, req.user._id);
 
   auditRequest(req, 'salary_transfer_updated', {
@@ -237,6 +270,9 @@ export async function updateSalaryTransferHandler(req, res) {
 }
 
 export async function settleMonthHandler(req, res) {
+  if (!hasPermission(req.userPermissions, PERMISSIONS.SALARY_SETTLEMENT_X0)) {
+    return res.status(403).json({ message: 'Month-end settlement is restricted to authorized admins.' });
+  }
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await settleMonthPayroll(parsed.month, req.user._id);
   auditRequest(req, 'month_settled', {
@@ -313,7 +349,12 @@ export async function exportSalaryAuditHandler(req, res) {
 export async function listLopSummariesHandler(req, res) {
   const parsed = lopListQuerySchema.parse(req.query);
   const month = clampMonthInputToCurrentIst(parsed.month);
-  const result = await listLopSummaries({ ...parsed, month });
+  const result = await listLopSummaries({
+    ...parsed,
+    month,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   res.json(result);
 }
 
@@ -331,7 +372,7 @@ export async function exportLopSingleHandler(req, res) {
   const month = clampMonthInputToCurrentIst(rawMonth);
 
   const subject = await loadSalarySubject(userId);
-  if (!canViewSalarySummary(req.user, subject, req.userPermissions)) {
+  if (!(await canViewSalarySummary(req.user, subject, req.userPermissions))) {
     return res.status(403).json({ message: 'You do not have permission to export this LOP log.' });
   }
 
@@ -366,7 +407,10 @@ export async function exportLopSingleHandler(req, res) {
 export async function exportLopBulkHandler(req, res) {
   const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
   const month = clampMonthInputToCurrentIst(rawMonth);
-  const summaries = await listAllLopSummariesForMonth(month, asOf);
+  const summaries = await listAllLopSummariesForMonth(month, asOf, {
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   const resolved = resolveSalaryAsOfDate(month, asOf);
   const asOfLabel = resolved?.asOfDateKey ?? summaries[0]?.asOfDate ?? month;
   const overviewRows = buildLopOverviewExportRows(summaries);

@@ -51,6 +51,7 @@ import {
   updateHolidayCategory,
   updateRecurringHolidayRules,
   updateLeavePolicy,
+  deleteLeavePolicy,
   updateLeaveType,
 } from '../controllers/leaveController.js';
 import leaveCarryBulkRoutes from './leaveCarryBulkRoutes.js';
@@ -76,20 +77,24 @@ router.get('/comp-off/decision-login', leaveDecisionLimiter, asyncHandler(compOf
 
 router.use(authenticate);
 
-router.get('/types', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(listLeaveTypes));
+router.get(
+  '/types',
+  requirePermission(PERMISSIONS.LEAVE_TYPE_R, PERMISSIONS.LEAVE_READ),
+  asyncHandler(listLeaveTypes),
+);
 router.post(
   '/types',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_TYPE_C),
   asyncHandler(createLeaveType),
 );
 router.patch(
   '/types/:id',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_TYPE_U, PERMISSIONS.LEAVE_TYPE_X0),
   asyncHandler(updateLeaveType),
 );
 router.delete(
   '/types/:id',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_TYPE_D),
   asyncHandler(deleteLeaveType),
 );
 
@@ -100,13 +105,18 @@ router.get(
 );
 router.post(
   '/policies',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_POLICY_C),
   asyncHandler(createLeavePolicy),
 );
 router.patch(
   '/policies/:id',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_POLICY_U),
   asyncHandler(updateLeavePolicy),
+);
+router.delete(
+  '/policies/:id',
+  requirePermission(PERMISSIONS.LEAVE_POLICY_D),
+  asyncHandler(deleteLeavePolicy),
 );
 router.get(
   '/policies/:id/history',
@@ -114,181 +124,198 @@ router.get(
   asyncHandler(getLeavePolicyHistory),
 );
 
-router.get('/balances/me', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(getMyLeaveBalances));
-router.post('/balances/init', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(initUserBalancesHandler));
+router.get('/balances/me', requirePermission(PERMISSIONS.EMP_BALANCE_R), asyncHandler(getMyLeaveBalances));
+router.post('/balances/init', requirePermission(PERMISSIONS.EMP_BALANCE_R), asyncHandler(initUserBalancesHandler));
 router.get(
   '/balances',
   requirePermission(
-    PERMISSIONS.LEAVE_READ_ALL,
-    PERMISSIONS.LEAVE_ADJUST_BALANCES,
-    PERMISSIONS.LEAVE_READ_TEAM,
-    PERMISSIONS.LEAVE_APPROVE,
+    PERMISSIONS.LEAVE_ADJUSTMENT_R,
+    PERMISSIONS.LEAVE_REQUEST_R,
+    PERMISSIONS.EMP_BALANCE_R,
   ),
   asyncHandler(getLeaveBalances),
 );
 router.patch(
   '/balances/:userId',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(adjustLeaveBalances),
 );
 router.post(
   '/balances/:userId/encash',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(encashLeaveBalanceHandler),
 );
 router.post(
   '/carry-forward',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_U, PERMISSIONS.LEAVE_POLICY_U),
   asyncHandler(carryForwardHandler),
 );
 router.get(
   '/carry-forward/preview',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_U, PERMISSIONS.LEAVE_POLICY_R),
   asyncHandler(previewCarryForwardHandler),
 );
 router.post(
   '/jobs/accrual',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(runLeaveAccrualJobHandler),
 );
 
 router.get(
   '/requests/preview',
-  requirePermission(PERMISSIONS.LEAVE_APPLY, PERMISSIONS.LEAVE_READ),
+  requirePermission(
+    PERMISSIONS.EMP_LEAVE_C,
+    PERMISSIONS.EMP_LEAVE_R,
+    PERMISSIONS.EMP_WFH_C,
+    PERMISSIONS.EMP_WFH_R,
+  ),
   asyncHandler(previewLeaveRequestDays),
 );
 router.get(
   '/requests',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(
+    PERMISSIONS.EMP_REQUESTS_R,
+    PERMISSIONS.LEAVE_REQUEST_R,
+    PERMISSIONS.EMP_WFH_R,
+  ),
   asyncHandler(listLeaveRequestsHandler),
 );
 router.post(
   '/requests',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_LEAVE_C, PERMISSIONS.EMP_WFH_C),
   idempotencyMiddleware,
   asyncHandler(createLeaveRequestHandler),
 );
 router.get(
   '/requests/pending-counts',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_R),
   asyncHandler(getApprovalsPendingCountsHandler),
 );
 router.get(
   '/requests/:id',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(
+    PERMISSIONS.EMP_REQUESTS_R,
+    PERMISSIONS.LEAVE_REQUEST_R,
+    PERMISSIONS.EMP_WFH_R,
+  ),
   asyncHandler(getLeaveRequestHandler),
 );
 router.put(
   '/requests/:id',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_LEAVE_U, PERMISSIONS.EMP_WFH_U),
   idempotencyMiddleware,
   asyncHandler(editLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/cancel',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(
+    PERMISSIONS.EMP_LEAVE_D,
+    PERMISSIONS.EMP_LEAVE_U,
+    PERMISSIONS.EMP_WFH_D,
+    PERMISSIONS.EMP_WFH_U,
+  ),
   asyncHandler(cancelLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/notify',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_LEAVE_C),
   asyncHandler(notifyLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/withdraw',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_REQUESTS_X0, PERMISSIONS.EMP_LEAVE_U),
   asyncHandler(undoSubmittedLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/approve',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_APPROVE),
   asyncHandler(approveLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/reject',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_REJECT),
   asyncHandler(rejectLeaveRequestHandler),
 );
 router.post(
   '/requests/:id/undo',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_APPROVE, PERMISSIONS.LEAVE_REQUEST_REJECT),
   asyncHandler(undoLeaveDecisionHandler),
 );
 router.post(
   '/requests/:id/cancel-approval',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_APPROVE),
   asyncHandler(cancelApprovedLeaveByApproverHandler),
 );
 router.post(
   '/requests/:id/undo-cancel',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.LEAVE_REQUEST_APPROVE, PERMISSIONS.EMP_LEAVE_U),
   asyncHandler(undoLeaveCancellationHandler),
 );
 
 router.get(
   '/team-calendar',
   requirePermission(
-    PERMISSIONS.LEAVE_READ_TEAM,
-    PERMISSIONS.LEAVE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
+    PERMISSIONS.LEAVE_HOLIDAY_R,
+    PERMISSIONS.LEAVE_REQUEST_R,
+    PERMISSIONS.ATTENDANCE_RECORD_R,
   ),
   asyncHandler(getTeamCalendarHandler),
 );
 
-router.get('/holidays', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(listHolidays));
-router.get('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_READ), asyncHandler(listHolidayCategories));
-router.post('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(createHolidayCategory));
-router.patch('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(updateHolidayCategory));
-router.delete('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES), asyncHandler(deleteHolidayCategory));
+router.get('/holidays', requirePermission(PERMISSIONS.LEAVE_HOLIDAY_R, PERMISSIONS.EMP_POLICY_SUMMARY_R), asyncHandler(listHolidays));
+router.get('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_CATEGORY_R), asyncHandler(listHolidayCategories));
+router.post('/holiday-categories', requirePermission(PERMISSIONS.LEAVE_CATEGORY_C), asyncHandler(createHolidayCategory));
+router.patch('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_CATEGORY_U), asyncHandler(updateHolidayCategory));
+router.delete('/holiday-categories/:id', requirePermission(PERMISSIONS.LEAVE_CATEGORY_D), asyncHandler(deleteHolidayCategory));
 router.post(
   '/holidays',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_HOLIDAY_C),
   asyncHandler(createHoliday),
 );
 router.patch(
   '/holidays/:id',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_HOLIDAY_U),
   asyncHandler(updateHoliday),
 );
 router.delete(
   '/holidays/:id',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_HOLIDAY_D),
   asyncHandler(deleteHoliday),
 );
 router.get(
   '/recurring-rules',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_RECURRING_R),
   asyncHandler(listRecurringHolidayRules),
 );
 router.put(
   '/recurring-rules',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_RECURRING_C, PERMISSIONS.LEAVE_RECURRING_U),
   asyncHandler(updateRecurringHolidayRules),
 );
 router.post(
   '/holidays/materialize-recurring',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_RECURRING_X0),
   asyncHandler(materializeRecurringHolidays),
 );
 router.post(
   '/holidays/delete-by-rule',
-  requirePermission(PERMISSIONS.LEAVE_MANAGE_POLICIES),
+  requirePermission(PERMISSIONS.LEAVE_RECURRING_D),
   asyncHandler(deleteRecurringRuleHolidays),
 );
 
 router.get(
   '/adjustments/grid',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_R),
   asyncHandler(getLeaveAdjustmentGridHandler),
 );
 router.get(
   '/adjustments/history/:userId',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_R),
   asyncHandler(getLeaveAdjustmentHistoryHandler),
 );
 router.post(
   '/adjustments/batch',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_X0, PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(batchAdjustLeaveCarriedHandler),
 );
 

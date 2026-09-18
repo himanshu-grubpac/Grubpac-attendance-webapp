@@ -36,13 +36,13 @@ router.get(
 
 router.get(
   '/carry-bulk/audit-report',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_X1, PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(downloadCarryAuditReport),
 );
 
 router.post(
   '/carry-bulk/upload',
-  requirePermission(PERMISSIONS.LEAVE_ADJUST_BALANCES),
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_X0, PERMISSIONS.LEAVE_ADJUSTMENT_U),
   singleFileUpload(upload),
   asyncHandler(uploadCarryBulk),
 );

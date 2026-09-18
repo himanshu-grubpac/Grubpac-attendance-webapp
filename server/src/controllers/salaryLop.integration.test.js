@@ -636,6 +636,20 @@ test('buildLopOverviewExportRows uses English month and summarized reasons', asy
   assert.doesNotMatch(overviewRow['Loss of pay reason'], /Absent; Half day/);
 });
 
+test('computeMonthlySalarySummary treats LV check-in as half day LOP', async () => {
+  await AttendanceRecord.deleteMany({ userId: employee._id });
+  await seedCheckIn(employee._id, '2026-06-02');
+  await seedCheckIn(employee._id, '2026-06-04', 'LV');
+
+  const summary = await computeMonthlySalarySummary(employee, MONTH, { asOfDate: '2026-06-30' });
+  const lvRow = summary.lopDeductionRows.find((row) => row.date === '2026-06-04');
+
+  assert.ok(lvRow);
+  assert.equal(lvRow.reason, 'Half day');
+  assert.equal(lvRow.days, 0.5);
+  assert.equal(lvRow.category, 'half_day');
+});
+
 test('buildLopDetailedExportRows emits one row per deduction with reason', async () => {
   await AttendanceRecord.deleteMany({ userId: employee._id });
   await seedCheckIn(employee._id, '2026-06-02');

@@ -1,7 +1,9 @@
 import {
-  ADMIN_PORTAL_PERMISSIONS,
   PERMISSIONS,
+  canSwitchPortal,
+  hasAdminPortalAccess,
   hasAnyPermission,
+  hasEmployeePortalAccess,
   hasPermission,
 } from '@shared/permissions.js';
 
@@ -10,19 +12,13 @@ function hasAllPermissions(userPermissions, permissions = []) {
 }
 
 export function resolveLoginPortal(loginPortal, user) {
-  if (
-    loginPortal === 'admin'
-    && hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)
-  ) {
+  if (loginPortal === 'admin' && hasAdminPortalAccess(user?.permissions)) {
     return loginPortal;
   }
-  if (
-    loginPortal === 'employee'
-    && hasPermission(user?.permissions, PERMISSIONS.ATTENDANCE_READ_OWN)
-  ) {
+  if (loginPortal === 'employee' && hasEmployeePortalAccess(user?.permissions)) {
     return loginPortal;
   }
-  if (hasAnyPermission(user?.permissions, ADMIN_PORTAL_PERMISSIONS)) {
+  if (hasAdminPortalAccess(user?.permissions)) {
     return 'admin';
   }
   return 'employee';
@@ -33,20 +29,14 @@ export function getDefaultRoute(user, loginPortal) {
   return portal === 'admin' ? '/admin/dashboard' : '/employee/dashboard';
 }
 
-/**
- * Sidebar / drawer nav items.
- * Admin portal: Mohit Sir IA only (Account lives in sidebar footer, not here).
- * Employee portal: self-service items only (Account lives in sidebar footer).
- */
 export const NAV_ITEMS = [
-  // ── Admin portal (Overview → Employees → Leaves → Operations) ──
   {
     to: '/admin/dashboard',
     label: 'Dashboard',
     icon: '⊞',
     section: 'Overview',
     portal: 'admin',
-    permission: PERMISSIONS.USERS_READ,
+    permission: PERMISSIONS.DASHBOARD_ADMIN,
   },
   {
     to: '/admin/users',
@@ -54,7 +44,7 @@ export const NAV_ITEMS = [
     icon: '☰',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.USERS_READ,
+    anyPermission: [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_STATS_R],
   },
   {
     to: '/admin/users/register',
@@ -62,7 +52,7 @@ export const NAV_ITEMS = [
     icon: '＋',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.USERS_WRITE,
+    permission: PERMISSIONS.EMPLOYEES_REGISTER_C,
   },
   {
     to: '/admin/users/bulk-upload',
@@ -70,7 +60,7 @@ export const NAV_ITEMS = [
     icon: '⇪',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.USERS_WRITE,
+    permission: PERMISSIONS.EMPLOYEES_BULK_UPLOAD_C,
   },
   {
     to: '/admin/salary',
@@ -78,7 +68,7 @@ export const NAV_ITEMS = [
     icon: '₹',
     section: 'Employees',
     portal: 'admin',
-    allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
+    allPermissions: [PERMISSIONS.SALARY_PAYROLL_R, PERMISSIONS.EMPLOYEES_RECORD_R],
   },
   {
     to: '/admin/salary/lop',
@@ -86,7 +76,7 @@ export const NAV_ITEMS = [
     icon: '₹',
     section: 'Employees',
     portal: 'admin',
-    allPermissions: [PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ],
+    allPermissions: [PERMISSIONS.SALARY_PAYROLL_R, PERMISSIONS.EMPLOYEES_RECORD_R],
   },
   {
     to: '/admin/salary/team',
@@ -94,7 +84,7 @@ export const NAV_ITEMS = [
     icon: '₹',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.SALARY_READ_TEAM,
+    permission: PERMISSIONS.SALARY_TEAM_AUDIT_R,
   },
   {
     to: '/admin/attendance',
@@ -102,7 +92,7 @@ export const NAV_ITEMS = [
     icon: '◷',
     section: 'Employees',
     portal: 'admin',
-    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+    permission: PERMISSIONS.ATTENDANCE_RECORD_R,
   },
   {
     to: '/admin/attendance/today-present',
@@ -110,7 +100,7 @@ export const NAV_ITEMS = [
     icon: '●',
     section: 'Employees',
     portal: 'admin',
-    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+    permission: PERMISSIONS.ATTENDANCE_TODAY_R,
   },
   {
     to: '/admin/audit-logs',
@@ -118,7 +108,7 @@ export const NAV_ITEMS = [
     icon: '⎈',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.AUDIT_READ,
+    permission: PERMISSIONS.AUDIT_LOG_R,
   },
   {
     to: '/admin/help/tickets',
@@ -126,7 +116,7 @@ export const NAV_ITEMS = [
     icon: '?',
     section: 'Employees',
     portal: 'admin',
-    allPermissions: [PERMISSIONS.HELP_MANAGE, PERMISSIONS.USERS_WRITE],
+    allPermissions: [PERMISSIONS.HELP_TICKET_R, PERMISSIONS.EMPLOYEES_RECORD_R],
   },
   {
     to: '/admin/help/team',
@@ -134,8 +124,8 @@ export const NAV_ITEMS = [
     icon: '?',
     section: 'Employees',
     portal: 'admin',
-    permission: PERMISSIONS.HELP_MANAGE,
-    excludeIfAllPermissions: [PERMISSIONS.USERS_WRITE],
+    permission: PERMISSIONS.HELP_TICKET_R,
+    excludeIfAllPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
   },
   {
     to: '/admin/leave/policies',
@@ -143,7 +133,7 @@ export const NAV_ITEMS = [
     icon: '⚙',
     section: 'Leaves',
     portal: 'admin',
-    permission: PERMISSIONS.LEAVE_MANAGE_POLICIES,
+    permission: PERMISSIONS.LEAVE_POLICY_R,
   },
   {
     to: '/admin/leave/approvals',
@@ -161,7 +151,7 @@ export const NAV_ITEMS = [
     icon: '⚡',
     section: 'Leaves',
     portal: 'admin',
-    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+    permission: PERMISSIONS.ATTENDANCE_LATE_WARNING_R,
   },
   {
     to: '/admin/leave/team-calendar',
@@ -169,7 +159,7 @@ export const NAV_ITEMS = [
     icon: '▣',
     section: 'Leaves',
     portal: 'admin',
-    permission: PERMISSIONS.LEAVE_MANAGE_POLICIES,
+    permission: PERMISSIONS.LEAVE_HOLIDAY_R,
   },
   {
     to: '/admin/office-settings',
@@ -177,7 +167,7 @@ export const NAV_ITEMS = [
     icon: '⌖',
     section: 'Operations',
     portal: 'admin',
-    permission: PERMISSIONS.OFFICE_MANAGE,
+    permission: PERMISSIONS.OPS_GEOFENCE_R,
   },
   {
     to: '/admin/faq-demo',
@@ -185,7 +175,7 @@ export const NAV_ITEMS = [
     icon: '❓',
     section: 'Operations',
     portal: 'admin',
-    anyPermission: [PERMISSIONS.DEMO_FAQ_MANAGE, PERMISSIONS.DEMO_FAQ_READ],
+    anyPermission: [PERMISSIONS.OPS_FAQ_R, PERMISSIONS.OPS_GUIDE_R],
   },
   {
     to: '/admin/departments',
@@ -193,7 +183,7 @@ export const NAV_ITEMS = [
     icon: '▦',
     section: 'Operations',
     portal: 'admin',
-    permission: PERMISSIONS.DEPARTMENTS_MANAGE,
+    permission: PERMISSIONS.OPS_DEPARTMENT_R,
   },
   {
     to: '/admin/roles',
@@ -201,17 +191,16 @@ export const NAV_ITEMS = [
     icon: '⚙',
     section: 'Operations',
     portal: 'admin',
-    permission: PERMISSIONS.ROLES_MANAGE,
+    permission: PERMISSIONS.RBAC_ROLE_R,
   },
 
-  // ── Employee portal ──
   {
     to: '/employee/dashboard',
     label: 'Dashboard',
     icon: '⌂',
     section: 'Overview',
     portal: 'employee',
-    permission: PERMISSIONS.ATTENDANCE_READ_OWN,
+    permission: PERMISSIONS.EMP_DASHBOARD_R,
   },
   {
     to: '/employee/leave/apply-wfh',
@@ -219,7 +208,7 @@ export const NAV_ITEMS = [
     icon: '＋',
     section: 'Leave',
     portal: 'employee',
-    permission: PERMISSIONS.LEAVE_APPLY,
+    permission: PERMISSIONS.EMP_WFH_C,
   },
   {
     to: '/employee/leave/apply',
@@ -227,7 +216,7 @@ export const NAV_ITEMS = [
     icon: '＋',
     section: 'Leave',
     portal: 'employee',
-    permission: PERMISSIONS.LEAVE_APPLY,
+    permission: PERMISSIONS.EMP_LEAVE_C,
   },
   {
     to: '/employee/leave/comp-off',
@@ -235,7 +224,7 @@ export const NAV_ITEMS = [
     icon: '◈',
     section: 'Leave',
     portal: 'employee',
-    permission: PERMISSIONS.LEAVE_READ,
+    permission: PERMISSIONS.EMP_COMPOFF_C,
   },
   {
     to: '/employee/leave/balances',
@@ -243,7 +232,7 @@ export const NAV_ITEMS = [
     icon: '▤',
     section: 'Leave',
     portal: 'employee',
-    permission: PERMISSIONS.LEAVE_READ,
+    permission: PERMISSIONS.EMP_BALANCE_R,
   },
   {
     to: '/employee/leave/requests',
@@ -251,7 +240,7 @@ export const NAV_ITEMS = [
     icon: '☰',
     section: 'Leave',
     portal: 'employee',
-    permission: PERMISSIONS.LEAVE_READ,
+    permission: PERMISSIONS.EMP_REQUESTS_R,
   },
   {
     to: '/employee/history',
@@ -259,7 +248,7 @@ export const NAV_ITEMS = [
     icon: '◷',
     section: 'Attendance',
     portal: 'employee',
-    permission: PERMISSIONS.ATTENDANCE_READ_OWN,
+    permission: PERMISSIONS.EMP_ATTENDANCE_R,
   },
   {
     to: '/employee/pay-estimate',
@@ -267,7 +256,7 @@ export const NAV_ITEMS = [
     icon: '₹',
     section: 'Payroll',
     portal: 'employee',
-    permission: PERMISSIONS.SALARY_READ,
+    permission: PERMISSIONS.EMP_PAY_R,
   },
   {
     to: '/employee/faq-demo',
@@ -275,7 +264,7 @@ export const NAV_ITEMS = [
     icon: '❓',
     section: 'Support',
     portal: 'employee',
-    permission: PERMISSIONS.DEMO_FAQ_READ,
+    permission: PERMISSIONS.EMP_FAQ_R,
   },
   {
     to: '/employee/help',
@@ -283,11 +272,12 @@ export const NAV_ITEMS = [
     icon: '?',
     section: 'Support',
     portal: 'employee',
-    permission: PERMISSIONS.HELP_WRITE,
+    permission: PERMISSIONS.EMP_TICKET_C,
   },
 ];
 
 const ADMIN_USERS_LIST_PATH = '/admin/users';
+const ADMIN_ROLES_LIST_PATH = '/admin/roles';
 
 export function resolveNavItemActive(to, { isActive, location }) {
   if (to === ADMIN_USERS_LIST_PATH) {
@@ -301,8 +291,12 @@ export function resolveNavItemActive(to, { isActive, location }) {
     return childSegment !== 'register' && childSegment !== 'bulk-upload';
   }
 
-  // Unified Requests area: the comp-off queue lives under the Pending
-  // Requests entry, so it stays highlighted there too.
+  if (to === ADMIN_ROLES_LIST_PATH) {
+    const { pathname } = location;
+    if (pathname === ADMIN_ROLES_LIST_PATH) return true;
+    return pathname.startsWith(`${ADMIN_ROLES_LIST_PATH}/`);
+  }
+
   if (to === '/admin/leave/approvals') {
     const { pathname } = location;
     if (pathname === to || pathname.startsWith('/admin/leave/comp-off')) return true;
@@ -361,8 +355,8 @@ const EMPLOYEE_BOTTOM_NAV = [
     label: 'Leave',
     icon: '▤',
     matchPrefixes: ['/employee/leave'],
-    permission: PERMISSIONS.LEAVE_APPLY,
-    fallbackPermission: PERMISSIONS.LEAVE_READ,
+    permission: PERMISSIONS.EMP_LEAVE_C,
+    fallbackPermission: PERMISSIONS.EMP_BALANCE_R,
     fallbackTo: '/employee/leave/balances',
   },
   {
@@ -372,7 +366,7 @@ const EMPLOYEE_BOTTOM_NAV = [
     shortLabel: 'History',
     icon: '◷',
     matchPrefixes: ['/employee/history'],
-    permission: PERMISSIONS.ATTENDANCE_READ_OWN,
+    permission: PERMISSIONS.EMP_ATTENDANCE_R,
   },
   { key: 'more', label: 'Menu', icon: '⋯' },
 ];
@@ -384,7 +378,7 @@ const ADMIN_BOTTOM_NAV = [
     label: 'Dashboard',
     icon: '⊞',
     matchPrefixes: ['/admin/dashboard'],
-    anyPermission: ADMIN_PORTAL_PERMISSIONS,
+    permission: PERMISSIONS.DASHBOARD_ADMIN,
   },
   {
     key: 'approvals',
@@ -403,7 +397,7 @@ const ADMIN_BOTTOM_NAV = [
     shortLabel: 'Attendance',
     icon: '◷',
     matchPrefixes: ['/admin/attendance'],
-    anyPermission: [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM],
+    permission: PERMISSIONS.ATTENDANCE_RECORD_R,
   },
   { key: 'more', label: 'Menu', icon: '⋯' },
 ];
@@ -550,3 +544,5 @@ export function canAccessPortalRoute(user, loginPortal, routePortal) {
   if (!user || !routePortal) return true;
   return resolveLoginPortal(loginPortal, user) === routePortal;
 }
+
+export { canSwitchPortal };

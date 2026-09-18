@@ -8242,6 +8242,7 @@ body::-webkit-scrollbar-thumb {
 .page--departments,
 .page--faq-demo,
 .page--roles,
+.page--role-manage,
 .page--leave-policies,
 .page--salary,
 .page--calendar-management,
@@ -12991,6 +12992,94 @@ body::-webkit-scrollbar-thumb {
   max-width: 72rem;
 }
 
+.page--role-manage {
+  gap: var(--space-3);
+  max-width: 72rem;
+}
+
+.page--role-manage .back-link {
+  margin-bottom: 0;
+}
+
+.role-manage-form {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.role-manage-section__body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.role-manage-field {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.role-manage-empty {
+  padding: var(--space-4);
+}
+
+.role-manage__fields-row {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.role-manage__key-caption {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.role-manage__key-caption code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82em;
+  letter-spacing: 0.03em;
+}
+
+.role-manage-permissions .role-manage-section__body {
+  gap: 0.75rem;
+}
+
+/* Full-page role manage — drop modal-era nested scroll box on permission grid */
+.page--role-manage .rbac-grid__table-wrap {
+  max-height: none;
+}
+
+.page--role-manage .rbac-grid__table-wrap.roles-permissions {
+  max-height: none;
+  overflow: visible;
+  overscroll-behavior: auto;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-gutter: auto;
+}
+
+.role-manage-form--view .rbac-grid__crud-check input,
+.role-manage-form--view .rbac-grid__action-chip {
+  cursor: default;
+}
+
+.roles-table__name-link {
+  display: inline;
+  color: inherit;
+  text-decoration: none;
+}
+
+.roles-table__name-link:hover .roles-table__name-text,
+.roles-table__name-link:focus-visible .roles-table__name-text {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
 .roles-panel {
   padding: 0;
   overflow: hidden;
@@ -13803,7 +13892,8 @@ body::-webkit-scrollbar-thumb {
     justify-content: center;
   }
 
-  .roles-modal__fields-row {
+  .roles-modal__fields-row,
+  .role-manage__fields-row {
     grid-template-columns: 1fr;
   }
 }

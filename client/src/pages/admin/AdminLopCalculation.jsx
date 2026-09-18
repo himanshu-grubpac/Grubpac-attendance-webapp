@@ -17,6 +17,8 @@ import SelectField from '../../components/SelectField.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import LopDetailModal from '../../components/LopDetailModal.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 import './AdminLopCalculation.css';
 
 const PAGE_SIZE = 20;
@@ -146,6 +148,12 @@ export default function AdminLopCalculation() {
       setLoading(false);
     }
   }, [asOf, month, page]);
+
+  const handleAttendanceSalarySync = useCallback(() => {
+    loadSummaries();
+  }, [loadSummaries]);
+
+  usePortalSync(handleAttendanceSalarySync, { topics: [PORTAL_TOPICS.PAYROLL], month });
 
   useEffect(() => {
     if (detailTarget) {

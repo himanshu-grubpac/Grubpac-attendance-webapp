@@ -12,6 +12,8 @@ import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { formatINRCurrency, formatISTDate, formatISTDateTime } from '../../utils/datetime.js';
 import { formatInrInput, parseInrInput } from '../../utils/formatNumber.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastSalaryPayrollSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -758,6 +760,10 @@ function SalaryStructureTab({ canManageSalary }) {
 
     try {
       await salaryApi.updateUserSalary(editing.id, validation.data);
+      broadcastSalaryPayrollSync({
+        userId: editing.id,
+        salaryEffectiveFrom: validation.data.salaryEffectiveFrom,
+      });
       showSuccess(`Salary updated for ${editing.name}.`);
       closeEdit();
       await loadStructure();
@@ -1703,6 +1709,14 @@ export default function AdminSalarySummary() {
       setLoading(false);
     }
   }, [month]);
+
+  const handleAttendanceSalarySync = useCallback(() => {
+    if (activeTab === 'monthly') {
+      loadSummaries();
+    }
+  }, [activeTab, loadSummaries]);
+
+  usePortalSync(handleAttendanceSalarySync, { topics: [PORTAL_TOPICS.PAYROLL], month });
 
   useEffect(() => {
     if (activeTab === 'monthly') {

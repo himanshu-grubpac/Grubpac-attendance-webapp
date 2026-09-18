@@ -4,6 +4,7 @@ import { EMPLOYEE_CODE_FORMAT_HINT } from '@shared/validation/employee.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { broadcastEmployeeSync } from '../../utils/portalSync.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['.xlsx', '.xls'];
@@ -424,6 +425,7 @@ export default function AdminBulkUpload() {
           clearFileSelection();
           const summary = data?.summary ?? {};
           const errorCount = (summary.validation_error || 0) + (summary.error || 0);
+          broadcastEmployeeSync();
           showSuccess(
             `Sync complete — ${summary.created || 0} created, ${summary.updated || 0} updated` +
               (errorCount > 0 ? `, ${errorCount} row(s) skipped with errors` : '') +

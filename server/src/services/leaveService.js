@@ -1,6 +1,11 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
 import {
   getISTDateInputValue,
   getISTYear,
@@ -702,11 +707,30 @@ async function clearWfhAttendanceMarkers(request, { legacyStatuses = ['pending']
   );
 }
 
-export function canApproveLeave(actor, requester, permissions) {
-  if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
+export function hasLeaveDecisionPermission(permissions, leaveType, decision) {
+  const isReject = decision === 'reject' || decision === 'rejected';
+  const wfh = leaveType ? isWfhLeaveType(leaveType) : false;
+  if (wfh) {
+    return (
+      hasPermission(permissions, isReject ? PERMISSIONS.LEAVE_WFH_REJECT : PERMISSIONS.LEAVE_WFH_APPROVE) ||
+      hasPermission(permissions, isReject ? PERMISSIONS.LEAVE_REQUEST_REJECT : PERMISSIONS.LEAVE_REQUEST_APPROVE) ||
+      hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)
+    );
+  }
+  return (
+    hasPermission(permissions, isReject ? PERMISSIONS.LEAVE_REQUEST_REJECT : PERMISSIONS.LEAVE_REQUEST_APPROVE) ||
+    hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)
+  );
+}
+
+export function canApproveLeave(actor, requester, permissions, leaveType = null) {
+  const hasDecisionPerm = leaveType
+    ? hasLeaveDecisionPermission(permissions, leaveType, 'approved')
+    : hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE);
+  if (!hasDecisionPerm) {
     return false;
   }
-  if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+  if (hasCompanyWideScope(permissions)) {
     return true;
   }
   const managerId =
@@ -1763,17 +1787,17 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
     const leaveTypeId = await resolveDecisionLeaveTypeId(request);
     const originalApproverId = request.approverId?._id?.toString?.() ?? request.approverId?.toString?.() ?? null;
 
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await releasePendingDays(userId, leaveTypeId, request.days, year, session);
         await updateWfhAttendanceForRequest(request, {
           fromStatuses: ['pending', 'rejected'],
           legacyAnyMode: true,
           session,
         });
-        request.status = 'cancelled';
-        request.decidedAt = new Date();
+      request.status = 'cancelled';
+      request.decidedAt = new Date();
         request.approverId = null;
         request.decisionTokens = [];
         // Fully terminal: clear every provisional-lifecycle field so no
@@ -1785,10 +1809,10 @@ async function applyLeaveCancellation(request, actor, { undoable = false, approv
         request.finalizedAt = new Date();
         request.notificationsSent = true;
         request.submitNotificationsSent = true;
-        await request.save({ session });
-      });
-    } finally {
-      session.endSession();
+      await request.save({ session });
+    });
+  } finally {
+    session.endSession();
     }
 
     await notifyLeaveCancelled(request, false, originalApproverId, { sendChannels: true, cancelledBy: userId });
@@ -2285,7 +2309,11 @@ export async function decideLeaveRequest(requestId, actor, permissions, decision
   }
 
   const requester = await loadRequester(request.userId?._id ?? request.userId);
-  if (!canApproveLeave(actor, requester, permissions)) {
+  const leaveType = request.leaveTypeId;
+  if (!hasLeaveDecisionPermission(permissions, leaveType, decision)) {
+    throwError('You are not authorized to decide this leave request.', 403);
+  }
+  if (!canApproveLeave(actor, requester, permissions, leaveType)) {
     throwError('You are not authorized to approve this leave request.', 403);
   }
 
@@ -2493,9 +2521,9 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
       const year = getISTYear(request.startDate);
       const finalStatus = decision === 'approved' ? 'approved' : decision === 'rejected' ? 'rejected' : 'cancelled';
 
-      const session = await mongoose.startSession();
-      try {
-        await session.withTransaction(async () => {
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
           // Re-read inside the transaction: an undo racing finalization
           // loses deterministically when its revision no longer matches.
           const live = await LeaveRequest.findOne({
@@ -2509,7 +2537,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
 
           if (decision === 'approved') {
             // Finalise approval: consume the reserved pending days, mark WFH approved.
-            await approvePendingDays(userId, leaveTypeId, request.days, year, session);
+        await approvePendingDays(userId, leaveTypeId, request.days, year, session);
             await createLopOnApproval(userId, leaveTypeId, request._id, request.startDate, request.days, session);
             await updateWfhAttendanceForRequest(request, {
               fromStatuses: ['pending', 'rejected'],
@@ -2519,7 +2547,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
             });
           } else if (decision === 'rejected') {
             // Finalise rejection: release the reserved pending days, mark WFH rejected.
-            await releasePendingDays(userId, leaveTypeId, request.days, year, session);
+        await releasePendingDays(userId, leaveTypeId, request.days, year, session);
             await updateWfhAttendanceForRequest(request, {
               fromStatuses: ['pending'],
               toStatus: 'rejected',
@@ -2545,10 +2573,10 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
           live.finalizedAt = new Date();
           live.revision = (live.revision ?? 0) + 1;
           await live.save({ session });
-        });
-      } finally {
-        session.endSession();
-      }
+    });
+  } finally {
+    session.endSession();
+  }
 
       // Deferred notification — post-commit only, never blocking finality.
       try {
@@ -2644,24 +2672,24 @@ export async function listLeaveRequests(actor, permissions, query) {
   const filter = {};
   const scope = query.scope;
 
-  if (scope === 'mine' || (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && scope !== 'approvals')) {
+  if (scope === 'mine' || (!hasCompanyWideScope(permissions) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && scope !== 'approvals')) {
     filter.userId = actor._id;
   } else if (scope === 'approvals') {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view approval queue.', 403);
     }
     filter.status = 'pending';
-    if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (hasCompanyWideScope(permissions)) {
       // Admin/HR sees all pending
     } else {
       const reportIds = await resolveLeaveApprovalUserIds(actor);
       filter.userId = { $in: reportIds };
     }
   } else if (scope === 'team') {
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && !hasCompanyWideScope(permissions)) {
       throwError('You do not have permission to view team leave.', 403);
     }
-    if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (hasCompanyWideScope(permissions)) {
       // unscoped
     } else {
       // Direct reports (+ delegate chain) only — never managed departments.
@@ -2669,7 +2697,7 @@ export async function listLeaveRequests(actor, permissions, query) {
       filter.userId = { $in: reportIds ?? [] };
     }
   } else if (scope === 'all') {
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (!hasCompanyWideScope(permissions)) {
       throwError('You do not have permission to view all leave requests.', 403);
     }
   }
@@ -2679,7 +2707,7 @@ export async function listLeaveRequests(actor, permissions, query) {
     // LEAVE_READ_ALL it is confined to self ('mine') or the actor's reports
     // ('team' / 'approvals'). Without this, any LEAVE_READ holder could read
     // anyone's requests via ?userId=.
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (!hasCompanyWideScope(permissions)) {
       const allowedIds =
         scope === 'approvals'
           ? await resolveLeaveApprovalUserIds(actor)
@@ -2780,7 +2808,7 @@ export async function getLeavePendingCounts(actor, permissions) {
   if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
     return { leave: 0, wfh: 0 };
   }
-  const scopedIds = hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)
+  const scopedIds = hasCompanyWideScope(permissions)
     ? null
     : await resolveLeaveApprovalUserIds(actor);
   const userFilter = scopedIds === null ? {} : { userId: { $in: scopedIds } };
@@ -2807,7 +2835,7 @@ export async function getLeavePendingCounts(actor, permissions) {
 
 export async function getTeamCalendar(actor, permissions, query) {
   const canViewAllLeave =
-    hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)
+    hasCompanyWideScope(permissions)
     || hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
   const canViewTeamLeave =
     canViewAllLeave || hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM);

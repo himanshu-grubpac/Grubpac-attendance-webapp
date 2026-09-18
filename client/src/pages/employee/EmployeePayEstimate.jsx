@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -17,6 +17,8 @@ import {
   getTodayMonthIst,
 } from '../../components/MonthField.jsx';
 import { SalaryHistorySection } from '../admin/SalaryAuditSections.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 function formatLopDate(entry) {
   if (typeof entry === 'string') return entry;
@@ -186,22 +188,31 @@ export default function EmployeePayEstimate() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  const loadSummary = useCallback(async () => {
     if (!user?.id) return;
 
     setLoading(true);
     setError('');
-    salaryApi
-      .getSummary({ month, userId: user.id })
-      .then((data) => {
-        setSummary(data.summary ?? null);
-      })
-      .catch((err) => {
-        setSummary(null);
-        setError(getErrorMessage(err));
-      })
-      .finally(() => setLoading(false));
-  }, [user?.id, month]);
+    try {
+      const data = await salaryApi.getSummary({ month, userId: user.id });
+      setSummary(data.summary ?? null);
+    } catch (err) {
+      setSummary(null);
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [month, user?.id]);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  usePortalSync(loadSummary, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    userId: user?.id,
+    month,
+  });
 
   return (
     <div className="page">

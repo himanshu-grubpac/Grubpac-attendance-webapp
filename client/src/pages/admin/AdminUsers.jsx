@@ -16,6 +16,8 @@ import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastEmployeeSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
@@ -428,6 +430,32 @@ export default function AdminUsers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadColumnPreferences, loadEmployees, loadStats]);
 
+  const syncListReload = useCallback(() => {
+    void loadStats();
+    loadEmployees({
+      query: search,
+      nextPage: page,
+      nextStatus: statusFilter,
+      nextDepartment: departmentFilter,
+      nextRole: roleFilter,
+      nextNewThisMonth: newThisMonthFilter,
+      monthKey: statsRef.current?.monthKey ?? null,
+    });
+  }, [
+    departmentFilter,
+    loadEmployees,
+    loadStats,
+    newThisMonthFilter,
+    page,
+    roleFilter,
+    search,
+    statusFilter,
+  ]);
+
+  usePortalSync(syncListReload, {
+    topics: [PORTAL_TOPICS.EMPLOYEE, PORTAL_TOPICS.DEPARTMENT],
+  });
+
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -619,6 +647,7 @@ export default function AdminUsers() {
       variant: nextActive ? 'default' : 'danger',
       onConfirm: async () => {
         await adminApi.updateEmployeeStatus(employee.id, nextActive);
+        broadcastEmployeeSync({ userId: employee.id });
         await Promise.all([
           loadEmployees({
             query: search,

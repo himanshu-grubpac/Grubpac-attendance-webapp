@@ -1,4 +1,9 @@
-import { PERMISSION_GROUPS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import {
+  PERMISSION_GROUPS,
+  SYSTEM_ROLE_SLUGS,
+  enforceAdminLockPermissions,
+  getPermissionCatalogTree,
+} from '../../../shared/permissions.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import {
@@ -7,9 +12,13 @@ import {
   updateRoleSchema,
 } from '../../../shared/validation/roles.js';
 import { auditRequest } from '../utils/auditLog.js';
+import {
+  permissionsArrayChanged,
+  resolveRolePermissionsVersion,
+} from '../services/rolePermissionsVersionService.js';
 
 export async function listPermissions(req, res) {
-  res.json({ groups: PERMISSION_GROUPS });
+  res.json({ groups: PERMISSION_GROUPS, tree: getPermissionCatalogTree() });
 }
 
 export async function listRoles(req, res) {
@@ -55,7 +64,7 @@ export async function updateRole(req, res) {
   // lockout protection). Slugs are never applied (ignored below) and system
   // roles cannot be deleted (see deleteRole).
   if (role.isSystem && role.slug === SYSTEM_ROLE_SLUGS.ADMIN && parsed.permissions !== undefined) {
-    return res.status(403).json({ message: 'Admin role permissions cannot be modified.' });
+    parsed.permissions = enforceAdminLockPermissions(parsed.permissions);
   }
 
   // Self-lockout guard: nobody may REMOVE permissions from the role they
@@ -81,7 +90,13 @@ export async function updateRole(req, res) {
 
   if (parsed.name !== undefined) role.name = parsed.name;
   if (parsed.description !== undefined) role.description = parsed.description;
-  if (parsed.permissions !== undefined) role.permissions = parsed.permissions;
+  if (parsed.permissions !== undefined) {
+    const permsChanged = permissionsArrayChanged(role.permissions, parsed.permissions);
+    role.permissions = parsed.permissions;
+    if (permsChanged) {
+      role.permissionsVersion = resolveRolePermissionsVersion(role) + 1;
+    }
+  }
 
   await role.save();
 

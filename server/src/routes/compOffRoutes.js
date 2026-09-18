@@ -23,70 +23,68 @@ const router = Router();
 
 router.get(
   '/comp-off/eligible-days',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_R, PERMISSIONS.LEAVE_COMPOFF_R),
   asyncHandler(getCompOffEligibleDaysHandler),
 );
 router.post(
   '/comp-off',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_C),
   idempotencyMiddleware,
   asyncHandler(createCompOffRequestHandler),
 );
 router.get(
   '/comp-off',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_R, PERMISSIONS.LEAVE_COMPOFF_R),
   asyncHandler(listCompOffRequestsHandler),
 );
 router.get(
   '/comp-off/approvals/count',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_R),
   asyncHandler(getCompOffApprovalsCountHandler),
 );
 router.post(
   '/comp-off/:id/withdraw',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_U, PERMISSIONS.EMP_COMPOFF_D),
   asyncHandler(withdrawCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/undo-withdraw',
-  requirePermission(PERMISSIONS.LEAVE_APPLY),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_U),
   asyncHandler(undoCompOffWithdrawHandler),
 );
 router.post(
   '/comp-off/:id/approve',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_APPROVE),
   asyncHandler(approveCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/reject',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_REJECT),
   asyncHandler(rejectCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/undo',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_APPROVE, PERMISSIONS.LEAVE_COMPOFF_REJECT),
   asyncHandler(undoCompOffDecisionHandler),
 );
 router.post(
   '/comp-off/:id/cancel',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_APPROVE),
   asyncHandler(cancelApprovedCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/assess',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_APPROVE),
   asyncHandler(assessCompOffRequestHandler),
 );
 router.post(
   '/comp-off/:id/undo-assess',
-  requirePermission(PERMISSIONS.LEAVE_APPROVE),
+  requirePermission(PERMISSIONS.LEAVE_COMPOFF_APPROVE),
   asyncHandler(undoCompOffAssessHandler),
 );
-// Single-request fetch for the email deep-link fallback. Registered last so
-// it can never shadow the multi-segment routes above.
 router.get(
   '/comp-off/:id',
-  requirePermission(PERMISSIONS.LEAVE_READ),
+  requirePermission(PERMISSIONS.EMP_COMPOFF_R, PERMISSIONS.LEAVE_COMPOFF_R),
   asyncHandler(getCompOffRequestHandler),
 );
 

@@ -1,26 +1,13 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { createRoleSchema, updateRoleSchema } from '@shared/validation/roles.js';
-import { SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { adminApi, getErrorMessage } from '../../services/api.js';
-import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
-import { useEscapeKey } from '../../hooks/useEscapeKey.js';
-import { validateForm } from '../../utils/validation.js';
 import { broadcastPermissionsSync } from '../../utils/portalSync.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
-import FieldError from '../../components/FieldError.jsx';
-import RbacPermissionGrid from '../../components/RbacPermissionGrid.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
-
-const emptyForm = {
-  name: '',
-  slug: '',
-  description: '',
-  permissions: [],
-};
 
 function TableSkeleton() {
   return (
@@ -34,28 +21,16 @@ function TableSkeleton() {
 }
 
 export default function AdminRoles() {
+  const navigate = useNavigate();
   const { showSuccess } = useToast();
-  const { user, refreshUser } = useAuth();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
-  const createModalTitleId = useId();
-  const editModalTitleId = useId();
-  const viewModalTitleId = useId();
 
   const [roles, setRoles] = useState([]);
-  const [permissionCatalog, setPermissionCatalog] = useState([]);
-  const [permissionMetadata, setPermissionMetadata] = useState({});
-  const [totalSlugs, setTotalSlugs] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
-  const [modal, setModal] = useState(null);
-  const [form, setForm] = useState(emptyForm);
-  const [fieldErrors, setFieldErrors] = useState({});
-  const [modalError, setModalError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
 
   const requestKeyRef = useRef('');
 
@@ -80,15 +55,9 @@ export default function AdminRoles() {
     setError('');
 
     try {
-      const [rolesData, catalogData] = await Promise.all([
-        adminApi.listRoles(),
-        adminApi.getRbacCatalog(),
-      ]);
+      const rolesData = await adminApi.listRoles();
       if (requestKeyRef.current !== requestKey) return;
       setRoles(rolesData.roles ?? []);
-      setPermissionCatalog(catalogData.catalog ?? []);
-      setPermissionMetadata(catalogData.metadata ?? {});
-      setTotalSlugs(catalogData.totalSlugs ?? 0);
     } catch (err) {
       if (requestKeyRef.current !== requestKey) return;
       setError(getErrorMessage(err));
@@ -105,115 +74,6 @@ export default function AdminRoles() {
 
   function clearFilters() {
     setSearch('');
-  }
-
-  function openCreateModal() {
-    setForm(emptyForm);
-    setFieldErrors({});
-    setModalError('');
-    setModal({ mode: 'create' });
-  }
-
-  function openEditModal(role) {
-    setForm({
-      name: role.name,
-      slug: role.slug,
-      description: role.description ?? '',
-      permissions: role.permissions ?? [],
-    });
-    setFieldErrors({});
-    setModalError('');
-    setModal({ mode: 'edit', role });
-  }
-
-  function openViewModal(role) {
-    setFieldErrors({});
-    setModalError('');
-    setModal({ mode: 'view', role });
-  }
-
-  function closeModal() {
-    if (submitting) return;
-    setModal(null);
-    setForm(emptyForm);
-    setFieldErrors({});
-    setModalError('');
-  }
-
-  useEscapeKey(Boolean(modal), closeModal);
-
-  async function refreshPermissionsIfNeeded(savedRole) {
-    const actorRoleId = user?.roleId ?? null;
-    if (actorRoleId && savedRole?.id === actorRoleId) {
-      await refreshUser();
-    }
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (!modal || modal.mode === 'view') return;
-
-    setSubmitting(true);
-    setError('');
-    setModalError('');
-
-    if (modal.mode === 'create') {
-      const validation = validateForm(createRoleSchema, form);
-      if (!validation.data) {
-        setFieldErrors(validation.errors);
-        setSubmitting(false);
-        return;
-      }
-
-      setFieldErrors({});
-
-      try {
-        const result = await adminApi.createRole(validation.data);
-        broadcastPermissionsSync();
-        showSuccess(`Role "${validation.data.name}" created.`);
-        closeModal();
-        await loadData();
-        await refreshPermissionsIfNeeded(result.role);
-      } catch (err) {
-        setModalError(getErrorMessage(err));
-      } finally {
-        setSubmitting(false);
-      }
-      return;
-    }
-
-    const isAdminRole = modal.role?.slug === SYSTEM_ROLE_SLUGS.ADMIN;
-    const validation = validateForm(
-      updateRoleSchema,
-      isAdminRole
-        ? { name: form.name, description: form.description }
-        : {
-            name: form.name,
-            description: form.description,
-            permissions: form.permissions,
-          },
-    );
-
-    if (!validation.data) {
-      setFieldErrors(validation.errors);
-      setSubmitting(false);
-      return;
-    }
-
-    setFieldErrors({});
-
-    try {
-      const result = await adminApi.updateRole(modal.role.id, validation.data);
-      broadcastPermissionsSync();
-      showSuccess(`Role "${validation.data.name}" updated.`);
-      closeModal();
-      await loadData();
-      await refreshPermissionsIfNeeded(result.role);
-    } catch (err) {
-      setModalError(getErrorMessage(err));
-    } finally {
-      setSubmitting(false);
-    }
   }
 
   async function deleteRole(role) {
@@ -236,12 +96,12 @@ export default function AdminRoles() {
       {
         key: 'view',
         label: 'View permissions',
-        onClick: () => openViewModal(role),
+        onClick: () => navigate(`/admin/roles/${role.id}?mode=view`),
       },
       {
         key: 'edit',
         label: 'Edit role',
-        onClick: () => openEditModal(role),
+        onClick: () => navigate(`/admin/roles/${role.id}`),
       },
     ];
 
@@ -273,15 +133,6 @@ export default function AdminRoles() {
     return 'Roles will appear here once they are created.';
   }, [roles.length, hasActiveFilters]);
 
-  const modalTitleId =
-    modal?.mode === 'create' ? createModalTitleId : modal?.mode === 'view' ? viewModalTitleId : editModalTitleId;
-  const slugLocked = modal?.mode === 'edit' && modal.role?.isSystem;
-  const isSystemEdit = modal?.mode === 'edit' && Boolean(modal.role?.isSystem);
-  const isPermissionsLocked =
-    modal?.mode === 'edit' && modal.role?.slug === SYSTEM_ROLE_SLUGS.ADMIN;
-  const isViewMode = modal?.mode === 'view';
-  const viewPermissions = modal?.role?.permissions ?? [];
-
   return (
     <div className="page page--roles">
       <section className="roles-panel card card--table" aria-label="Roles and permissions">
@@ -305,7 +156,11 @@ export default function AdminRoles() {
           </div>
 
           <div className="roles-toolbar__actions">
-            <button type="button" className="btn btn-primary btn-sm" onClick={openCreateModal}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => navigate('/admin/roles/new')}
+            >
               + Add role
             </button>
           </div>
@@ -322,7 +177,11 @@ export default function AdminRoles() {
             description={emptyDescription}
             action={
               roles.length === 0 ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={openCreateModal}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => navigate('/admin/roles/new')}
+                >
                   Add role
                 </button>
               ) : hasActiveFilters ? (
@@ -347,7 +206,9 @@ export default function AdminRoles() {
                 {filteredRoles.map((role) => (
                   <tr key={role.id}>
                     <td data-label="Role" className="roles-table__name">
-                      <span className="roles-table__name-text">{role.name}</span>
+                      <Link to={`/admin/roles/${role.id}`} className="roles-table__name-link">
+                        <span className="roles-table__name-text">{role.name}</span>
+                      </Link>
                       {role.description ? (
                         <span className="roles-table__desc muted">{role.description}</span>
                       ) : null}
@@ -366,148 +227,6 @@ export default function AdminRoles() {
           </div>
         )}
       </section>
-
-      {modal ? (
-        <div className="modal__backdrop" role="presentation" onClick={closeModal}>
-          <div
-            className={`modal modal--wide roles-modal${isViewMode ? ' roles-modal--view' : ''}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={modalTitleId}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="modal__header">
-              <h2 id={modalTitleId} className="modal__title">
-                {modal.mode === 'create'
-                  ? 'Add role'
-                  : isViewMode
-                    ? `View permissions: ${modal.role.name}`
-                    : `Edit role: ${modal.role.name}`}
-              </h2>
-              <p className="modal__lead muted">
-                {modal.mode === 'create'
-                  ? 'Tick what this role may do. Anything left unticked is denied.'
-                  : isViewMode
-                    ? 'Read-only view of the permissions granted to this role.'
-                    : slugLocked
-                      ? 'Slug cannot be changed for this system role. Display name, description and permissions can be updated — permission changes apply immediately.'
-                      : 'Update the role details and permission set assigned to users.'}
-              </p>
-            </header>
-
-            {isViewMode ? (
-              <div className="modal__form">
-                <div className="modal__body">
-                  <div className="modal__field roles-modal__permissions-field">
-                    <span className="label">Permissions</span>
-                    <RbacPermissionGrid
-                      catalog={permissionCatalog}
-                      metadata={permissionMetadata}
-                      totalSlugs={totalSlugs}
-                      selected={viewPermissions}
-                      onChange={() => {}}
-                      disabled
-                      hideActions
-                    />
-                  </div>
-                </div>
-
-                <footer className="modal__footer">
-                  <button type="button" className="btn btn-primary" onClick={closeModal} autoFocus>
-                    Close
-                  </button>
-                </footer>
-              </div>
-            ) : (
-            <form className="modal__form" onSubmit={handleSubmit}>
-              <div className="modal__body">
-                {modalError ? <div className="alert alert--error modal__alert">{modalError}</div> : null}
-
-                <div className="roles-modal__fields-row">
-                  <label className="modal__field form-field--sm">
-                    <span className="label">Role name</span>
-                    <input
-                      autoFocus
-                      className="input"
-                      value={form.name}
-                      onChange={(event) => setForm({ ...form, name: event.target.value })}
-                      maxLength={80}
-                      placeholder="e.g. Office admin"
-                    />
-                    {modal.mode === 'edit' ? (
-                      <span className="roles-modal__key-caption muted">
-                        key: <code>{form.slug}</code>
-                      </span>
-                    ) : null}
-                    <FieldError message={fieldErrors.name} />
-                  </label>
-
-                  {modal.mode === 'create' ? (
-                    <label className="modal__field form-field--sm">
-                      <span className="label">Slug</span>
-                      <input
-                        className="input input--narrow"
-                        value={form.slug}
-                        onChange={(event) =>
-                          setForm({ ...form, slug: event.target.value.toLowerCase() })
-                        }
-                        maxLength={50}
-                        placeholder="office-admin"
-                      />
-                      <FieldError message={fieldErrors.slug} />
-                    </label>
-                  ) : null}
-                </div>
-
-                <label className="modal__field">
-                  <span className="label">Description</span>
-                  <input
-                    className="input"
-                    value={form.description}
-                    onChange={(event) => setForm({ ...form, description: event.target.value })}
-                    maxLength={500}
-                    placeholder="Optional summary for admins"
-                  />
-                  <FieldError message={fieldErrors.description} />
-                </label>
-
-                <div className="modal__field roles-modal__permissions-field">
-                  <span className="label">Permissions</span>
-                  {isPermissionsLocked ? (
-                    <p className="muted">Admin role permissions are fixed and cannot be modified.</p>
-                  ) : isSystemEdit ? (
-                    <p className="muted">Changes apply to this role immediately on save.</p>
-                  ) : null}
-                  <RbacPermissionGrid
-                    catalog={permissionCatalog}
-                    metadata={permissionMetadata}
-                    totalSlugs={totalSlugs}
-                    selected={form.permissions}
-                    onChange={(permissions) => setForm({ ...form, permissions })}
-                    disabled={isPermissionsLocked}
-                    hideActions={isPermissionsLocked}
-                  />
-                  <FieldError message={fieldErrors.permissions} />
-                </div>
-              </div>
-
-              <footer className="modal__footer">
-                <button type="button" className="btn btn-ghost" onClick={closeModal} disabled={submitting}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={submitting}>
-                  {submitting
-                    ? 'Saving…'
-                    : modal.mode === 'create'
-                      ? 'Create role'
-                      : 'Save changes'}
-                </button>
-              </footer>
-            </form>
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {confirmDialog}
     </div>

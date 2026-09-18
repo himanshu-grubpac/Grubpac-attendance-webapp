@@ -18,6 +18,11 @@ import {
   formatISTDateTime,
 } from '../../utils/datetime.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import {
+  broadcastAttendancePayrollSync,
+  PORTAL_TOPICS,
+} from '../../utils/portalSync.js';
 
 const HISTORY_TABLE_KEY = 'attendanceHistory';
 
@@ -1617,6 +1622,14 @@ export default function AdminAttendance() {
     };
   }, [loadOfficePolicy, loadWeek]);
 
+  usePortalSync(
+    () => {
+      loadOfficePolicy();
+      loadWeek();
+    },
+    { topics: [PORTAL_TOPICS.HOLIDAY, PORTAL_TOPICS.POLICY] },
+  );
+
   useEffect(() => {
     setSelectedDayKey((current) => {
       if (weekDays.includes(current)) return current;
@@ -1981,9 +1994,12 @@ export default function AdminAttendance() {
         await adminApi.editAttendanceRecord(editTarget.checkInRecordId, payload);
       }
       const employeeName = editTarget.employee.name;
+      const employeeId = editTarget.employee.id;
+      const savedDayKey = editTarget.dayKey;
       const created = editTarget.isCreate;
       setEditTarget(null);
       await loadWeek();
+      broadcastAttendancePayrollSync({ userId: employeeId, dayKey: savedDayKey });
       showSuccess(
         created
           ? `Attendance created for ${employeeName}.`
