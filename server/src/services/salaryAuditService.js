@@ -32,6 +32,8 @@ import {
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
+import { formatInrNumber } from '../../../shared/utils/formatInr.js';
+import { parseSalaryPeriodKey } from './salaryService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -712,25 +714,29 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
 export async function exportMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   const audit = await getMonthlySalaryAudit(actor, permissions, periodKey, options);
 
-  const rows = audit.employees.map((row) => ({
+  const rows = audit.employees.map((row) => {
+    const { year, monthName } = parseSalaryPeriodKey(row.periodKey);
+    return {
     'Employee Code': row.employeeCode ?? '',
     'Employee Name': row.employeeName,
     'Department': row.departmentName ?? '',
-    'Month': row.periodKey,
-    'Gross Salary (INR)': row.grossSalary,
+    Year: year,
+    Month: monthName,
+    'Gross Salary (INR)': formatInrNumber(row.grossSalary),
     'Working Days': row.workingDays,
     'Present Days': row.presentDays,
     'Paid Leave Days': row.paidLeaveDays,
     'Payable Days': row.payableDays,
     'LOP Days': row.lopDays,
-    'LOP Deduction (INR)': row.lopDeduction,
-    'Per Day Salary (INR)': row.perDaySalary ?? '',
-    'Other Deductions (INR)': row.otherDeductions,
-    'Total Deductions (INR)': row.totalDeductions,
-    'Net Salary (INR)': row.netSalary ?? '',
+    'LOP Deduction (INR)': formatInrNumber(row.lopDeduction),
+    'Per Day Salary (INR)': formatInrNumber(row.perDaySalary),
+    'Other Deductions (INR)': formatInrNumber(row.otherDeductions),
+    'Total Deductions (INR)': formatInrNumber(row.totalDeductions),
+    'Net Salary (INR)': formatInrNumber(row.netSalary),
     'Transfer Status': row.transferStatus ?? '',
     'Status': row.status,
-  }));
+    };
+  });
 
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);

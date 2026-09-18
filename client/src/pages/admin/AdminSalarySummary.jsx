@@ -24,8 +24,10 @@ import {
   buildSalaryYearOptions,
   clampMonthPartForYear,
   clampYearToCurrentIst,
+  formatMonthLabel,
   getTodayMonthIst,
 } from '../../components/MonthField.jsx';
+import DownloadProgressModal from '../../components/DownloadProgressModal.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -426,7 +428,7 @@ function MonthlyPayrollTab({
               onClick={onExport}
               disabled={exporting || loading}
             >
-              {exporting ? 'Exporting…' : 'Export Excel'}
+              Export Excel
             </button>
           </div>
         </div>
@@ -1654,8 +1656,13 @@ export default function AdminSalarySummary() {
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
+  const [downloadModal, setDownloadModal] = useState({
+    open: false,
+    subtitle: '',
+    error: '',
+  });
   const [error, setError] = useState('');
+  const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
 
   const setActiveTab = useCallback(
     (tabId) => {
@@ -1691,18 +1698,27 @@ export default function AdminSalarySummary() {
     setPage(1);
   }, [month, search]);
 
+  const closeDownloadModal = useCallback(() => {
+    setDownloadModal({ open: false, subtitle: '', error: '' });
+  }, []);
+
   const handleExport = useCallback(async () => {
-    setExporting(true);
+    setDownloadModal({
+      open: true,
+      subtitle: `Salary summary for ${monthLabel}`,
+      error: '',
+    });
     setError('');
     try {
       const blob = await salaryApi.exportSummary(month);
       downloadBlob(blob, `salary-summary-${month}.xlsx`);
+      closeDownloadModal();
     } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setExporting(false);
+      const message = getErrorMessage(err);
+      setDownloadModal((current) => ({ ...current, error: message }));
+      setError(message);
     }
-  }, [month]);
+  }, [closeDownloadModal, month, monthLabel]);
 
   const handleSettingsSaved = useCallback(
     (settings) => {
@@ -1749,7 +1765,7 @@ export default function AdminSalarySummary() {
           meta={meta}
           loading={loading}
           error={error}
-          exporting={exporting}
+          exporting={downloadModal.open}
           onExport={handleExport}
           search={search}
           setSearch={setSearch}
@@ -1783,6 +1799,13 @@ export default function AdminSalarySummary() {
           onGoToTransfers={() => setActiveTab('transfers')}
         />
       ) : null}
+
+      <DownloadProgressModal
+        open={downloadModal.open}
+        subtitle={downloadModal.subtitle}
+        error={downloadModal.error}
+        onClose={closeDownloadModal}
+      />
     </div>
   );
 }

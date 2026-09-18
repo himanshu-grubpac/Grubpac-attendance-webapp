@@ -20,7 +20,10 @@ import {
 import { clampMonthInputToCurrentIst, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { auditRequest } from '../utils/auditLog.js';
 import {
+  buildLopBulkExportWorkbook,
+  buildLopDetailedExportRows,
   buildLopExportWorkbook,
+  buildLopOverviewExportRows,
   buildSalaryExportWorkbook,
   buildSalaryMonthMeta,
   computeMonthlySalarySummary,
@@ -33,6 +36,7 @@ import {
   listRecentSettlements,
   listSalaryStructure,
   listSalarySummariesForMonth,
+  resolveSalaryAsOfDate,
   listSalaryTransfers,
   loadSalarySubject,
   lopDeductionRowsToExportRows,
@@ -363,11 +367,14 @@ export async function exportLopBulkHandler(req, res) {
   const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
   const month = clampMonthInputToCurrentIst(rawMonth);
   const summaries = await listAllLopSummariesForMonth(month, asOf);
-  const exportRows = summaries.flatMap((summary) => lopDeductionRowsToExportRows(summary));
-  const asOfLabel = asOf ?? summaries[0]?.asOfDate ?? month;
-  const buffer = await buildLopExportWorkbook(exportRows, {
-    sheetName: 'LOP Bulk Export',
-    subtitle: `LOP Bulk Export — ${month} as of ${asOfLabel} — ${exportRows.length} deduction row${exportRows.length === 1 ? '' : 's'}`,
+  const resolved = resolveSalaryAsOfDate(month, asOf);
+  const asOfLabel = resolved?.asOfDateKey ?? summaries[0]?.asOfDate ?? month;
+  const overviewRows = buildLopOverviewExportRows(summaries);
+  const detailedRows = buildLopDetailedExportRows(summaries);
+  const buffer = await buildLopBulkExportWorkbook(overviewRows, detailedRows, {
+    month,
+    asOfDate: asOfLabel,
+    employeeCount: summaries.length,
   });
 
   auditRequest(req, 'lop_bulk_exported', {

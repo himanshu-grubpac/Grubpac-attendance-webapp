@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PERMISSIONS } from '@shared/permissions.js';
+import { formatInrInteger } from '@shared/utils/formatInr.js';
 import { adminApi, getErrorMessage, preferencesApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -166,11 +167,8 @@ function shortDate(value) {
 
 function salaryLabel(value) {
   if (value == null) return '—';
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(value);
+  const formatted = formatInrInteger(value);
+  return formatted ? `₹${formatted}` : '—';
 }
 
 function managerDepartmentsLabel(employee, managerDeptMap) {

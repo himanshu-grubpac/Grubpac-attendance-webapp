@@ -174,10 +174,9 @@ test('computeLopCauses handles multi-month leave (only counts month portion)', (
     new Map([['type-1', 0]]), // 0 days paid quota
   );
 
-  // Only August working days count: Aug 28 (Thu), Aug 31 (Mon) = 2 working days
+  // August working days in leave span: Aug 28 (Fri) and Aug 31 (Mon)
   assert.equal(result.length, 1);
-  assert.ok(result[0].lopDays > 0);
-  assert.ok(result[0].lopDays <= 3); // Not more than the total leave days
+  assert.equal(result[0].lopDays, 2);
 });
 
 test('computeLopCauses skips non-paid leave types', () => {

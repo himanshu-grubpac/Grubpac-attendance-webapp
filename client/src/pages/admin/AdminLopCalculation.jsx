@@ -7,14 +7,15 @@ import {
   buildSalaryYearOptions,
   clampMonthPartForYear,
   clampYearToCurrentIst,
+  formatMonthLabel,
   getTodayMonthIst,
 } from '../../components/MonthField.jsx';
+import DownloadProgressModal from '../../components/DownloadProgressModal.jsx';
 import { getTodayIstValue } from '../../components/DateField.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import LopDetailModal from '../../components/LopDetailModal.jsx';
-import { useToast } from '../../context/ToastContext.jsx';
 import './AdminLopCalculation.css';
 
 const PAGE_SIZE = 20;
@@ -70,7 +71,6 @@ function TableSkeleton() {
 }
 
 export default function AdminLopCalculation() {
-  const { showSuccess } = useToast();
   const initialMonth = useMemo(() => {
     const { year, month } = parseMonthFilterValue(getTodayMonthIst());
     const clampedYear = clampYearToCurrentIst(year);
@@ -87,6 +87,7 @@ export default function AdminLopCalculation() {
     () => toMonthFilterValue(yearFilter, monthPartFilter),
     [yearFilter, monthPartFilter],
   );
+  const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
   const asOf = useMemo(() => resolveAsOfForMonth(month), [month]);
 
   const [employees, setEmployees] = useState([]);
@@ -100,9 +101,14 @@ export default function AdminLopCalculation() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [bulkExporting, setBulkExporting] = useState(false);
-  const [downloadingUserId, setDownloadingUserId] = useState(null);
+  const [downloadModal, setDownloadModal] = useState({
+    open: false,
+    subtitle: '',
+    error: '',
+  });
+  const isDownloading = downloadModal.open;
   const [detailTarget, setDetailTarget] = useState(null);
+  const [detailMonth, setDetailMonth] = useState(null);
 
   const handleYearChange = useCallback((value) => {
     const nextYear = clampYearToCurrentIst(value);
@@ -140,50 +146,82 @@ export default function AdminLopCalculation() {
   }, [asOf, month, page]);
 
   useEffect(() => {
+    if (detailTarget) {
+      return;
+    }
     loadSummaries();
-  }, [loadSummaries]);
+  }, [detailTarget, loadSummaries]);
 
   useEffect(() => {
     setPage(1);
   }, [month]);
 
+  const closeDownloadModal = useCallback(() => {
+    setDownloadModal({ open: false, subtitle: '', error: '' });
+  }, []);
+
   const handleBulkExport = useCallback(async () => {
-    setBulkExporting(true);
+    setDownloadModal({
+      open: true,
+      subtitle: `Bulk LOP report for ${monthLabel}`,
+      error: '',
+    });
     setError('');
     try {
       const blob = await salaryApi.exportLopBulk({ month, asOf });
       downloadBlob(blob, `lop-bulk-${month}.xlsx`);
-      showSuccess('Bulk LOP report downloaded.');
+      closeDownloadModal();
     } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setBulkExporting(false);
+      const message = getErrorMessage(err);
+      setDownloadModal((current) => ({ ...current, error: message }));
+      setError(message);
     }
-  }, [asOf, month, showSuccess]);
+  }, [asOf, closeDownloadModal, month, monthLabel]);
 
   const handleRowDownload = useCallback(
     async (row) => {
-      setDownloadingUserId(row.userId);
+      setDownloadModal({
+        open: true,
+        subtitle: `LOP log for ${row.name} — ${monthLabel}`,
+        error: '',
+      });
       setError('');
       try {
         const blob = await salaryApi.exportLopSingle(row.userId, { month, asOf });
         const safeName = (row.name ?? 'employee').replace(/[^\w.-]+/g, '_');
         downloadBlob(blob, `lop-${safeName}-${month}.xlsx`);
-        showSuccess(`LOP log downloaded for ${row.name}.`);
+        closeDownloadModal();
       } catch (err) {
-        setError(getErrorMessage(err));
-      } finally {
-        setDownloadingUserId(null);
+        const message = getErrorMessage(err);
+        setDownloadModal((current) => ({ ...current, error: message }));
+        setError(message);
       }
     },
-    [asOf, month, showSuccess],
+    [asOf, closeDownloadModal, month, monthLabel],
   );
 
-  const handleModalMonthChange = useCallback((year, monthPart) => {
+  const handleDetailMonthChange = useCallback((year, monthPart) => {
     const nextYear = clampYearToCurrentIst(year);
-    setYearFilter(nextYear);
-    setMonthPartFilter(clampMonthPartForYear(nextYear, monthPart));
+    setDetailMonth(toMonthFilterValue(nextYear, clampMonthPartForYear(nextYear, monthPart)));
   }, []);
+
+  const openDetail = useCallback(
+    (row) => {
+      setDetailTarget({ userId: row.userId, name: row.name });
+      setDetailMonth(month);
+    },
+    [month],
+  );
+
+  const closeDetail = useCallback(() => {
+    setDetailTarget(null);
+    setDetailMonth(null);
+  }, []);
+
+  const activeDetailMonth = detailMonth ?? month;
+  const detailAsOf = useMemo(() => resolveAsOfForMonth(activeDetailMonth), [activeDetailMonth]);
+  const detailYear = activeDetailMonth.split('-')[0];
+  const detailMonthOptions = useMemo(() => buildSalaryMonthOptions(detailYear), [detailYear]);
 
   /** Server asOfDate after load; client asOf until first response — both from IST helpers, never hardcoded. */
   const viewingDateLabel = formatISTDate(responseAsOfDate ?? asOf);
@@ -210,7 +248,7 @@ export default function AdminLopCalculation() {
                     onChange={handleYearChange}
                     options={yearOptions}
                     aria-label="LOP year"
-                    disabled={loading || bulkExporting}
+                    disabled={loading || isDownloading}
                   />
                 </div>
                 <div className="field-inline">
@@ -220,7 +258,7 @@ export default function AdminLopCalculation() {
                     onChange={setMonthPartFilter}
                     options={monthOptions}
                     aria-label="LOP month"
-                    disabled={loading || bulkExporting}
+                    disabled={loading || isDownloading}
                   />
                 </div>
               </div>
@@ -232,9 +270,9 @@ export default function AdminLopCalculation() {
               type="button"
               className="btn btn-primary btn-sm"
               onClick={handleBulkExport}
-              disabled={bulkExporting || loading}
+              disabled={isDownloading || loading}
             >
-              {bulkExporting ? 'Downloading…' : 'Bulk download'}
+              Bulk download
             </button>
           </div>
         </div>
@@ -267,7 +305,6 @@ export default function AdminLopCalculation() {
                 <tbody>
                   {employees.map((row, index) => {
                     const rowNumber = (pagination.page - 1) * pagination.limit + index + 1;
-                    const isDownloading = downloadingUserId === row.userId;
 
                     return (
                       <tr key={row.userId}>
@@ -306,9 +343,7 @@ export default function AdminLopCalculation() {
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
-                              onClick={() =>
-                                setDetailTarget({ userId: row.userId, name: row.name })
-                              }
+                              onClick={() => openDetail(row)}
                               disabled={isDownloading}
                             >
                               View
@@ -317,9 +352,9 @@ export default function AdminLopCalculation() {
                               type="button"
                               className="btn btn-ghost btn-sm"
                               onClick={() => handleRowDownload(row)}
-                              disabled={isDownloading || bulkExporting}
+                              disabled={isDownloading}
                             >
-                              {isDownloading ? 'Downloading…' : 'Download'}
+                              Download
                             </button>
                           </div>
                         </td>
@@ -334,16 +369,23 @@ export default function AdminLopCalculation() {
         )}
       </section>
 
+      <DownloadProgressModal
+        open={downloadModal.open}
+        subtitle={downloadModal.subtitle}
+        error={downloadModal.error}
+        onClose={closeDownloadModal}
+      />
+
       <LopDetailModal
         open={Boolean(detailTarget)}
         userId={detailTarget?.userId ?? null}
         employeeName={detailTarget?.name ?? null}
-        month={month}
-        asOf={asOf}
+        month={activeDetailMonth}
+        asOf={detailAsOf}
         yearOptions={yearOptions}
-        monthOptions={monthOptions}
-        onMonthChange={handleModalMonthChange}
-        onClose={() => setDetailTarget(null)}
+        monthOptions={detailMonthOptions}
+        onMonthChange={handleDetailMonthChange}
+        onClose={closeDetail}
       />
     </div>
   );

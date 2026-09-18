@@ -14,7 +14,12 @@ import { LeaveRequest } from '../models/LeaveRequest.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { User } from '../models/User.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
-import { parseDateInputAsISTDay } from '../utils/istDate.js';
+import {
+  getISTDateInputValue,
+  getISTMonthInputValue,
+  parseDateInputAsISTDay,
+} from '../utils/istDate.js';
+import { Holiday } from '../models/Holiday.js';
 import {
   createLeaveRequest,
   decideLeaveRequest,
@@ -30,6 +35,7 @@ import {
   computePerDaySalary,
   getLopDetailForUser,
   resolveSalaryAsOfDate,
+  salaryAppliesForMonth,
 } from './salaryService.js';
 
 function roundMoney(value) {
@@ -49,6 +55,7 @@ beforeEach(async () => {
   sequence += 1;
   await Promise.all([
     AttendanceRecord.deleteMany({}),
+    Holiday.deleteMany({}),
     LeaveBalance.deleteMany({}),
     LeavePolicy.deleteMany({}),
     LeaveRequest.deleteMany({}),
@@ -220,6 +227,40 @@ test('resolveSalaryAsOfDate defaults to month-end for past months', () => {
   const resolved = resolveSalaryAsOfDate('2020-06');
   assert.ok(resolved);
   assert.equal(resolved.asOfDateKey, '2020-06-30');
+});
+
+test('resolveSalaryAsOfDate defaults to today for current IST month', () => {
+  const currentMonth = getISTMonthInputValue();
+  const resolved = resolveSalaryAsOfDate(currentMonth);
+  assert.ok(resolved);
+  assert.equal(resolved.asOfDateKey, getISTDateInputValue(new Date()));
+});
+
+test('resolveSalaryAsOfDate clamps explicit asOf within month bounds', () => {
+  const resolved = resolveSalaryAsOfDate('2026-06', '2026-06-15');
+  assert.equal(resolved.asOfDateKey, '2026-06-15');
+});
+
+test('salaryAppliesForMonth — salaryEffectiveFrom blocks months before effective date', () => {
+  const monthEndMay = parseDateInputAsISTDay('2026-05-31');
+  const monthEndJun = parseDateInputAsISTDay('2026-06-30');
+  const user = {
+    monthlySalary: 30000,
+    salaryEffectiveFrom: parseDateInputAsISTDay('2026-06-15'),
+  };
+
+  assert.equal(salaryAppliesForMonth(user, monthEndMay), false);
+  assert.equal(salaryAppliesForMonth(user, monthEndJun), true);
+});
+
+test('salaryAppliesForMonth — mid-month effective date still applies for that month', () => {
+  const monthEndJun = parseDateInputAsISTDay('2026-06-30');
+  const user = {
+    monthlySalary: 30000,
+    salaryEffectiveFrom: parseDateInputAsISTDay('2026-06-16'),
+  };
+
+  assert.equal(salaryAppliesForMonth(user, monthEndJun), true);
 });
 
 // ── Integration tests (recompute on read) ─────────────────────────────
@@ -545,6 +586,83 @@ test('integration: zero-balance SL approved leave surfaces as Unpaid SL', async 
   assert.equal(unpaidRows[0].reason, 'Unpaid SL');
   assert.equal(unpaidRows[0].date, '2026-06-05');
   assert.equal(unpaidRows[0].amount, 1000);
+});
+
+test('integration: salaryEffectiveFrom excludes employee from earlier months', async () => {
+  sequence += 1;
+  const user = await User.create({
+    firstName: 'Effective',
+    lastName: 'From',
+    name: 'Effective From',
+    email: `effective.from.${sequence}@test.example`,
+    mobile: `9${String(520000000 + sequence)}`,
+    passwordHash: 'hash',
+    role: 'employee',
+    monthlySalary: 30000,
+    salaryEffectiveFrom: parseDateInputAsISTDay('2026-06-15'),
+    isActive: true,
+  });
+
+  const may = await computeMonthlySalarySummary(user, '2026-05', { asOfDate: '2026-05-31' });
+  assert.equal(may.hasSalaryConfigured, false);
+  assert.equal(may.monthlySalary, null);
+
+  await seedCheckIn(user._id, '2026-06-02');
+  const june = await computeMonthlySalarySummary(user, '2026-06', { asOfDate: '2026-06-30' });
+  assert.equal(june.hasSalaryConfigured, true);
+  assert.equal(june.monthlySalary, 30000);
+});
+
+test('integration: holiday working day excluded from LOP deductions', async () => {
+  await Holiday.create({
+    date: parseDateInputAsISTDay('2026-06-05'),
+    name: 'Company Holiday',
+    isActive: true,
+  });
+
+  const user = await seedUser(30000);
+  const summary = await computeMonthlySalarySummary(user, '2026-06', { asOfDate: '2026-06-30' });
+
+  assert.ok(
+    !(summary.lopDeductionRows ?? []).some((row) => row.date === '2026-06-05'),
+    'holiday must not produce an absent LOP row',
+  );
+  assert.ok(summary.workingDaysInMonth > 0);
+});
+
+test('integration: endingDate does not truncate salary month window in computeMonthlySalarySummary', async () => {
+  sequence += 1;
+  const user = await User.create({
+    firstName: 'Ending',
+    lastName: 'Soon',
+    name: 'Ending Soon',
+    email: `ending.soon.${sequence}@test.example`,
+    mobile: `9${String(530000000 + sequence)}`,
+    passwordHash: 'hash',
+    role: 'employee',
+    monthlySalary: 30000,
+    endingDate: parseDateInputAsISTDay('2026-06-10'),
+    isActive: true,
+  });
+
+  const summary = await computeMonthlySalarySummary(user, '2026-06', { asOfDate: '2026-06-30' });
+  const absentAfterEnding = (summary.lopDeductionRows ?? []).some((row) => row.date === '2026-06-16');
+  assert.ok(absentAfterEnding, 'current engine still evaluates LOP after endingDate');
+});
+
+test('integration: past month asOf month-end yields full-month payable vs MTD cutoff', async () => {
+  const user = await seedUser(30000);
+  await seedCheckIn(user._id, '2026-06-01');
+  await seedCheckIn(user._id, '2026-06-02');
+  await seedCheckIn(user._id, '2026-06-03');
+
+  const mtd = await computeMonthlySalarySummary(user, '2026-06', { asOfDate: '2026-06-10' });
+  const fullMonth = await computeMonthlySalarySummary(user, '2026-06', { asOfDate: '2026-06-30' });
+  const defaulted = await computeMonthlySalarySummary(user, '2026-06');
+
+  assert.ok(fullMonth.lopDeduction >= mtd.lopDeduction);
+  assert.equal(defaulted.asOfDate, fullMonth.asOfDate);
+  assert.equal(defaulted.mtdPayable, fullMonth.mtdPayable);
 });
 
 test('buildUnpaidLeaveDayMap matches quota consumption order', () => {

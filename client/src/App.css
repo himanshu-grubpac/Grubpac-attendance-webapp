@@ -4405,6 +4405,18 @@ body::-webkit-scrollbar-thumb {
   color: var(--danger, #c0392b);
 }
 
+.download-progress-modal__status {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.download-progress-modal__status .help-attachment-upload__progress-summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
 .help-ticket-hero {
   display: grid;
   gap: var(--space-3);
@@ -14673,6 +14685,26 @@ body::-webkit-scrollbar-thumb {
 
 .salary-detail__grid {
   margin: 0;
+}
+
+/* LOP / salary detail dialog — neutral chrome (no primary border glow) */
+.modal.salary-detail-modal {
+  border-color: var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal__backdrop:has(> .salary-detail-modal) {
+  animation: salary-detail-modal-backdrop-in 0.18s ease;
+}
+
+@keyframes salary-detail-modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .salary-detail-modal__body {

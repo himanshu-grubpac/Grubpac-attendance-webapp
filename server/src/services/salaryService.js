@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
+import { formatInrNumber } from '../../../shared/utils/formatInr.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -568,7 +569,7 @@ export async function computeMonthlySalarySummary(user, monthInput, options = {}
     asOfDateKey,
   });
 
-  return {
+  const summary = {
     month: monthKey,
     currency: 'INR',
     userId: user._id.toString(),
@@ -593,6 +594,17 @@ export async function computeMonthlySalarySummary(user, monthInput, options = {}
     asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
+
+  if (options.includeDayMaps) {
+    summary.dayExportContext = {
+      workingDayList,
+      attendanceCreditByDay,
+      paidLeaveByDay,
+      unpaidLeaveByDay,
+    };
+  }
+
+  return summary;
 }
 
 export async function loadSalarySubject(userId, { allowInactive = false } = {}) {
@@ -1123,7 +1135,7 @@ export async function listLopSummaries({ month, asOf, page = 1, limit = 20 }) {
   };
 }
 
-export async function listAllLopSummariesForMonth(month, asOf) {
+export async function listAllLopSummariesForMonth(month, asOf, options = {}) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -1142,7 +1154,10 @@ export async function listAllLopSummariesForMonth(month, asOf) {
     if (!salaryAppliesForMonth(employee, range.end)) {
       continue;
     }
-    summaries.push(await computeMonthlySalarySummary(employee, month, { asOfDate: asOf }));
+    summaries.push(await computeMonthlySalarySummary(employee, month, {
+      asOfDate: asOf,
+      includeDayMaps: options.includeDayMaps === true,
+    }));
   }
   return summaries;
 }
@@ -1157,18 +1172,192 @@ export async function getLopDetailForUser(actor, permissions, userId, month, asO
   return mapLopDetail(summary);
 }
 
+const EXPORT_DATE_FMT = 'dd-mm-yyyy';
+const EXPORT_DATE_HEADERS = new Set([
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Loss of pay date',
+  'Date',
+]);
+
+const ENGLISH_MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+function parseIstDateKeyToExcelDate(dateKey) {
+  if (!dateKey || typeof dateKey !== 'string') {
+    return null;
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function monthNumToEnglishName(monthNum) {
+  const num = Number(String(monthNum).padStart(2, '0'));
+  if (num >= 1 && num <= 12) {
+    return ENGLISH_MONTH_NAMES[num - 1];
+  }
+  return String(monthNum);
+}
+
+/** Split YYYY-MM into numeric year and English month name (export columns). */
+export function parseSalaryPeriodKey(periodKey) {
+  if (!periodKey || !/^\d{4}-\d{2}$/.test(periodKey)) {
+    return { year: null, monthName: '' };
+  }
+  const [year, monthNum] = periodKey.split('-');
+  return {
+    year: Number(year),
+    monthName: monthNumToEnglishName(monthNum),
+  };
+}
+
+function formatLopReasonDayLabel(days) {
+  return days === 1 ? 'day' : 'days';
+}
+
+export function formatLopReasonSummary(lopDeductionRows) {
+  const byReason = new Map();
+  for (const row of lopDeductionRows ?? []) {
+    if (!row.reason) {
+      continue;
+    }
+    const existing = byReason.get(row.reason) ?? 0;
+    byReason.set(row.reason, roundMoney(existing + (row.days ?? 0)));
+  }
+  return [...byReason.entries()]
+    .map(([reason, days]) => `${reason} (${days} ${formatLopReasonDayLabel(days)})`)
+    .join('; ');
+}
+
 export function lopDeductionRowsToExportRows(summary) {
+  const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
   const rows = [];
   for (const row of summary.lopDeductionRows ?? []) {
     rows.push({
       'Employee Name': summary.userName,
       'Employee Code': summary.employeeCode ?? '',
-      Month: summary.month,
-      'As Of Date': summary.asOfDate,
-      Date: row.date,
+      Year: Number(year),
+      Month: monthNumToEnglishName(monthNum),
+      'From Date': fromDate,
+      'To Date': toDate,
+      'Calculated as of date': asOfDate,
+      'Loss of pay date': row.date,
       Reason: row.reason,
       'Amount Deducted (INR)': row.amount,
     });
+  }
+  return rows;
+}
+
+export const LOP_BULK_OVERVIEW_HEADERS = [
+  'Employee Name',
+  'Employee Code',
+  'Year',
+  'Month',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Monthly salary',
+  'Loss of pay reason',
+  'Loss of pay till date',
+  'Month-to-date payable',
+];
+
+export const LOP_BULK_DETAILED_HEADERS = [
+  'Employee Name',
+  'Employee Code',
+  'Year',
+  'Month',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Date',
+  'Reason',
+  'Loss of pay (days)',
+  'Daily loss of pay amount',
+  'Per day salary',
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+];
+
+function lopBulkPeriodFields(summary) {
+  const [year, monthNum] = summary.month.split('-');
+  return {
+    year,
+    monthNum,
+    fromDate: `${summary.month}-01`,
+    toDate: summary.asOfDate,
+    asOfDate: summary.asOfDate,
+  };
+}
+
+export function buildLopOverviewExportRows(summaries) {
+  return summaries.map((summary) => {
+    const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
+    return {
+      'Employee Name': summary.userName,
+      'Employee Code': summary.employeeCode ?? '',
+      Year: Number(year),
+      Month: monthNumToEnglishName(monthNum),
+      'From Date': fromDate,
+      'To Date': toDate,
+      'Calculated as of date': asOfDate,
+      'Monthly salary': summary.monthlySalary ?? null,
+      'Loss of pay reason': formatLopReasonSummary(summary.lopDeductionRows),
+      'Loss of pay till date': summary.lopDeduction ?? 0,
+      'Month-to-date payable': summary.mtdPayable ?? summary.payableEstimate ?? null,
+    };
+  });
+}
+
+export function buildLopDetailedExportRows(summaries) {
+  const rows = [];
+  for (const summary of summaries) {
+    const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
+
+    for (const lopRow of summary.lopDeductionRows ?? []) {
+      if (lopRow.date > asOfDate) {
+        continue;
+      }
+
+      rows.push({
+        'Employee Name': summary.userName,
+        'Employee Code': summary.employeeCode ?? '',
+        Year: Number(year),
+        Month: monthNumToEnglishName(monthNum),
+        'From Date': fromDate,
+        'To Date': toDate,
+        'Calculated as of date': asOfDate,
+        Date: lopRow.date,
+        Reason: lopRow.reason,
+        'Loss of pay (days)': lopRow.days,
+        'Daily loss of pay amount': lopRow.amount,
+        'Per day salary': summary.perDaySalary ?? null,
+        'Monthly salary': summary.monthlySalary ?? null,
+        'Loss of pay till date': summary.lopDeduction ?? 0,
+        'Month-to-date payable': summary.mtdPayable ?? summary.payableEstimate ?? null,
+      });
+    }
   }
   return rows;
 }
@@ -1189,14 +1378,70 @@ const LOP_EXPORT_DATA_START_ROW = 6;
 export const LOP_EXPORT_HEADERS = [
   'Employee Name',
   'Employee Code',
+  'Year',
   'Month',
-  'As Of Date',
-  'Date',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Loss of pay date',
   'Reason',
   'Amount Deducted (INR)',
 ];
 
-const LOP_EXPORT_COLUMN_WIDTHS = [24, 14, 10, 12, 12, 20, 22];
+const LOP_EXPORT_COLUMN_WIDTHS = [24, 14, 8, 12, 12, 12, 18, 14, 20, 22];
+
+const INR_NUM_FMT = '#,##,##0.00';
+
+const LOP_EXPORT_MONEY_HEADERS = new Set(['Amount Deducted (INR)']);
+
+const LOP_BULK_OVERVIEW_MONEY_HEADERS = new Set([
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+]);
+
+const LOP_BULK_DETAILED_MONEY_HEADERS = new Set([
+  'Per day salary',
+  'Daily loss of pay amount',
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+]);
+
+function isNumericExportValue(value) {
+  return value !== '' && value != null && Number.isFinite(Number(value));
+}
+
+function assignExportCellValue(cell, header, value, moneyHeaders) {
+  if (moneyHeaders.has(header) && isNumericExportValue(value)) {
+    cell.value = Number(value);
+    cell.numFmt = INR_NUM_FMT;
+    return;
+  }
+  if (header === 'Year' && isNumericExportValue(value)) {
+    cell.value = Number(value);
+    cell.numFmt = '0';
+    return;
+  }
+  if (header === 'Month' && value != null && value !== '') {
+    cell.value = String(value);
+    cell.numFmt = '@';
+    return;
+  }
+  if (
+    EXPORT_DATE_HEADERS.has(header) &&
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
+    const excelDate = parseIstDateKeyToExcelDate(value);
+    if (excelDate) {
+      cell.value = excelDate;
+      cell.numFmt = EXPORT_DATE_FMT;
+      return;
+    }
+  }
+  cell.value = value ?? '';
+}
 
 function lopExportThinBorder() {
   return {
@@ -1237,7 +1482,8 @@ export async function buildLopExportWorkbook(
   {
     sheetName = 'LOP Deductions',
     subtitle = 'LOP Deduction Export',
-    instructionText = 'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30).',
+    instructionText =
+      'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30). Calculated as of date is the salary/LOP cutoff for this report; Loss of pay date is the working day each deduction applies to.',
   } = {},
 ) {
   const colCount = LOP_EXPORT_HEADERS.length;
@@ -1290,7 +1536,12 @@ export async function buildLopExportWorkbook(
   exportRows.forEach((rowObject, rowIndex) => {
     const row = sheet.getRow(LOP_EXPORT_DATA_START_ROW + rowIndex);
     LOP_EXPORT_HEADERS.forEach((header, columnIndex) => {
-      row.getCell(columnIndex + 1).value = rowObject[header] ?? '';
+      assignExportCellValue(
+        row.getCell(columnIndex + 1),
+        header,
+        rowObject[header],
+        LOP_EXPORT_MONEY_HEADERS,
+      );
     });
     styleLopExportDataRow(row, rowIndex, colCount);
   });
@@ -1308,20 +1559,190 @@ export async function buildLopExportWorkbook(
   return Buffer.from(buffer);
 }
 
+const LOP_BULK_OVERVIEW_COLUMN_WIDTHS = [24, 14, 8, 12, 12, 12, 12, 16, 28, 20, 22];
+const LOP_BULK_DETAILED_COLUMN_WIDTHS = [
+  24, 14, 8, 12, 12, 12, 12, 12, 20, 16, 20, 14, 16, 20, 22,
+];
+
+function styleLopBulkExportDataRow(row, rowIndex, colCount, rightAlignColumns = new Set()) {
+  const fill = rowIndex % 2 === 0 ? LOP_EXPORT_ROW_EVEN : LOP_EXPORT_ROW_ODD;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+    cell.border = lopExportThinBorder();
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: rightAlignColumns.has(column) ? 'right' : 'left',
+      wrapText: false,
+    };
+    cell.font = { size: 10, name: 'Calibri' };
+  }
+}
+
+function appendLopBulkExportSheet(
+  workbook,
+  {
+    sheetName,
+    headers,
+    columnWidths,
+    exportRows,
+    subtitle,
+    instructionText = 'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30).',
+    rightAlignColumns = new Set(),
+    moneyHeaders = new Set(),
+  },
+) {
+  const colCount = headers.length;
+  const sheet = workbook.addWorksheet(sheetName.slice(0, 31), {
+    views: [{ state: 'frozen', ySplit: LOP_EXPORT_SHEET_HEADER_ROW }],
+    properties: { defaultRowHeight: 18 },
+  });
+
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = LOP_EXPORT_COMPANY_NAME;
+  titleCell.font = { bold: true, size: 16, name: 'Calibri', color: { argb: LOP_EXPORT_WHITE } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_BRAND_ORANGE } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(1).height = 30;
+
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = subtitle;
+  subtitleCell.font = { bold: true, size: 11, name: 'Calibri', color: { argb: LOP_EXPORT_HEADER_DARK } };
+  subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_ROW_EVEN } };
+  subtitleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(2).height = 22;
+
+  sheet.mergeCells(3, 1, 3, colCount);
+  const instructionCell = sheet.getCell(3, 1);
+  instructionCell.value = instructionText;
+  instructionCell.font = {
+    italic: true,
+    size: 10,
+    name: 'Calibri',
+    color: { argb: LOP_EXPORT_INSTRUCTION_TEXT },
+  };
+  instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_INSTRUCTION_FILL } };
+  instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
+  sheet.getRow(3).height = 20;
+
+  sheet.getRow(4).height = 6;
+
+  const headerRow = sheet.getRow(LOP_EXPORT_SHEET_HEADER_ROW);
+  headers.forEach((header, index) => {
+    headerRow.getCell(index + 1).value = header;
+  });
+  applyLopExportHeaderStyle(headerRow, colCount);
+
+  exportRows.forEach((rowObject, rowIndex) => {
+    const row = sheet.getRow(LOP_EXPORT_DATA_START_ROW + rowIndex);
+    headers.forEach((header, columnIndex) => {
+      assignExportCellValue(
+        row.getCell(columnIndex + 1),
+        header,
+        rowObject[header],
+        moneyHeaders,
+      );
+    });
+    styleLopBulkExportDataRow(row, rowIndex, colCount, rightAlignColumns);
+  });
+
+  columnWidths.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
+
+  sheet.autoFilter = {
+    from: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: 1 },
+    to: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: colCount },
+  };
+
+  return sheet;
+}
+
+function lopBulkRightAlignColumnSet(headers, headerNames) {
+  const columns = new Set();
+  for (const headerName of headerNames) {
+    const index = headers.indexOf(headerName);
+    if (index >= 0) {
+      columns.add(index + 1);
+    }
+  }
+  return columns;
+}
+
+export async function buildLopBulkExportWorkbook(
+  overviewRows,
+  detailedRows,
+  {
+    subtitlePrefix = 'LOP Bulk Export',
+    month,
+    asOfDate,
+    employeeCount = overviewRows.length,
+  } = {},
+) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = LOP_EXPORT_COMPANY_NAME;
+  workbook.created = new Date();
+
+  const asOfLabel = asOfDate ?? month ?? '';
+  const employeeLabel = `${employeeCount} employee${employeeCount === 1 ? '' : 's'}`;
+  const overviewSubtitle = `${subtitlePrefix} — Overview — ${month} as of ${asOfLabel} — ${employeeLabel}`;
+  const detailedSubtitle = `${subtitlePrefix} — Detailed — ${month} as of ${asOfLabel} — ${detailedRows.length} deduction row${detailedRows.length === 1 ? '' : 's'}`;
+
+  appendLopBulkExportSheet(workbook, {
+    sheetName: 'Overview',
+    headers: LOP_BULK_OVERVIEW_HEADERS,
+    columnWidths: LOP_BULK_OVERVIEW_COLUMN_WIDTHS,
+    exportRows: overviewRows,
+    subtitle: overviewSubtitle,
+    rightAlignColumns: lopBulkRightAlignColumnSet(LOP_BULK_OVERVIEW_HEADERS, [
+      'Monthly salary',
+      'Loss of pay till date',
+      'Month-to-date payable',
+    ]),
+    moneyHeaders: LOP_BULK_OVERVIEW_MONEY_HEADERS,
+  });
+
+  appendLopBulkExportSheet(workbook, {
+    sheetName: 'Detailed',
+    headers: LOP_BULK_DETAILED_HEADERS,
+    columnWidths: LOP_BULK_DETAILED_COLUMN_WIDTHS,
+    exportRows: detailedRows,
+    subtitle: detailedSubtitle,
+    rightAlignColumns: lopBulkRightAlignColumnSet(LOP_BULK_DETAILED_HEADERS, [
+      'Loss of pay (days)',
+      'Per day salary',
+      'Daily loss of pay amount',
+      'Monthly salary',
+      'Loss of pay till date',
+      'Month-to-date payable',
+    ]),
+    moneyHeaders: LOP_BULK_DETAILED_MONEY_HEADERS,
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
 export function buildSalaryExportWorkbook(summaries, month) {
-  const rows = summaries.map((item) => ({
-    Month: item.month,
-    'Employee Name': item.userName,
-    'Employee Code': item.employeeCode ?? '',
-    'Monthly Salary (INR)': item.monthlySalary ?? '',
+  const rows = summaries.map((item) => {
+    const { year, monthName } = parseSalaryPeriodKey(item.month);
+    return {
+      Year: year,
+      Month: monthName,
+      'Employee Name': item.userName,
+      'Employee Code': item.employeeCode ?? '',
+    'Monthly Salary (INR)': formatInrNumber(item.monthlySalary),
     'Working Days': item.workingDaysInMonth,
     Present: item.presentDays,
     'Paid Leave': item.paidLeaveDays,
     'Payable Days': item.payableDays,
     'LOP Days': item.lopDays,
-    'Per Day (INR)': item.perDaySalary ?? '',
-    'Payable Estimate (INR)': item.payableEstimate ?? '',
-  }));
+    'Per Day (INR)': formatInrNumber(item.perDaySalary),
+    'Payable Estimate (INR)': formatInrNumber(item.payableEstimate),
+    };
+  });
 
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);

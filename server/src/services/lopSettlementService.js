@@ -210,7 +210,7 @@ export function computeLopCauses(
       const paidSlice = Math.min(perDay, quotaLeft);
       quotaLeft -= paidSlice;
 
-      // Only track LOP for days that fall within the target month.
+      // Only track LOP for working days in the target month.
       if (key >= monthStartKey && key <= monthEndKey) {
         lopDays += perDay - paidSlice;
       }
