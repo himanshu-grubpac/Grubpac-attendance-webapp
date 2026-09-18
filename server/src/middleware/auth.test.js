@@ -8,7 +8,27 @@ import {
   hasPermission,
   migrateLegacyPermissions,
 } from '../../../shared/permissions.js';
-import { resolveUserPermissions } from './auth.js';
+import { requirePermission, resolveUserPermissions } from './auth.js';
+
+function runRequirePermission(requiredPermissions, userPermissions) {
+  const middleware = requirePermission(...requiredPermissions);
+  const req = { userPermissions };
+  let statusCode = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json() {
+      return this;
+    },
+  };
+  let nextCalled = false;
+  middleware(req, res, () => {
+    nextCalled = true;
+  });
+  return { statusCode, nextCalled };
+}
 
 test('hasPermission accepts catalog slugs directly', () => {
   assert.equal(hasPermission(['portal.admin.r'], PERMISSIONS.PORTAL_ADMIN), true);
@@ -69,4 +89,19 @@ test('resolveUserPermissions returns empty array when roleId is missing', () => 
     roleId: null,
   };
   assert.deepEqual(resolveUserPermissions(user), []);
+});
+
+test('GET /admin/departments gate allows ops or team-scoped read permissions', () => {
+  const departmentListPermissions = [
+    PERMISSIONS.OPS_DEPARTMENT_R,
+    PERMISSIONS.EMPLOYEES_STATS_R,
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+    PERMISSIONS.SALARY_TEAM_AUDIT_R,
+  ];
+
+  assert.equal(runRequirePermission(departmentListPermissions, ['ops.department.r']).nextCalled, true);
+  assert.equal(runRequirePermission(departmentListPermissions, ['employees.stats.r']).nextCalled, true);
+  assert.equal(runRequirePermission(departmentListPermissions, ['employees.record.r']).nextCalled, true);
+  assert.equal(runRequirePermission(departmentListPermissions, ['salary.team_audit.r']).nextCalled, true);
+  assert.equal(runRequirePermission(departmentListPermissions, ['attendance.record.r']).nextCalled, false);
 });

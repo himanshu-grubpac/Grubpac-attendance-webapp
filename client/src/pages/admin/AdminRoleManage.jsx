@@ -203,13 +203,7 @@ export default function AdminRoleManage() {
       broadcastPermissionsSync();
       showSuccess(`Role "${validation.data.name}" updated.`);
       await refreshPermissionsIfNeeded(result.role);
-      setRole(result.role);
-      setForm({
-        name: result.role.name,
-        slug: result.role.slug,
-        description: result.role.description ?? '',
-        permissions: result.role.permissions ?? [],
-      });
+      navigate('/admin/roles');
     } catch (err) {
       setSubmitError(getErrorMessage(err));
     } finally {

@@ -83,7 +83,12 @@ router.delete('/roles/:id', requirePermission(PERMISSIONS.RBAC_ROLE_D), asyncHan
 
 router.get(
   '/departments',
-  requirePermission(PERMISSIONS.OPS_DEPARTMENT_R),
+  requirePermission(
+    PERMISSIONS.OPS_DEPARTMENT_R,
+    PERMISSIONS.EMPLOYEES_STATS_R,
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+    PERMISSIONS.SALARY_TEAM_AUDIT_R,
+  ),
   asyncHandler(listDepartments),
 );
 router.post(

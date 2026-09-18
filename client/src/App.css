@@ -15145,6 +15145,8 @@ body::-webkit-scrollbar-thumb {
 
 /* LOP / salary detail dialog — neutral chrome (no primary border glow) */
 .modal.salary-detail-modal {
+  width: min(100%, 52rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 44rem);
   border-color: var(--border);
   box-shadow: var(--shadow-lg);
 }
@@ -15166,18 +15168,58 @@ body::-webkit-scrollbar-thumb {
 .salary-detail-modal__body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
 }
 
-/*
- * The balances table wrap is a scroll container (overflow-x) inside a grid
- * (.modal__body). Scroll containers compute to minimum size 0, so without a
- * floor the wrap absorbs all shrinkage and collapses — hiding the table on
- * desktop and mobile alike. This guarantees a usable viewport; the modal
- * body keeps scrolling vertically, the wrap horizontally.
- */
-.salary-detail-modal__body > .table-wrap {
-  min-height: 12rem;
+.salary-detail-modal .salary-detail__grid {
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.65rem 1rem;
+}
+
+.salary-detail-modal__body > .label {
+  margin: 0.15rem 0 0;
+}
+
+.salary-detail-modal__table-wrap {
+  min-height: 0;
+  overflow-x: hidden;
+}
+
+.salary-detail-modal .salary-table--modal {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.salary-detail-modal .salary-table--modal th,
+.salary-detail-modal .salary-table--modal td {
+  padding-inline: 0.45rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.salary-detail-modal .salary-table--modal th {
+  font-size: 0.65rem;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.salary-detail-modal .salary-table--modal td:first-child {
+  font-weight: 600;
+}
+
+.salary-detail-modal .salary-table--modal th:first-child,
+.salary-detail-modal .salary-table--modal td:first-child {
+  width: 22%;
+}
+
+.salary-detail-modal .salary-table--modal th.salary-table__num,
+.salary-detail-modal .salary-table--modal td.salary-table__num {
+  width: 13%;
 }
 
 .salary-detail__lop-dates {

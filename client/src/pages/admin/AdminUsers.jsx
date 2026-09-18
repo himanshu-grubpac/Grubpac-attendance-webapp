@@ -206,9 +206,12 @@ function TableSkeleton() {
 
 export default function AdminUsers() {
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, hasAnyPermission } = useAuth();
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
-  const canReadAllAttendance = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canFilterByDepartment = hasAnyPermission([
+    PERMISSIONS.EMPLOYEES_STATS_R,
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+  ]);
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess } = useToast();
 
@@ -400,8 +403,9 @@ export default function AdminUsers() {
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
-      .catch(() => {
-        // Department filter remains optional.
+      .catch((err) => {
+        console.warn('Employee list: failed to load departments', getErrorMessage(err));
+        setDepartments([]);
       });
     adminApi
       .listRoles()
@@ -847,7 +851,7 @@ export default function AdminUsers() {
               }
             />
 
-            {canReadAllAttendance && (
+            {canFilterByDepartment && (
               <label className="field-inline filter-bar__field employees-toolbar__field">
                 <span className="label">Department</span>
                 <SelectField

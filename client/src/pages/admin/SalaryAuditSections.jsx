@@ -472,7 +472,10 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
-      .catch(() => setDepartments([]));
+      .catch((err) => {
+        console.warn('Salary audit: failed to load departments', getErrorMessage(err));
+        setDepartments([]);
+      });
   }, []);
 
   const departmentOptions = useMemo(

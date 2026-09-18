@@ -43,7 +43,7 @@ export default function SalaryDetailModal({
   return createPortal(
     <div className="modal__backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal modal--compact"
+        className="modal modal--wide salary-detail-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -133,8 +133,8 @@ export default function SalaryDetailModal({
               {(balances ?? []).length === 0 ? (
                 <p className="muted small">No leave balances for this year.</p>
               ) : (
-                <div className="table-wrap table-wrap--responsive salary-table-wrap">
-                  <table className="table data-table salary-table">
+                <div className="table-wrap table-wrap--fit table-wrap--responsive salary-table-wrap salary-detail-modal__table-wrap">
+                  <table className="table data-table salary-table salary-table--modal">
                     <thead>
                       <tr>
                         <th>Leave type</th>
