@@ -331,6 +331,7 @@ function MonthlyPayrollTab({
     () => summaries.find((item) => item.userId === selectedId) ?? null,
     [summaries, selectedId],
   );
+  const selectedLopTillDate = selectedSummary ? computeLopDeduction(selectedSummary) : null;
 
   const closeDetail = useCallback(() => setSelectedId(null), [setSelectedId]);
   useEscapeKey(Boolean(selectedSummary), closeDetail);
@@ -461,9 +462,9 @@ function MonthlyPayrollTab({
                     </th>
                     <th>Employee</th>
                     <th>Code</th>
-                    <th className="salary-table__num">Base salary</th>
-                    <th className="salary-table__num">LOP deduction</th>
-                    <th className="salary-table__num">Net estimate</th>
+                    <th className="salary-table__num">Monthly salary</th>
+                    <th className="salary-table__num">Loss of pay till date</th>
+                    <th className="salary-table__num">Month-to-date payable</th>
                     <th>Status</th>
                     <th className="cell-actions-col--text">Actions</th>
                   </tr>
@@ -498,13 +499,18 @@ function MonthlyPayrollTab({
                         <td data-label="Code" className="salary-table__code">
                           {item.employeeCode || '—'}
                         </td>
-                        <td data-label="Base salary" className="salary-table__num">
+                        <td data-label="Monthly salary" className="salary-table__num">
                           {formatINRCurrency(item.monthlySalary)}
+                          {item.paidDaysOutOf30 != null ? (
+                            <div className="muted small">
+                              Paid days (out of 30) {item.paidDaysOutOf30}
+                            </div>
+                          ) : null}
                         </td>
-                        <td data-label="LOP deduction" className="salary-table__num">
+                        <td data-label="Loss of pay till date" className="salary-table__num">
                           {deduction == null ? '—' : formatINRCurrency(deduction)}
                         </td>
-                        <td data-label="Net estimate" className="salary-table__num salary-table__net">
+                        <td data-label="Month-to-date payable" className="salary-table__num salary-table__net">
                           {formatINRCurrency(item.payableEstimate)}
                         </td>
                         <td data-label="Status">
@@ -535,11 +541,11 @@ function MonthlyPayrollTab({
                           {hasActiveFilters ? ' matching search' : ''})
                         </span>
                       </td>
-                      <td data-label="Base total" className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
-                      <td data-label="Deduction total" className="salary-table__num">
+                      <td data-label="Monthly salary total" className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
+                      <td data-label="Loss of pay till date total" className="salary-table__num">
                         {formatINRCurrency(footerTotals.deductionTotal)}
                       </td>
-                      <td data-label="Net total" className="salary-table__num salary-table__net">
+                      <td data-label="Month-to-date payable total" className="salary-table__num salary-table__net">
                         {formatINRCurrency(footerTotals.netTotal)}
                       </td>
                       <td colSpan={2} data-label="" aria-hidden="true" />
@@ -594,15 +600,25 @@ function MonthlyPayrollTab({
                       <dd>{selectedSummary.payableDays}</dd>
                     </div>
                     <div>
-                      <dt>LOP days</dt>
+                      <dt>Loss of pay (days)</dt>
                       <dd>{selectedSummary.lopDays}</dd>
+                    </div>
+                    <div>
+                      <dt>Paid days (out of 30)</dt>
+                      <dd>{selectedSummary.paidDaysOutOf30 ?? '—'}</dd>
                     </div>
                     <div>
                       <dt>Per day (INR)</dt>
                       <dd>{formatINRCurrency(selectedSummary.perDaySalary)}</dd>
                     </div>
                     <div>
-                      <dt>Net estimate (INR)</dt>
+                      <dt>Loss of pay till date (INR)</dt>
+                      <dd>
+                        {selectedLopTillDate == null ? '—' : formatINRCurrency(selectedLopTillDate)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Month-to-date payable (INR)</dt>
                       <dd>{formatINRCurrency(selectedSummary.payableEstimate)}</dd>
                     </div>
                   </dl>

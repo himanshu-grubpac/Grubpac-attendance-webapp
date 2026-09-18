@@ -500,7 +500,7 @@ async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
  */
 export async function getEmployeeSalaryHistory(actor, permissions, userId, options = {}) {
   const subject = await User.findById(userId)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate createdAt')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate endingDate createdAt')
     .lean();
   if (!subject) {
     throwError('Employee not found.', 404);
@@ -526,6 +526,8 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
         monthlySalary: subject.monthlySalary ?? null,
         salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
         salaryCurrency: 'INR',
+        joiningDate: subject.joiningDate ?? null,
+        endingDate: subject.endingDate ?? null,
       },
       history: [],
       inactive: true,
@@ -616,6 +618,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
       salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
       salaryCurrency: 'INR',
       joiningDate: subject.joiningDate ?? null,
+      endingDate: subject.endingDate ?? null,
       createdAt: subject.createdAt ?? null,
     },
     history,
@@ -722,17 +725,17 @@ export async function exportMonthlySalaryAudit(actor, permissions, periodKey, op
     'Department': row.departmentName ?? '',
     Year: year,
     Month: monthName,
-    'Gross Salary (INR)': formatInrNumber(row.grossSalary),
+    'Monthly salary': formatInrNumber(row.grossSalary),
     'Working Days': row.workingDays,
     'Present Days': row.presentDays,
     'Paid Leave Days': row.paidLeaveDays,
     'Payable Days': row.payableDays,
-    'LOP Days': row.lopDays,
-    'LOP Deduction (INR)': formatInrNumber(row.lopDeduction),
-    'Per Day Salary (INR)': formatInrNumber(row.perDaySalary),
+    'Loss of pay (days)': row.lopDays,
+    'Loss of pay till date': formatInrNumber(row.lopDeduction),
+    'Per day salary': formatInrNumber(row.perDaySalary),
     'Other Deductions (INR)': formatInrNumber(row.otherDeductions),
     'Total Deductions (INR)': formatInrNumber(row.totalDeductions),
-    'Net Salary (INR)': formatInrNumber(row.netSalary),
+    'Month-to-date payable': formatInrNumber(row.netSalary),
     'Transfer Status': row.transferStatus ?? '',
     'Status': row.status,
     };

@@ -26,6 +26,7 @@ export default function LopDetailModal({
   yearOptions,
   monthOptions,
   onMonthChange,
+  onDetailLoaded,
   onClose,
 }) {
   const titleId = useId();
@@ -56,13 +57,14 @@ export default function LopDetailModal({
     try {
       const data = await salaryApi.getLopDetail(userId, { month, asOf });
       setDetail(data);
+      onDetailLoaded?.(data);
     } catch (err) {
       setDetail(null);
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [asOf, month, userId]);
+  }, [asOf, month, onDetailLoaded, userId]);
 
   useEffect(() => {
     if (!open) {
@@ -127,6 +129,19 @@ export default function LopDetailModal({
           </div>
 
           {error ? <div className="alert alert--error">{error}</div> : null}
+
+          {!loading && detail ? (
+            <dl className="detail-list detail-list--grid salary-detail__grid">
+              <div>
+                <dt>Paid days (out of 30)</dt>
+                <dd>{detail.paidDaysOutOf30 ?? '—'}</dd>
+              </div>
+              <div>
+                <dt>Loss of pay (days)</dt>
+                <dd>{detail.totalLopDays ?? '—'}</dd>
+              </div>
+            </dl>
+          ) : null}
 
           {loading ? (
             <TableSkeleton />

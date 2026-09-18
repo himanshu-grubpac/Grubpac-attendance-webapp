@@ -577,6 +577,8 @@ export async function computeMonthlySalarySummary(user, monthInput, options = {}
     employeeCode: user.employeeCode ?? null,
     monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
+    joiningDate: user.joiningDate ?? null,
+    endingDate: user.endingDate ?? null,
     workingDaysInMonth,
     presentDays: mtdMetrics.presentDays,
     paidLeaveDays: mtdMetrics.paidLeaveDays,
@@ -1058,6 +1060,12 @@ export function mapLopDetail(summary) {
     name: summary.userName,
     month: summary.month,
     asOfDate: summary.asOfDate,
+    joiningDate: summary.joiningDate
+      ? getISTDateInputValue(new Date(summary.joiningDate))
+      : null,
+    endingDate: summary.endingDate
+      ? getISTDateInputValue(new Date(summary.endingDate))
+      : null,
     totalLopDays: summary.lopDays,
     paidDaysOutOf30: summary.paidDaysOutOf30,
     salaryDaysDivisor: summary.salaryDaysDivisor ?? SALARY_DAYS_DIVISOR,
@@ -1728,19 +1736,26 @@ export async function buildLopBulkExportWorkbook(
 export function buildSalaryExportWorkbook(summaries, month) {
   const rows = summaries.map((item) => {
     const { year, monthName } = parseSalaryPeriodKey(item.month);
+    const lopTillDate =
+      item.lopDeduction ??
+      (item.monthlySalary != null && item.payableEstimate != null
+        ? roundMoney(Math.max(0, item.monthlySalary - item.payableEstimate))
+        : null);
     return {
       Year: year,
       Month: monthName,
       'Employee Name': item.userName,
       'Employee Code': item.employeeCode ?? '',
-    'Monthly Salary (INR)': formatInrNumber(item.monthlySalary),
-    'Working Days': item.workingDaysInMonth,
-    Present: item.presentDays,
-    'Paid Leave': item.paidLeaveDays,
-    'Payable Days': item.payableDays,
-    'LOP Days': item.lopDays,
-    'Per Day (INR)': formatInrNumber(item.perDaySalary),
-    'Payable Estimate (INR)': formatInrNumber(item.payableEstimate),
+      'Monthly salary': formatInrNumber(item.monthlySalary),
+      'Working Days': item.workingDaysInMonth,
+      Present: item.presentDays,
+      'Paid Leave': item.paidLeaveDays,
+      'Payable Days': item.payableDays,
+      'Loss of pay (days)': item.lopDays,
+      'Paid days (out of 30)': item.paidDaysOutOf30,
+      'Per day salary': formatInrNumber(item.perDaySalary),
+      'Loss of pay till date': formatInrNumber(lopTillDate),
+      'Month-to-date payable': formatInrNumber(item.payableEstimate),
     };
   });
 

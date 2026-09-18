@@ -629,17 +629,17 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
     'Employee Name': auditRow.employeeName,
     'Department': auditRow.departmentName ?? '',
     'Month': auditRow.periodKey,
-    'Gross Salary (INR)': auditRow.grossSalary,
+    'Monthly salary': auditRow.grossSalary,
     'Working Days': auditRow.workingDays,
     'Present Days': auditRow.presentDays,
     'Paid Leave Days': auditRow.paidLeaveDays,
     'Payable Days': auditRow.payableDays,
-    'LOP Days': auditRow.lopDays,
-    'LOP Deduction (INR)': auditRow.lopDeduction,
-    'Per Day Salary (INR)': auditRow.perDaySalary ?? '',
+    'Loss of pay (days)': auditRow.lopDays,
+    'Loss of pay till date': auditRow.lopDeduction,
+    'Per day salary': auditRow.perDaySalary ?? '',
     'Other Deductions (INR)': auditRow.otherDeductions,
     'Total Deductions (INR)': auditRow.totalDeductions,
-    'Net Salary (INR)': auditRow.netSalary ?? '',
+    'Month-to-date payable': auditRow.netSalary ?? '',
     'Transfer Status': auditRow.transferStatus ?? '',
     'Status': auditRow.status,
   };
@@ -649,17 +649,17 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
   assert.equal(exportRow['Employee Name'], auditRow.employeeName);
   assert.equal(exportRow['Department'], auditRow.departmentName);
   assert.equal(exportRow['Month'], auditRow.periodKey);
-  assert.equal(exportRow['Gross Salary (INR)'], auditRow.grossSalary);
+  assert.equal(exportRow['Monthly salary'], auditRow.grossSalary);
   assert.equal(exportRow['Working Days'], auditRow.workingDays);
   assert.equal(exportRow['Present Days'], auditRow.presentDays);
   assert.equal(exportRow['Paid Leave Days'], auditRow.paidLeaveDays);
   assert.equal(exportRow['Payable Days'], auditRow.payableDays);
-  assert.equal(exportRow['LOP Days'], auditRow.lopDays);
-  assert.equal(exportRow['LOP Deduction (INR)'], auditRow.lopDeduction);
-  assert.equal(exportRow['Per Day Salary (INR)'], auditRow.perDaySalary);
+  assert.equal(exportRow['Loss of pay (days)'], auditRow.lopDays);
+  assert.equal(exportRow['Loss of pay till date'], auditRow.lopDeduction);
+  assert.equal(exportRow['Per day salary'], auditRow.perDaySalary);
   assert.equal(exportRow['Other Deductions (INR)'], auditRow.otherDeductions);
   assert.equal(exportRow['Total Deductions (INR)'], auditRow.totalDeductions);
-  assert.equal(exportRow['Net Salary (INR)'], auditRow.netSalary);
+  assert.equal(exportRow['Month-to-date payable'], auditRow.netSalary);
   assert.equal(exportRow['Transfer Status'], auditRow.transferStatus);
   assert.equal(exportRow['Status'], auditRow.status);
 });
@@ -680,24 +680,24 @@ test('claim6: export handles inconsistent rows — netSalary shows empty string'
   };
 
   const exportRow = {
-    'Net Salary (INR)': auditRow.netSalary ?? '',
+    'Month-to-date payable': auditRow.netSalary ?? '',
     'Status': auditRow.status,
   };
 
-  assert.equal(exportRow['Net Salary (INR)'], ''); // null → empty string
+  assert.equal(exportRow['Month-to-date payable'], ''); // null → empty string
   assert.equal(exportRow['Status'], 'inconsistent');
 });
 
 test('claim6: export column count matches audit row field count', () => {
   // Export has exactly 17 columns
   const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Month',
-    'Gross Salary (INR)', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Payable Days', 'LOP Days', 'LOP Deduction (INR)', 'Per Day Salary (INR)',
-    'Other Deductions (INR)', 'Total Deductions (INR)', 'Net Salary (INR)',
+    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month',
+    'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
+    'Payable Days', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
+    'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
     'Transfer Status', 'Status',
   ];
-  assert.equal(exportColumns.length, 17);
+  assert.equal(exportColumns.length, 18);
 
   // Audit row has 20 fields (3 extra: employeeId, department, departmentName, hasSalaryConfigured)
   // Export drops employeeId and raw department, keeps departmentName

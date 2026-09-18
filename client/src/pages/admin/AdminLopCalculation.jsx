@@ -6,6 +6,7 @@ import {
   buildSalaryMonthOptions,
   buildSalaryYearOptions,
   clampMonthPartForYear,
+  clampMonthValue,
   clampYearToCurrentIst,
   formatMonthLabel,
   getTodayMonthIst,
@@ -109,6 +110,7 @@ export default function AdminLopCalculation() {
   const isDownloading = downloadModal.open;
   const [detailTarget, setDetailTarget] = useState(null);
   const [detailMonth, setDetailMonth] = useState(null);
+  const [detailBounds, setDetailBounds] = useState(null);
 
   const handleYearChange = useCallback((value) => {
     const nextYear = clampYearToCurrentIst(value);
@@ -201,13 +203,25 @@ export default function AdminLopCalculation() {
   );
 
   const handleDetailMonthChange = useCallback((year, monthPart) => {
-    const nextYear = clampYearToCurrentIst(year);
-    setDetailMonth(toMonthFilterValue(nextYear, clampMonthPartForYear(nextYear, monthPart)));
-  }, []);
+    const nextYear = clampYearToCurrentIst(year, detailBounds);
+    setDetailMonth(
+      toMonthFilterValue(nextYear, clampMonthPartForYear(nextYear, monthPart, detailBounds)),
+    );
+  }, [detailBounds]);
+
+  const handleDetailLoaded = useCallback((detail) => {
+    const bounds = {
+      joiningDate: detail?.joiningDate ?? null,
+      endingDate: detail?.endingDate ?? null,
+    };
+    setDetailBounds(bounds);
+    setDetailMonth((current) => clampMonthValue(current ?? month, bounds));
+  }, [month]);
 
   const openDetail = useCallback(
     (row) => {
       setDetailTarget({ userId: row.userId, name: row.name });
+      setDetailBounds(null);
       setDetailMonth(month);
     },
     [month],
@@ -216,12 +230,20 @@ export default function AdminLopCalculation() {
   const closeDetail = useCallback(() => {
     setDetailTarget(null);
     setDetailMonth(null);
+    setDetailBounds(null);
   }, []);
 
   const activeDetailMonth = detailMonth ?? month;
   const detailAsOf = useMemo(() => resolveAsOfForMonth(activeDetailMonth), [activeDetailMonth]);
   const detailYear = activeDetailMonth.split('-')[0];
-  const detailMonthOptions = useMemo(() => buildSalaryMonthOptions(detailYear), [detailYear]);
+  const detailYearOptions = useMemo(
+    () => buildSalaryYearOptions(detailBounds),
+    [detailBounds],
+  );
+  const detailMonthOptions = useMemo(
+    () => buildSalaryMonthOptions(detailYear, detailBounds),
+    [detailBounds, detailYear],
+  );
 
   /** Server asOfDate after load; client asOf until first response — both from IST helpers, never hardcoded. */
   const viewingDateLabel = formatISTDate(responseAsOfDate ?? asOf);
@@ -298,6 +320,7 @@ export default function AdminLopCalculation() {
                     </th>
                     <th>Employee name</th>
                     <th className="salary-table__num">Monthly salary</th>
+                    <th className="salary-table__num">Paid days (out of 30)</th>
                     <th className="salary-table__num">Month-to-date payable</th>
                     <th className="cell-actions-col--text">Loss of Pay</th>
                   </tr>
@@ -329,6 +352,9 @@ export default function AdminLopCalculation() {
                         </td>
                         <td data-label="Monthly salary" className="salary-table__num">
                           {formatINRCurrency(row.totalSalary)}
+                        </td>
+                        <td data-label="Paid days (out of 30)" className="salary-table__num">
+                          {row.paidDaysOutOf30 ?? '—'}
                         </td>
                         <td data-label="Month-to-date payable" className="salary-table__num salary-table__net">
                           {formatINRCurrency(row.mtdPayable)}
@@ -382,9 +408,10 @@ export default function AdminLopCalculation() {
         employeeName={detailTarget?.name ?? null}
         month={activeDetailMonth}
         asOf={detailAsOf}
-        yearOptions={yearOptions}
+        yearOptions={detailYearOptions}
         monthOptions={detailMonthOptions}
         onMonthChange={handleDetailMonthChange}
+        onDetailLoaded={handleDetailLoaded}
         onClose={closeDetail}
       />
     </div>

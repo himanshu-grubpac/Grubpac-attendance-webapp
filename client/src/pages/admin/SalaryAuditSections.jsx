@@ -168,7 +168,34 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     [employees],
   );
 
-  const historyYearOptions = useMemo(() => buildSalaryYearOptions(), [year]);
+  const historyEmployeeBounds = useMemo(() => {
+    if (fixedUserId && user) {
+      return {
+        joiningDate: user.joiningDate ?? null,
+        endingDate: user.endingDate ?? null,
+      };
+    }
+    if (history?.employee) {
+      return {
+        joiningDate: history.employee.joiningDate ?? null,
+        endingDate: history.employee.endingDate ?? null,
+      };
+    }
+    return null;
+  }, [fixedUserId, history?.employee, user]);
+
+  const historyYearOptions = useMemo(
+    () => buildSalaryYearOptions(historyEmployeeBounds),
+    [historyEmployeeBounds, year],
+  );
+
+  useEffect(() => {
+    if (!historyEmployeeBounds) return;
+    const clampedYear = clampYearToCurrentIst(year, historyEmployeeBounds);
+    if (clampedYear !== year) {
+      setYear(clampedYear);
+    }
+  }, [historyEmployeeBounds, year]);
 
   const rows = history?.history ?? [];
 

@@ -296,12 +296,31 @@ test('getLopDetail returns deductions only without payable total', async () => {
   assert.equal(detail.userId, employee._id.toString());
   assert.equal(detail.name, 'Lop Employee');
   assert.equal(detail.month, MONTH);
+  assert.equal(detail.joiningDate, null);
+  assert.equal(detail.endingDate, null);
   assert.ok(Array.isArray(detail.deductions));
   assert.ok(detail.deductions.length >= 1);
   assert.ok(detail.deductions.every((row) => row.date && row.reason && row.amountDeducted != null));
   assert.equal(Object.hasOwn(detail, 'mtdPayable'), false);
   assert.equal(Object.hasOwn(detail, 'payableEstimate'), false);
   assert.equal(Object.hasOwn(detail, 'totalSalary'), false);
+});
+
+test('getLopDetail returns joiningDate and endingDate for employee period bounds', async () => {
+  employee.joiningDate = parseDateInputAsISTDay('2026-06-15');
+  employee.endingDate = parseDateInputAsISTDay('2026-08-31');
+  await employee.save();
+
+  const detail = await getLopDetailForUser(
+    adminUser,
+    adminPermissions,
+    employee._id.toString(),
+    MONTH,
+    '2026-06-30',
+  );
+
+  assert.equal(detail.joiningDate, '2026-06-15');
+  assert.equal(detail.endingDate, '2026-08-31');
 });
 
 test('getLopDetailHandler happy path via controller', async () => {

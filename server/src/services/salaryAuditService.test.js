@@ -238,15 +238,15 @@ test('history and audit produce identical rows for same employee/month', () => {
 
 test('export columns include transferStatus', () => {
   const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Month',
-    'Gross Salary (INR)', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Payable Days', 'LOP Days', 'LOP Deduction (INR)', 'Per Day Salary (INR)',
-    'Other Deductions (INR)', 'Total Deductions (INR)', 'Net Salary (INR)',
+    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month',
+    'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
+    'Payable Days', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
+    'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
     'Transfer Status', 'Status',
   ];
 
   assert.ok(exportColumns.includes('Transfer Status'));
-  assert.equal(exportColumns.length, 17);
+  assert.equal(exportColumns.length, 18);
 });
 
 test('empty audit returns valid structure with zero totals', () => {
