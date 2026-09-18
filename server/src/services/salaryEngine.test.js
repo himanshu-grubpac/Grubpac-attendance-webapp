@@ -26,6 +26,7 @@ import {
   computeLopDeductionRows,
   computeMtdSalaryMetrics,
   computeMonthlySalarySummary,
+  computePayableFromSalaryPool,
   computePerDaySalary,
   getLopDetailForUser,
   resolveSalaryAsOfDate,
@@ -165,6 +166,35 @@ test('computeLopDeductionRows — unpaid leave includes type label', () => {
   assert.equal(rows[0].amount, 1066.67);
 });
 
+test('computePayableFromSalaryPool — Mohit example: ₹30,000, 4 LOP days → ₹26,000, 26 paid days', () => {
+  const perDay = 1000;
+  const pool = computePayableFromSalaryPool(30000, 4, 4 * perDay);
+
+  assert.equal(pool.paidDaysOutOf30, 26);
+  assert.equal(pool.payableEstimate, 26000);
+  assert.equal(pool.payableFromPool, 26000);
+  assert.equal(pool.perDaySalary, 1000);
+});
+
+test('computeMtdSalaryMetrics — 30-day pool payable matches deduction sum', () => {
+  const metrics = computeMtdSalaryMetrics({
+    monthlySalary: 30000,
+    workingDayList: ['2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05'],
+    attendanceCreditByDay: new Map(),
+    paidLeaveByDay: new Map(),
+    unpaidLeaveByDay: new Map(),
+    asOfDateKey: '2026-06-30',
+  });
+
+  assert.equal(metrics.lopDays, 4);
+  assert.equal(metrics.paidDaysOutOf30, 26);
+  assert.equal(metrics.payableEstimate, 26000);
+  assert.equal(metrics.salaryDaysDivisor, 30);
+  assert.equal(metrics.maxLopDaysPossible, 4);
+  assert.equal(metrics.lopDeduction, 4000);
+  assert.equal(metrics.payableEstimate, roundMoney(30000 - metrics.lopDeduction));
+});
+
 test('computeMtdSalaryMetrics — MTD cutoff excludes deductions after asOfDate', () => {
   const perDay = 1000;
   const metrics = computeMtdSalaryMetrics({
@@ -193,6 +223,62 @@ test('resolveSalaryAsOfDate defaults to month-end for past months', () => {
 });
 
 // ── Integration tests (recompute on read) ─────────────────────────────
+
+test('integration: Mohit example — 4 full LOP days → payable ₹26,000, paidDaysOutOf30 26', async () => {
+  const user = await seedUser(30000);
+  const absentDays = new Set(['2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05']);
+
+  for (let day = 1; day <= 30; day += 1) {
+    const dayKey = `2026-06-${String(day).padStart(2, '0')}`;
+    if (!absentDays.has(dayKey)) {
+      await seedCheckIn(user._id, dayKey);
+    }
+  }
+
+  const summary = await computeMonthlySalarySummary(user, '2026-06', {
+    asOfDate: '2026-06-30',
+  });
+
+  assert.equal(summary.perDaySalary, 1000);
+  assert.equal(summary.lopDays, 4);
+  assert.equal(summary.paidDaysOutOf30, 26);
+  assert.equal(summary.payableEstimate, 26000);
+  assert.equal(summary.mtdPayable, 26000);
+  assert.equal(summary.salaryDaysDivisor, 30);
+  assert.ok(summary.lopDays <= summary.maxLopDaysPossible);
+});
+
+test('integration: full attendance on all working days → full monthly salary', async () => {
+  const user = await seedUser(30000);
+
+  for (let day = 1; day <= 30; day += 1) {
+    const dayKey = `2026-06-${String(day).padStart(2, '0')}`;
+    await seedCheckIn(user._id, dayKey);
+  }
+
+  const summary = await computeMonthlySalarySummary(user, '2026-06', {
+    asOfDate: '2026-06-30',
+  });
+
+  assert.equal(summary.lopDays, 0);
+  assert.equal(summary.paidDaysOutOf30, 30);
+  assert.equal(summary.payableEstimate, 30000);
+  assert.equal(summary.lopDeduction, 0);
+  assert.ok(summary.maxLopDaysPossible > 0);
+});
+
+test('integration: LOP days never exceed working days in month (maxLopDaysPossible cap)', async () => {
+  const user = await seedUser(30000);
+  const summary = await computeMonthlySalarySummary(user, '2026-06', {
+    asOfDate: '2026-06-30',
+  });
+
+  assert.ok(summary.maxLopDaysPossible > 0);
+  assert.ok(summary.maxLopDaysPossible <= 31);
+  assert.equal(summary.lopDays, summary.maxLopDaysPossible);
+  assert.equal(summary.paidDaysOutOf30, roundMoney(30 - summary.maxLopDaysPossible));
+  assert.equal(summary.payableEstimate, roundMoney(30000 - summary.lopDeduction));
+});
 
 test('integration: absent + half day + MTD payable formula', async () => {
   const user = await seedUser(32000);
@@ -390,6 +476,32 @@ test('integration: leave apply → approve → LOP detail shows Unpaid CL', asyn
   const unpaidRow = detail.deductions.find((row) => row.reason === 'Unpaid CL' && row.date === dayKey);
   assert.ok(unpaidRow, 'approved overdrawn CL must appear as Unpaid CL in LOP detail');
   assert.equal(unpaidRow.amountDeducted, 1000);
+});
+
+test('integration: day 31 absent produces LOP like any working day', async () => {
+  const user = await seedUser(30000);
+  await seedCheckIn(user._id, '2026-03-30');
+  // 2026-03-31 is Tuesday — absent
+
+  const summary = await computeMonthlySalarySummary(user, '2026-03', {
+    asOfDate: '2026-03-31',
+  });
+
+  const day31Row = (summary.lopDeductionRows ?? []).find((row) => row.date === '2026-03-31');
+  assert.ok(day31Row, 'day 31 absent must deduct LOP');
+  assert.equal(day31Row.amount, 1000);
+});
+
+test('integration: day 31 present counts as attendance credit', async () => {
+  const user = await seedUser(30000);
+  await seedCheckIn(user._id, '2026-03-31');
+
+  const summary = await computeMonthlySalarySummary(user, '2026-03', {
+    asOfDate: '2026-03-31',
+  });
+
+  assert.equal(summary.presentDays, 1);
+  assert.ok(!(summary.lopDeductionRows ?? []).some((row) => row.date === '2026-03-31'));
 });
 
 test('integration: zero-balance SL approved leave surfaces as Unpaid SL', async () => {

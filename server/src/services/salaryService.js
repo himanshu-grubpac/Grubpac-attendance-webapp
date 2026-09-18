@@ -384,7 +384,28 @@ export function computeLopDeductionRows({
 }
 
 /**
- * Pure MTD salary metrics — payable = monthlySalary − sum(LOP deductions through asOfDate).
+ * Resolves payable from the fixed 30-day salary pool.
+ * Deduction sum is the rounding source of truth; paidDaysOutOf30 is the pool view.
+ */
+export function computePayableFromSalaryPool(monthlySalary, lopDays, lopDeductionTotal) {
+  if (monthlySalary == null || monthlySalary <= 0) {
+    return { paidDaysOutOf30: null, payableEstimate: null };
+  }
+
+  const perDaySalary = computePerDaySalary(monthlySalary);
+  const paidDaysOutOf30 = roundMoney(Math.max(0, SALARY_DAYS_DIVISOR - (lopDays ?? 0)));
+  const payableFromPool = roundMoney(paidDaysOutOf30 * perDaySalary);
+  const payableFromDeductions = roundMoney(monthlySalary - (lopDeductionTotal ?? 0));
+
+  // Deduction rows use monthlySalary/30 per fraction — keep that as payable source of truth.
+  const payableEstimate = payableFromDeductions;
+
+  return { paidDaysOutOf30, payableEstimate, payableFromPool, perDaySalary };
+}
+
+/**
+ * Pure MTD salary metrics — 30-day pool with LOP on working days only through asOfDate.
+ * payableEstimate = monthlySalary − sum(LOP deductions) ≡ (30 − lopDays) × perDay when aligned.
  */
 export function computeMtdSalaryMetrics({
   monthlySalary,
@@ -394,8 +415,8 @@ export function computeMtdSalaryMetrics({
   unpaidLeaveByDay,
   asOfDateKey,
 }) {
-  const perDaySalary = computePerDaySalary(monthlySalary);
   const mtdWorkingDays = workingDayList.filter((day) => day <= asOfDateKey);
+  const maxLopDaysPossible = mtdWorkingDays.length;
 
   const lopDeductionRows = computeLopDeductionRows({
     workingDayList,
@@ -409,8 +430,11 @@ export function computeMtdSalaryMetrics({
   const lopDeductionTotal = roundMoney(lopDeductionRows.reduce((sum, row) => sum + row.amount, 0));
   const lopDeduction = monthlySalary != null ? lopDeductionTotal : null;
   const lopDays = roundMoney(lopDeductionRows.reduce((sum, row) => sum + row.days, 0));
-  const payableEstimate =
-    monthlySalary != null ? roundMoney(monthlySalary - lopDeductionTotal) : null;
+
+  const pool = computePayableFromSalaryPool(monthlySalary, lopDays, lopDeductionTotal);
+  const perDaySalary = pool.perDaySalary ?? computePerDaySalary(monthlySalary);
+  const paidDaysOutOf30 = pool.paidDaysOutOf30;
+  const payableEstimate = pool.payableEstimate;
 
   const presentDays = roundMoney(
     mtdWorkingDays.reduce((total, day) => total + (attendanceCreditByDay.get(day) ?? 0), 0),
@@ -436,6 +460,9 @@ export function computeMtdSalaryMetrics({
     payableEstimate,
     lopDeduction,
     lopDays,
+    paidDaysOutOf30,
+    salaryDaysDivisor: SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible,
     lopDeductionRows,
     lopDates,
     presentDays,
@@ -463,9 +490,12 @@ export function computeDailyCappedPayableDays(workingDayList, attendanceCreditBy
 /**
  * Monthly salary impact — recompute-on-read from attendance + leave source of truth.
  *
- * perDaySalary    = monthlySalary / 30 (fixed 30-day month).
- * payableEstimate = monthlySalary − sum(LOP deductions from month start through asOfDate).
- * LOP reasons     = Absent (100%), Half day (50%), Unpaid {type} (100% per unpaid fraction).
+ * perDaySalary       = monthlySalary / 30 (fixed 30-day salary pool).
+ * working days       = IST Mon–Fri minus holidays; LOP applies only on these days.
+ * paidDaysOutOf30    = max(0, 30 − lopDays) where lopDays sums fractional LOP through asOfDate.
+ * payableEstimate    = monthlySalary − sum(LOP deductions) ≡ paidDaysOutOf30 × perDay when aligned.
+ * maxLopDaysPossible = working days in month through asOfDate (LOP cannot exceed this count).
+ * LOP reasons        = Absent (100%), Half day (50%), Unpaid {type} (100% per unpaid fraction).
  *
  * @param {object} user
  * @param {string} monthInput - YYYY-MM
@@ -557,6 +587,9 @@ export async function computeMonthlySalarySummary(user, monthInput, options = {}
     perDaySalary: mtdMetrics.perDaySalary,
     payableEstimate: mtdMetrics.payableEstimate,
     mtdPayable: mtdMetrics.mtdPayable,
+    paidDaysOutOf30: mtdMetrics.paidDaysOutOf30,
+    salaryDaysDivisor: mtdMetrics.salaryDaysDivisor,
+    maxLopDaysPossible: mtdMetrics.maxLopDaysPossible,
     asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
@@ -998,6 +1031,10 @@ export function mapLopListRow(summary) {
     totalSalary: summary.monthlySalary,
     mtdPayable: summary.mtdPayable,
     totalLopDeduction: summary.lopDeduction,
+    lopDays: summary.lopDays,
+    paidDaysOutOf30: summary.paidDaysOutOf30,
+    salaryDaysDivisor: summary.salaryDaysDivisor ?? SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible: summary.maxLopDaysPossible,
     asOfDate: summary.asOfDate,
     hasLop: (summary.lopDeduction ?? 0) > 0,
   };
@@ -1009,6 +1046,10 @@ export function mapLopDetail(summary) {
     name: summary.userName,
     month: summary.month,
     asOfDate: summary.asOfDate,
+    totalLopDays: summary.lopDays,
+    paidDaysOutOf30: summary.paidDaysOutOf30,
+    salaryDaysDivisor: summary.salaryDaysDivisor ?? SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible: summary.maxLopDaysPossible,
     deductions: (summary.lopDeductionRows ?? []).map((row) => ({
       date: row.date,
       reason: row.reason,
@@ -1071,6 +1112,7 @@ export async function listLopSummaries({ month, asOf, page = 1, limit = 20 }) {
   return {
     month,
     asOfDate: resolved?.asOfDateKey ?? null,
+    salaryDaysDivisor: SALARY_DAYS_DIVISOR,
     employees: rows,
     pagination: {
       page,

@@ -191,9 +191,10 @@ export default function AdminLopCalculation() {
   return (
     <div className="page page--salary">
       <p className="salary-disclaimer muted small">
-        Month-to-date payable after LOP deductions, as of {viewingDateLabel}. Per-day rate uses a
-        fixed 30-day month (monthly salary ÷ 30). LOP detail shows deductions only — no payable
-        total on that screen.
+        Month-to-date payable after LOP deductions, as of {viewingDateLabel}. Salary is spread
+        across a fixed 30-day pool (monthly salary ÷ 30). LOP applies only on working days
+        (Mon–Fri minus holidays) for absent, half-day, or unpaid leave — weekends and holidays
+        are paid. LOP detail shows deductions only — no payable total on that screen.
       </p>
 
       <section className="salary-panel card card--table" aria-label="Salary calculation and LOP">
