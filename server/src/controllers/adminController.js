@@ -85,6 +85,7 @@ import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.
 const attendanceQuerySchema = paginationSchema
   .extend({
     userId: objectIdSchema.optional(),
+    departmentId: objectIdSchema.optional(),
     date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD.')
@@ -92,6 +93,14 @@ const attendanceQuerySchema = paginationSchema
     weekStart: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.')
+      .optional(),
+    dateFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'dateFrom must be YYYY-MM-DD.')
+      .optional(),
+    dateTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'dateTo must be YYYY-MM-DD.')
       .optional(),
     search: z.string().trim().max(100).optional(),
     type: z.enum(['check_in', 'check_out']).optional(),
@@ -596,10 +605,7 @@ export async function updateEmployee(req, res) {
   }
 
   // Auto-deactivate if ending date is in the past.
-  const effectiveEndingDate = parsed.endingDate !== undefined
-    ? employee.endingDate
-    : employee.endingDate;
-  if (effectiveEndingDate && new Date(effectiveEndingDate) < new Date()) {
+  if (employee.endingDate && new Date(employee.endingDate) < new Date()) {
     employee.isActive = false;
   }
 
@@ -807,6 +813,16 @@ export async function bulkUploadEmployees(req, res) {
     fileName: req.file.originalname,
     changes,
   });
+
+  const affectedUserIds = changes
+    .filter((c) => c.id)
+    .map((c) => c.id);
+  if (affectedUserIds.length > 0) {
+    await User.updateMany(
+      { _id: { $in: affectedUserIds } },
+      { $set: { lastBulkImportAt: new Date(), lastBulkImportBy: req.user._id } },
+    );
+  }
 
   delete result.createdEmployees;
   res.status(201).json({ summary: result.summary, results: changes });
@@ -1036,7 +1052,7 @@ export async function getQuarterWarningSummary(req, res) {
 }
 
 export async function resetQuarterWarnings(req, res) {
-  const { userIds } = resetQuarterWarningsSchema.parse(req.body);
+  const { userIds, reason } = resetQuarterWarningsSchema.parse(req.body);
 
   const scopedIds = await resolveTeamScopedUserIds(
     req.user,
@@ -1063,6 +1079,11 @@ export async function resetQuarterWarnings(req, res) {
     quarter: result.quarter?.label ?? null,
     clearedWarnings: result.clearedWarnings,
     reclassifiedLv: result.reclassifiedLv,
+    clearedRecordIds: result.clearedRecordIds,
+    reclassifiedRecordIds: result.reclassifiedRecordIds,
+    reason: reason || undefined,
+    before: result.before,
+    after: result.after,
   });
 
   res.json(result);

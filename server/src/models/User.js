@@ -69,6 +69,8 @@ const userSchema = new mongoose.Schema(
     /** Incremented to invalidate outstanding JWT sessions (logout / password change). */
     tokenVersion: { type: Number, default: 0, min: 0 },
     lastLoginAt: { type: Date, default: null },
+    lastBulkImportAt: { type: Date, default: null },
+    lastBulkImportBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true },

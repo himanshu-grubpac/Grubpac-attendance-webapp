@@ -270,6 +270,13 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
     timestamp: { $gte: quarterInfo.start, $lte: quarterInfo.end },
   };
 
+  const warningRecordsBefore = await AttendanceRecord.find({
+    ...baseMatch,
+    warningIssued: true,
+  })
+    .select('_id userId warningIssued quarterWarningIndex')
+    .lean();
+
   const warningResult = await AttendanceRecord.updateMany(
     { ...baseMatch, warningIssued: true },
     { $set: { warningIssued: false, quarterWarningIndex: null } },
@@ -279,7 +286,7 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
     ...baseMatch,
     attendanceTag: 'LV',
   })
-    .select('_id timestamp')
+    .select('_id timestamp userId attendanceTag')
     .lean();
 
   const lvIdsToPresent = lvRecords
@@ -287,6 +294,7 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
     .map((record) => record._id);
 
   let reclassifiedLv = 0;
+  const reclassifiedRecordIds = [];
   if (lvIdsToPresent.length) {
     const lvResult = await AttendanceRecord.updateMany(
       { _id: { $in: lvIdsToPresent } },
@@ -299,13 +307,26 @@ export async function resetQuarterWarningsForUsers(userIds, referenceDate = new 
       },
     );
     reclassifiedLv = lvResult.modifiedCount ?? 0;
+    reclassifiedRecordIds.push(...lvIdsToPresent.map((id) => id.toString()));
   }
+
+  const clearedRecordIds = warningRecordsBefore.map((r) => r._id.toString());
 
   return {
     quarter: quarterInfo,
     clearedWarnings: warningResult.modifiedCount ?? 0,
     reclassifiedLv,
     userIds: uniqueIds,
+    clearedRecordIds,
+    reclassifiedRecordIds,
+    before: {
+      warningCount: warningRecordsBefore.length,
+      lvCount: lvIdsToPresent.length,
+    },
+    after: {
+      warningCount: 0,
+      lvCount: reclassifiedLv,
+    },
   };
 }
 

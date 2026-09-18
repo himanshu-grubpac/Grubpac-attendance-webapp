@@ -374,7 +374,7 @@ export async function getSalarySummaryForUser(actor, permissions, userId, month)
   return { summary };
 }
 
-export async function listSalarySummariesForMonth(month) {
+export async function listSalarySummariesForMonth(month, { departmentId } = {}) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -384,6 +384,9 @@ export async function listSalarySummariesForMonth(month) {
   const baseQuery = { isActive: true, monthlySalary: { $ne: null, $gt: 0 } };
   if (adminRole) {
     baseQuery.roleId = { $ne: adminRole._id };
+  }
+  if (departmentId) {
+    baseQuery.departmentId = departmentId;
   }
 
   const employees = await User.find(baseQuery)
@@ -669,13 +672,17 @@ export async function buildSalaryMonthMeta(month, summaries) {
   };
 }
 
-async function buildSalaryStructureQuery(search) {
+async function buildSalaryStructureQuery(search, { departmentId } = {}) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const query = { isActive: true };
   if (adminRole) {
     query.roleId = { $ne: adminRole._id };
   } else {
     query.role = { $ne: 'admin' };
+  }
+
+  if (departmentId) {
+    query.departmentId = departmentId;
   }
 
   const trimmed = search?.trim();
@@ -687,8 +694,8 @@ async function buildSalaryStructureQuery(search) {
   return query;
 }
 
-export async function listSalaryStructure({ page = 1, limit = 20, search = '' }) {
-  const query = await buildSalaryStructureQuery(search);
+export async function listSalaryStructure({ page = 1, limit = 20, search = '', departmentId } = {}) {
+  const query = await buildSalaryStructureQuery(search, { departmentId });
   const skip = (page - 1) * limit;
 
   const [employees, total] = await Promise.all([

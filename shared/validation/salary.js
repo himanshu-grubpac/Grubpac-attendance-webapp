@@ -28,10 +28,12 @@ export const updateUserSalarySchema = z
 
 export const salarySummaryQuerySchema = z.object({
   userId: objectIdSchema.optional(),
+  departmentId: objectIdSchema.optional(),
   month: monthInputSchema,
 });
 
 export const salaryExportQuerySchema = z.object({
+  departmentId: objectIdSchema.optional(),
   month: monthInputSchema,
 });
 
@@ -39,6 +41,7 @@ export const salaryStructureQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(120).optional(),
+  departmentId: objectIdSchema.optional(),
 });
 
 export const updateSalarySettingsSchema = z

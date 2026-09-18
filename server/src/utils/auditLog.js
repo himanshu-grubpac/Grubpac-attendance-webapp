@@ -94,6 +94,9 @@ export function buildPersistPayload(action, meta = {}) {
     ip,
     deviceId,
     userAgent,
+    deviceType,
+    browser,
+    os,
     reason,
     status,
     entityType,
@@ -110,10 +113,6 @@ export function buildPersistPayload(action, meta = {}) {
   let resolvedReason = reason;
   let metadata = Object.keys(rest).length > 0 ? { ...rest } : undefined;
 
-  // Top-level `status` is an enum (success/failed). Callers may also pass a
-  // DOMAIN status (ticket/leave/request state) under the same key — that must
-  // stay in metadata only, otherwise AuditLog validation rejects the write
-  // and the audit row is silently dropped (audit_persist_failed).
   const isAuditStatus = status === 'success' || status === 'failed';
   if (LOGIN_ACTIONS.has(action)) {
     resolvedStatus = isAuditStatus ? status : action === 'login_success' ? 'success' : 'failed';
@@ -124,16 +123,12 @@ export function buildPersistPayload(action, meta = {}) {
     metadata = { ...(metadata ?? {}), status };
     resolvedStatus = status;
   } else {
-    // Non-login actions always carry a top-level status so the column is
-    // never empty; explicit values still win.
     if (status !== undefined) {
       metadata = { ...(metadata ?? {}), status };
     }
     resolvedStatus = 'success';
   }
 
-  // Reason is never left empty: failures without one are flagged as
-  // unspecified (a real logging gap), successes record n/a.
   if (resolvedReason === undefined || resolvedReason === null || resolvedReason === '') {
     resolvedReason = resolvedStatus === 'failed' ? 'unspecified' : 'n/a';
   }
@@ -150,6 +145,9 @@ export function buildPersistPayload(action, meta = {}) {
     ip,
     deviceId: deviceId || undefined,
     userAgent,
+    deviceType: deviceType || undefined,
+    browser: browser || undefined,
+    os: os || undefined,
     metadata,
     status: resolvedStatus,
     reason: resolvedReason,
@@ -162,6 +160,31 @@ export function buildPersistPayload(action, meta = {}) {
   };
 }
 
+function parseUserAgent(ua) {
+  if (!ua || typeof ua !== 'string') return { browser: undefined, os: undefined, deviceType: undefined };
+  let browser = undefined;
+  let os = undefined;
+  let deviceType = undefined;
+
+  if (/mobile|android|iphone|ipod/i.test(ua)) deviceType = 'mobile';
+  else if (/ipad|tablet/i.test(ua)) deviceType = 'tablet';
+  else deviceType = 'desktop';
+
+  if (/Edg\//i.test(ua)) browser = 'Edge';
+  else if (/Chrome/i.test(ua)) browser = 'Chrome';
+  else if (/Firefox/i.test(ua)) browser = 'Firefox';
+  else if (/Safari/i.test(ua)) browser = 'Safari';
+  else if (/Opera|OPR/i.test(ua)) browser = 'Opera';
+
+  if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Mac OS/i.test(ua)) os = 'macOS';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) os = 'iOS';
+
+  return { browser, os, deviceType };
+}
+
 export function getRequestAuditContext(req) {
   if (!req) return {};
   const forwarded = req.headers?.['x-forwarded-for'];
@@ -169,18 +192,22 @@ export function getRequestAuditContext(req) {
     req.ip ||
     (typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : undefined);
 
-  // Body fingerprint (login/check-in) or the X-Device-Id header the web
-  // client attaches to every request — either identifies the device.
   const rawDeviceId = req.body?.deviceId ?? req.headers?.['x-device-id'];
   const deviceId =
     typeof rawDeviceId === 'string' && rawDeviceId.trim().length > 0
       ? rawDeviceId.trim()
       : undefined;
 
+  const userAgent = req.headers?.['user-agent'] || undefined;
+  const { browser, os, deviceType } = parseUserAgent(userAgent);
+
   return {
     ip: ip || undefined,
     deviceId,
-    userAgent: req.headers?.['user-agent'] || undefined,
+    userAgent,
+    browser,
+    os,
+    deviceType,
   };
 }
 

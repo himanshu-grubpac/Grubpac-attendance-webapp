@@ -49,7 +49,7 @@ router.get(
 
 router.patch(
   '/tickets/:id',
-  requirePermission(PERMISSIONS.HELP_MANAGE),
+  requirePermission(PERMISSIONS.HELP_MANAGE, PERMISSIONS.HELP_SET_PRIORITY),
   asyncHandler(updateTicketStatusHandler),
 );
 

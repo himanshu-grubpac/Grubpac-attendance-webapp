@@ -97,8 +97,8 @@ export async function getSalarySummaryHandler(req, res) {
 }
 
 export async function listSalarySummariesHandler(req, res) {
-  const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const { month, departmentId } = salaryExportQuerySchema.parse(req.query);
+  const summaries = await listSalarySummariesForMonth(month, { departmentId });
   const meta = await buildSalaryMonthMeta(month, summaries);
   res.json({ month, summaries, meta });
 }
@@ -136,8 +136,8 @@ export async function listSalaryStructureHandler(req, res) {
 }
 
 export async function exportSalaryHandler(req, res) {
-  const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const { month, departmentId } = salaryExportQuerySchema.parse(req.query);
+  const summaries = await listSalarySummariesForMonth(month, { departmentId });
   const buffer = buildSalaryExportWorkbook(summaries, month);
 
   res.setHeader(

@@ -68,6 +68,10 @@ export async function authenticate(req, res, next) {
     }
 
     if (user.endingDate && new Date(user.endingDate) < new Date()) {
+      if (user.isActive) {
+        user.isActive = false;
+        await user.save();
+      }
       return res.status(401).json({ message: 'Your employment has ended. Contact your administrator.' });
     }
 
