@@ -18,6 +18,7 @@ export const PERMISSIONS = {
   HELP_READ: 'help.read',
   HELP_WRITE: 'help.write',
   HELP_MANAGE: 'help.manage',
+  HELP_SET_PRIORITY: 'help.set_priority',
   ROLES_MANAGE: 'roles.manage',
   OFFICE_MANAGE: 'office.manage',
   ATTENDANCE_READ_ALL: 'attendance.read_all',
@@ -34,10 +35,10 @@ export const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 
 export const PERMISSION_GROUPS = [
   {
-    label: 'Users',
+    label: 'Employees',
     permissions: [
-      { key: PERMISSIONS.USERS_READ, label: 'View users' },
-      { key: PERMISSIONS.USERS_WRITE, label: 'Manage users' },
+      { key: PERMISSIONS.USERS_READ, label: 'View employees' },
+      { key: PERMISSIONS.USERS_WRITE, label: 'Manage employees' },
     ],
   },
   {
@@ -81,6 +82,7 @@ export const PERMISSION_GROUPS = [
       { key: PERMISSIONS.HELP_READ, label: 'View help tickets' },
       { key: PERMISSIONS.HELP_WRITE, label: 'Create help tickets' },
       { key: PERMISSIONS.HELP_MANAGE, label: 'Manage help tickets' },
+      { key: PERMISSIONS.HELP_SET_PRIORITY, label: 'Set ticket priority' },
     ],
   },
   {
@@ -143,7 +145,7 @@ export const SYSTEM_ROLES = [
     isSystem: true,
     permissions: [...ALL_PERMISSIONS],
   },
-  // NOTE: Admin gets DEMO_FAQ_MANAGE via ALL_PERMISSIONS spread above.
+  // NOTE: Admin gets HELP_SET_PRIORITY via ALL_PERMISSIONS spread above.
   {
     name: 'HR',
     slug: SYSTEM_ROLE_SLUGS.HR,
@@ -165,6 +167,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.SALARY_WRITE,
       PERMISSIONS.HELP_READ,
       PERMISSIONS.HELP_MANAGE,
+      PERMISSIONS.HELP_SET_PRIORITY,
       PERMISSIONS.AUDIT_READ,
       PERMISSIONS.NOTIFICATIONS_READ,
       PERMISSIONS.DEMO_FAQ_READ,
@@ -189,6 +192,7 @@ export const SYSTEM_ROLES = [
       PERMISSIONS.HELP_READ,
       PERMISSIONS.HELP_WRITE,
       PERMISSIONS.HELP_MANAGE,
+      PERMISSIONS.HELP_SET_PRIORITY,
       PERMISSIONS.SALARY_READ,
       PERMISSIONS.SALARY_READ_TEAM,
       PERMISSIONS.NOTIFICATIONS_READ,

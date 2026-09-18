@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -16,16 +16,23 @@ function currentIstYear() {
   return Number(getTodayMonthIst().split('-')[0]);
 }
 
-function buildYearOptions() {
+function getJoinYearFromDate(joiningDate) {
+  if (!joiningDate) return null;
+  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
+  const match = dateStr.match(/^(\d{4})/);
+  return match ? Number(match[1]) : null;
+}
+
+function buildYearOptions(minYear) {
   const currentYear = currentIstYear();
+  const COMPANY_ESTABLISHED_YEAR = 2024;
+  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
   const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
+  for (let year = currentYear; year >= floor; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;
 }
-
-const YEAR_OPTIONS = buildYearOptions();
 
 const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
   value: String(index + 1).padStart(2, '0'),
@@ -155,6 +162,16 @@ export default function EmployeePayEstimate() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const joinYear = getJoinYearFromDate(user?.joiningDate);
+  const yearOptions = useMemo(() => buildYearOptions(joinYear), [joinYear]);
+
+  useEffect(() => {
+    const yearNum = Number(yearFilter);
+    if (joinYear != null && Number.isFinite(yearNum) && yearNum < joinYear) {
+      setYearFilter(String(joinYear));
+    }
+  }, [joinYear, yearFilter]);
+
   useEffect(() => {
     if (!user?.id) return;
 
@@ -183,7 +200,7 @@ export default function EmployeePayEstimate() {
                 <SelectField
                   value={yearFilter}
                   onChange={setYearFilter}
-                  options={YEAR_OPTIONS}
+                  options={yearOptions}
                   aria-label="Pay year"
                   disabled={loading}
                 />

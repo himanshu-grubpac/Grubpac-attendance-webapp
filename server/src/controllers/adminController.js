@@ -52,6 +52,7 @@ import {
 } from '../services/userOrgService.js';
 import {
   applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
+  getActorManagedDepartmentIds,
   isUserInTeamScope,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
@@ -224,6 +225,14 @@ export async function registerEmployee(req, res) {
 export async function listEmployees(req, res) {
   const { page, limit, search, isActive, departmentId, roleId, createdAfter } =
     employeeListQuerySchema.parse(req.query);
+
+  // Auto-deactivate employees whose ending date has passed.
+  const now = new Date();
+  await User.updateMany(
+    { endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
+
   const query = await applyTeamScopeToEmployeeQuery(
     await applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
       search,
@@ -277,6 +286,13 @@ export async function getTeamTodayStatusAdmin(req, res) {
 }
 
 export async function getEmployeeStats(req, res) {
+  // Auto-deactivate employees whose ending date has passed.
+  const now = new Date();
+  await User.updateMany(
+    { endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
+
   const baseQuery = await applyTeamScopeToEmployeeQuery(await buildEmployeeDirectoryQuery(), req);
   const monthKey = getISTDateInputValue().slice(0, 7);
   const { start: monthStart } = parseMonthInputAsISTRange(monthKey);
@@ -304,6 +320,13 @@ export async function getEmployee(req, res) {
   if (!idResult.success) {
     return res.status(400).json({ message: 'Invalid employee identifier.' });
   }
+
+  // Auto-deactivate if ending date has passed.
+  const now = new Date();
+  await User.updateMany(
+    { _id: idResult.data, endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
 
   const employee = await User.findById(idResult.data).populate(USER_POPULATE_FIELDS);
 
@@ -384,8 +407,9 @@ export async function listManagers(req, res) {
   }
 
   const managers = await User.find(query)
-    .select('name email roleId employeeCode')
+    .select('name email roleId employeeCode managedDepartmentIds')
     .populate('roleId', 'name slug')
+    .populate('managedDepartmentIds', 'name code')
     .sort({ name: 1 })
     .limit(limit);
 
@@ -396,6 +420,11 @@ export async function listManagers(req, res) {
       email: manager.email,
       employeeCode: manager.employeeCode ?? null,
       roleName: manager.roleId?.name ?? null,
+      managedDepartments: (manager.managedDepartmentIds || []).map((d) => ({
+        id: d._id.toString(),
+        name: d.name,
+        code: d.code,
+      })),
     })),
   });
 }
@@ -449,7 +478,8 @@ export async function updateEmployee(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  const isAdmin = adminRole && employee.roleId?.toString?.() === adminRole._id.toString();
+  if (isAdmin) {
     return res.status(400).json({ message: 'Cannot modify the system admin account here.' });
   }
 
@@ -563,6 +593,14 @@ export async function updateEmployee(req, res) {
 
   if (parsed.managedDepartmentIds !== undefined) {
     employee.managedDepartmentIds = await resolveManagedDepartments(parsed.managedDepartmentIds);
+  }
+
+  // Auto-deactivate if ending date is in the past.
+  const effectiveEndingDate = parsed.endingDate !== undefined
+    ? employee.endingDate
+    : employee.endingDate;
+  if (effectiveEndingDate && new Date(effectiveEndingDate) < new Date()) {
+    employee.isActive = false;
   }
 
   await employee.save();
@@ -679,6 +717,51 @@ export async function downloadEmployeeTemplate(req, res) {
   res.end(buffer);
 }
 
+/**
+ * Validate that all departments referenced in the bulk upload rows are within
+ * the actor's department scope. Returns { rejected, message, warnings }.
+ */
+async function validateBulkDepartmentScope(rows, actor, permissions) {
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  if (canReadAll) return { rejected: false, warnings: [] };
+
+  const managedIds = await getActorManagedDepartmentIds(actor);
+  if (managedIds.length === 0) {
+    // No managed departments — allowed for roles without department scope (e.g. plain RM).
+    return { rejected: false, warnings: [] };
+  }
+
+  const managedSet = new Set(managedIds);
+
+  // Collect unique department codes from the file rows.
+  const deptCodes = new Set();
+  for (const row of rows) {
+    const code = String(row.data.departmentCode ?? row.data.department ?? '').trim().toUpperCase();
+    if (code) deptCodes.add(code);
+  }
+  if (deptCodes.size === 0) return { rejected: false, warnings: [] };
+
+  // Look up existing departments.
+  const existing = await Department.find({ code: { $in: [...deptCodes] } }).select('code _id isActive').lean();
+  const deptByCode = new Map(existing.map((d) => [d.code, d]));
+
+  const warnings = [];
+  for (const code of deptCodes) {
+    const dept = deptByCode.get(code);
+    if (!dept) {
+      return { rejected: true, message: `Department "${code}" does not exist. Create it before uploading.` };
+    }
+    if (!managedSet.has(dept._id.toString())) {
+      return { rejected: true, message: `You do not have scope for department "${code}". Only your assigned departments are allowed.` };
+    }
+    if (!dept.isActive) {
+      warnings.push(`Department "${code}" is inactive. Employees will be assigned but may not appear in active views.`);
+    }
+  }
+
+  return { rejected: false, warnings };
+}
+
 export async function bulkUploadEmployees(req, res) {
   if (!req.file) {
     return res.status(400).json({ message: 'Excel file is required.' });
@@ -689,10 +772,19 @@ export async function bulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
+  // Department scope validation: ensure all departments in the file are within the actor's scope.
+  const scopeCheck = await validateBulkDepartmentScope(rows, req.user, req.userPermissions);
+  if (scopeCheck.rejected) {
+    return res.status(403).json({ message: scopeCheck.message });
+  }
+
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id);
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
+  if (scopeCheck.warnings?.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...scopeCheck.warnings];
   }
 
   const changes = result.results
@@ -735,10 +827,19 @@ export async function previewBulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
+  // Department scope validation.
+  const scopeCheck = await validateBulkDepartmentScope(rows, req.user, req.userPermissions);
+  if (scopeCheck.rejected) {
+    return res.status(403).json({ message: scopeCheck.message });
+  }
+
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id, { dryRun: true });
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
+  if (scopeCheck.warnings?.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...scopeCheck.warnings];
   }
 
   res.json(result);

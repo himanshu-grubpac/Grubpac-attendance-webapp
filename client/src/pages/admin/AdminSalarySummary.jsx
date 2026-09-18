@@ -150,13 +150,22 @@ function clampYearToCurrent(year) {
   return String(parsed);
 }
 
-function buildYearOptions() {
+function buildYearOptions(minYear) {
   const currentYear = getCurrentIstYear();
+  const COMPANY_ESTABLISHED_YEAR = 2024;
+  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
   const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
+  for (let year = currentYear; year >= floor; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;
+}
+
+function getJoinYearFromDate(joiningDate) {
+  if (!joiningDate) return null;
+  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
+  const match = dateStr.match(/^(\d{4})/);
+  return match ? Number(match[1]) : null;
 }
 
 const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
@@ -166,8 +175,6 @@ const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(2020, index, 1))),
 }));
-
-const YEAR_OPTIONS = buildYearOptions();
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -349,6 +356,27 @@ function MonthlyPayrollTab({
 
   const hasActiveFilters = Boolean(debouncedSearch.trim());
 
+  const earliestJoinYear = useMemo(() => {
+    if (summaries.length === 0) return null;
+    let earliest = null;
+    for (const item of summaries) {
+      const jy = getJoinYearFromDate(item.joiningDate);
+      if (jy != null && (earliest == null || jy < earliest)) {
+        earliest = jy;
+      }
+    }
+    return earliest;
+  }, [summaries]);
+
+  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
+
+  useEffect(() => {
+    const yearNum = Number(yearFilter);
+    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
+      setYearFilter(String(earliestJoinYear));
+    }
+  }, [earliestJoinYear, yearFilter]);
+
   const emptyTitle = useMemo(() => {
     if (hasActiveFilters) return 'No employees match your search';
     return 'No pay estimates for this month';
@@ -405,7 +433,7 @@ function MonthlyPayrollTab({
                 <SelectField
                   value={yearFilter}
                   onChange={(value) => setYearFilter(clampYearToCurrent(value))}
-                  options={YEAR_OPTIONS}
+                  options={yearOptions}
                   aria-label="Salary year"
                   disabled={loading}
                 />
@@ -985,6 +1013,27 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
   const [failError, setFailError] = useState('');
   const failModalTitleId = 'salary-transfer-fail-title';
 
+  const earliestJoinYear = useMemo(() => {
+    if (transfers.length === 0) return null;
+    let earliest = null;
+    for (const t of transfers) {
+      const jy = getJoinYearFromDate(t.joiningDate);
+      if (jy != null && (earliest == null || jy < earliest)) {
+        earliest = jy;
+      }
+    }
+    return earliest;
+  }, [transfers]);
+
+  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
+
+  useEffect(() => {
+    const yearNum = Number(yearFilter);
+    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
+      setYearFilter(String(earliestJoinYear));
+    }
+  }, [earliestJoinYear, yearFilter]);
+
   const loadTransfers = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -1203,7 +1252,7 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
                 <SelectField
                   value={yearFilter}
                   onChange={(value) => setYearFilter(clampYearToCurrent(value))}
-                  options={YEAR_OPTIONS}
+                  options={yearOptions}
                   aria-label="Transfer year"
                   disabled={loading || generating}
                 />

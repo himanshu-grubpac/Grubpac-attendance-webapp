@@ -215,8 +215,9 @@ function clampYearToCurrent(year) {
 
 function buildYearOptions() {
   const currentYear = getCurrentIstYear();
+  const COMPANY_ESTABLISHED_YEAR = 2024;
   const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
+  for (let year = currentYear; year >= COMPANY_ESTABLISHED_YEAR; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;

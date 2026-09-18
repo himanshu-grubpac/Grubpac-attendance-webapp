@@ -22,6 +22,7 @@ const EMPLOYEE_TABLE_KEY = 'employeeList';
 
 const ALL_COLUMNS = [
   { key: 'name', label: 'Name', always: true },
+  { key: 'employeeCode', label: 'Emp code' },
   { key: 'email', label: 'Email' },
   { key: 'mobile', label: 'Mobile' },
   { key: 'department', label: 'Department' },
@@ -35,9 +36,10 @@ const ALL_COLUMNS = [
   { key: 'managerDepartments', label: 'Manager dept (Team scope)' },
   { key: 'status', label: 'Status' },
   { key: 'lastLogin', label: 'Last login' },
+  { key: 'updatedAt', label: 'Updated at' },
 ];
 
-const DEFAULT_VISIBLE_COLUMNS = ['name', 'email', 'mobile', 'department', 'status', 'lastLogin'];
+const DEFAULT_VISIBLE_COLUMNS = ['name', 'employeeCode', 'email', 'mobile', 'department', 'status', 'updatedAt', 'lastLogin'];
 
 const ALL_COLUMN_KEYS = new Set(ALL_COLUMNS.map((column) => column.key));
 
@@ -218,7 +220,7 @@ export default function AdminUsers() {
   const [storedFilters] = useState(readStoredFilters);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState(storedFilters.search ?? '');
-  const [statusFilter, setStatusFilter] = useState(storedFilters.statusFilter ?? '');
+  const [statusFilter, setStatusFilter] = useState(storedFilters.statusFilter ?? 'true');
   const [departmentFilter, setDepartmentFilter] = useState(storedFilters.departmentFilter ?? '');
   const [roleFilter, setRoleFilter] = useState(storedFilters.roleFilter ?? '');
   const [newThisMonthFilter, setNewThisMonthFilter] = useState(
@@ -400,7 +402,7 @@ export default function AdminUsers() {
         // Department filter remains optional.
       });
     adminApi
-      .listRoles()
+      .listRoles({ includeSystem: true })
       .then((data) => setRoles(data.roles ?? []))
       .catch(() => { });
     adminApi
@@ -490,7 +492,7 @@ export default function AdminUsers() {
 
   function clearFilters() {
     setSearch('');
-    setStatusFilter('');
+    setStatusFilter('true');
     setDepartmentFilter('');
     setRoleFilter('');
     setNewThisMonthFilter(false);
@@ -498,7 +500,7 @@ export default function AdminUsers() {
     loadEmployees({
       query: '',
       nextPage: 1,
-      nextStatus: '',
+      nextStatus: 'true',
       nextDepartment: '',
       nextRole: '',
       nextNewThisMonth: false,
@@ -621,6 +623,7 @@ export default function AdminUsers() {
   }
 
   function getActionItems(employee) {
+    const isAdmin = employee.roleSlug === 'admin';
     const items = [
       {
         key: 'view',
@@ -643,12 +646,12 @@ export default function AdminUsers() {
         label: 'Reset password',
         onClick: () => navigate(`/admin/users/${employee.id}?edit=reset`),
       },
-      {
+      ...(isAdmin ? [] : [{
         key: 'toggle',
         label: employee.isActive ? 'Deactivate' : 'Activate',
         variant: employee.isActive ? 'danger' : 'default',
         onClick: () => toggleStatus(employee),
-      },
+      }]),
     ];
   }
 
@@ -828,14 +831,6 @@ export default function AdminUsers() {
               />
             </label>
 
-            {hasActiveFilters ? (
-              <div className="filter-bar__field employees-toolbar__clear">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
-                  Clear filters
-                </button>
-              </div>
-            ) : null}
-
             <div className="employees-toolbar__editcol">
               <button
                 type="button"
@@ -851,6 +846,14 @@ export default function AdminUsers() {
               ) : null}
             </div>
           </div>
+
+          {hasActiveFilters ? (
+            <div className="employees-toolbar__clearrow">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
+                Clear filters
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {listError ? <div className="alert alert--error">{listError}</div> : null}
@@ -905,6 +908,7 @@ export default function AdminUsers() {
                       #
                     </th>
                     {isColumnVisible('name') && <th>Name</th>}
+                    {isColumnVisible('employeeCode') && <th>Emp code</th>}
                     {isColumnVisible('email') && <th>Email</th>}
                     {isColumnVisible('mobile') && <th>Mobile</th>}
                     {isColumnVisible('department') && <th>Department</th>}
@@ -918,6 +922,7 @@ export default function AdminUsers() {
                     {isColumnVisible('managerDepartments') && <th>Manager dept</th>}
                     {isColumnVisible('status') && <th>Status</th>}
                     {isColumnVisible('lastLogin') && <th>Last login</th>}
+                    {isColumnVisible('updatedAt') && <th>Updated at</th>}
                     <th className="cell-actions-col cell-actions-col--text">Actions</th>
                   </tr>
                 </thead>
@@ -952,6 +957,9 @@ export default function AdminUsers() {
                               {employee.name}
                             </Link>
                           </td>
+                        )}
+                        {isColumnVisible('employeeCode') && (
+                          <td data-label="Emp code">{employee.employeeCode || '—'}</td>
                         )}
                         {isColumnVisible('email') && (
                           <td
@@ -1000,6 +1008,11 @@ export default function AdminUsers() {
                         {isColumnVisible('lastLogin') && (
                           <td data-label="Last login" className="cell-datetime">
                             {lastLoginLabel(employee.lastLoginAt)}
+                          </td>
+                        )}
+                        {isColumnVisible('updatedAt') && (
+                          <td data-label="Updated at" className="cell-datetime">
+                            {lastLoginLabel(employee.updatedAt)}
                           </td>
                         )}
                         <td
