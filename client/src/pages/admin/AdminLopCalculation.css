@@ -1,3 +1,8 @@
+.salary-toolbar__period .field-inline {
+  flex: 1 1 8rem;
+  min-width: min(100%, 8rem);
+}
+
 .salary-table--lop th.cell-actions-col--text,
 .salary-table--lop td.cell-actions {
   min-width: 11.5rem;

@@ -19,8 +19,6 @@ import './AdminLopCalculation.css';
 
 const PAGE_SIZE = 20;
 
-const YEAR_OPTIONS = buildSalaryYearOptions();
-
 function parseMonthFilterValue(value) {
   if (!value || !/^\d{4}-\d{2}$/.test(value)) {
     const [year, month] = getTodayMonthIst().split('-');
@@ -83,6 +81,7 @@ export default function AdminLopCalculation() {
   }, []);
   const [yearFilter, setYearFilter] = useState(initialMonth.year);
   const [monthPartFilter, setMonthPartFilter] = useState(initialMonth.month);
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
   const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const month = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
@@ -186,7 +185,8 @@ export default function AdminLopCalculation() {
     setMonthPartFilter(clampMonthPartForYear(nextYear, monthPart));
   }, []);
 
-  const viewingDateLabel = responseAsOfDate ? formatISTDate(responseAsOfDate) : formatISTDate(asOf);
+  /** Server asOfDate after load; client asOf until first response — both from IST helpers, never hardcoded. */
+  const viewingDateLabel = formatISTDate(responseAsOfDate ?? asOf);
 
   return (
     <div className="page page--salary">
@@ -201,25 +201,29 @@ export default function AdminLopCalculation() {
       <section className="salary-panel card card--table" aria-label="Salary calculation and LOP">
         <div className="salary-toolbar card__toolbar">
           <div className="salary-toolbar__filters filter-bar">
-            <div className="field-inline filter-bar__field salary-toolbar__field">
-              <span className="label">Year</span>
-              <SelectField
-                value={yearFilter}
-                onChange={handleYearChange}
-                options={YEAR_OPTIONS}
-                aria-label="LOP year"
-                disabled={loading || bulkExporting}
-              />
-            </div>
-            <div className="field-inline filter-bar__field salary-toolbar__field">
-              <span className="label">Month</span>
-              <SelectField
-                value={monthPartFilter}
-                onChange={setMonthPartFilter}
-                options={monthOptions}
-                aria-label="LOP month"
-                disabled={loading || bulkExporting}
-              />
+            <div className="filter-bar__field salary-toolbar__field salary-toolbar__field--period">
+              <div className="salary-toolbar__period">
+                <div className="field-inline">
+                  <span className="label">Year</span>
+                  <SelectField
+                    value={yearFilter}
+                    onChange={handleYearChange}
+                    options={yearOptions}
+                    aria-label="LOP year"
+                    disabled={loading || bulkExporting}
+                  />
+                </div>
+                <div className="field-inline">
+                  <span className="label">Month</span>
+                  <SelectField
+                    value={monthPartFilter}
+                    onChange={setMonthPartFilter}
+                    options={monthOptions}
+                    aria-label="LOP month"
+                    disabled={loading || bulkExporting}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -336,7 +340,7 @@ export default function AdminLopCalculation() {
         employeeName={detailTarget?.name ?? null}
         month={month}
         asOf={asOf}
-        yearOptions={YEAR_OPTIONS}
+        yearOptions={yearOptions}
         monthOptions={monthOptions}
         onMonthChange={handleModalMonthChange}
         onClose={() => setDetailTarget(null)}
