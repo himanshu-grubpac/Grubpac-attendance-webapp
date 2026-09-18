@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -9,31 +9,14 @@ import {
   formatISTDate,
   getISTMonthInputValue,
 } from '../../utils/datetime.js';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
 import { SalaryHistorySection } from '../admin/SalaryAuditSections.jsx';
-
-function currentIstYear() {
-  return Number(getTodayMonthIst().split('-')[0]);
-}
-
-function buildYearOptions() {
-  const currentYear = currentIstYear();
-  const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-const YEAR_OPTIONS = buildYearOptions();
-
-const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
 
 function formatLopDate(entry) {
   if (typeof entry === 'string') return entry;
@@ -147,9 +130,25 @@ function MonthBreakdown({ summary, loading, error }) {
 
 export default function EmployeePayEstimate() {
   const { user } = useAuth();
-  const [yearFilter, setYearFilter] = useState(() => getISTMonthInputValue().split('-')[0]);
-  const [monthPartFilter, setMonthPartFilter] = useState(() => getISTMonthInputValue().split('-')[1]);
+  const initialPeriod = useMemo(() => {
+    const [year, month] = getTodayMonthIst().split('-');
+    const clampedYear = clampYearToCurrentIst(year);
+    return {
+      year: clampedYear,
+      month: clampMonthPartForYear(clampedYear, month),
+    };
+  }, []);
+  const [yearFilter, setYearFilter] = useState(initialPeriod.year);
+  const [monthPartFilter, setMonthPartFilter] = useState(initialPeriod.month);
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const month = `${yearFilter}-${monthPartFilter}`;
+
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
 
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -182,15 +181,15 @@ export default function EmployeePayEstimate() {
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={setYearFilter}
-                  options={YEAR_OPTIONS}
+                  onChange={handleYearChange}
+                  options={yearOptions}
                   aria-label="Pay year"
                   disabled={loading}
                 />
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={MONTH_OPTIONS}
+                  options={monthOptions}
                   aria-label="Pay month"
                   disabled={loading}
                 />

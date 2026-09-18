@@ -169,21 +169,30 @@ function getCurrentIstMonthPart() {
   return getTodayMonthIst().split('-')[1];
 }
 
-/** Clamp a year string so it cannot exceed the current IST year. */
+/** Company operations start — salary/LOP year filters use this through current IST year. */
+export const COMPANY_ESTABLISH_YEAR = 2024;
+
+/** Clamp year to company establish year through current IST year. */
 function clampYearToCurrentIst(year) {
   const currentYear = getCurrentIstYear();
   const parsed = Number(year);
-  if (!Number.isFinite(parsed) || parsed > currentYear) {
+  if (!Number.isFinite(parsed)) {
     return String(currentYear);
+  }
+  if (parsed > currentYear) {
+    return String(currentYear);
+  }
+  if (parsed < COMPANY_ESTABLISH_YEAR) {
+    return String(COMPANY_ESTABLISH_YEAR);
   }
   return String(parsed);
 }
 
-/** Salary/LOP year dropdown: current IST year down to current − pastYears. */
-function buildSalaryYearOptions(pastYears = 4) {
+/** Salary/LOP year dropdown: current IST year down to company establish year (2024). */
+function buildSalaryYearOptions() {
   const currentYear = getCurrentIstYear();
   const years = [];
-  for (let year = currentYear; year >= currentYear - pastYears; year -= 1) {
+  for (let year = currentYear; year >= COMPANY_ESTABLISH_YEAR; year -= 1) {
     years.push({ value: String(year), label: String(year) });
   }
   return years;

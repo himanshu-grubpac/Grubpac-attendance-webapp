@@ -19,7 +19,13 @@ import { SalaryHistorySection, TeamAuditSection } from './SalaryAuditSections.js
 import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 import InrInput from '../../components/InrInput.jsx';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -136,38 +142,6 @@ function parseMonthFilterValue(value) {
 function toMonthFilterValue(year, month) {
   return `${year}-${month}`;
 }
-
-function getCurrentIstYear() {
-  return Number(getTodayMonthIst().split('-')[0]);
-}
-
-function clampYearToCurrent(year) {
-  const currentYear = getCurrentIstYear();
-  const parsed = Number(year);
-  if (!Number.isFinite(parsed) || parsed > currentYear) {
-    return String(currentYear);
-  }
-  return String(parsed);
-}
-
-function buildYearOptions() {
-  const currentYear = getCurrentIstYear();
-  const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
-
-const YEAR_OPTIONS = buildYearOptions();
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -294,6 +268,15 @@ function MonthlyPayrollTab({
   selectedId,
   setSelectedId,
 }) {
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
+
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   const debouncedSearch = useDebouncedValue(search, 350);
 
   const filtered = useMemo(() => {
@@ -408,15 +391,15 @@ function MonthlyPayrollTab({
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={(value) => setYearFilter(clampYearToCurrent(value))}
-                  options={YEAR_OPTIONS}
+                  onChange={handleYearChange}
+                  options={yearOptions}
                   aria-label="Salary year"
                   disabled={loading}
                 />
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={SALARY_MONTH_OPTIONS}
+                  options={monthOptions}
                   aria-label="Salary month"
                   disabled={loading}
                 />
@@ -978,6 +961,15 @@ function SalaryStructureTab({ canManageSalary }) {
 function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMonthPartFilter, canManageSalary }) {
   const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
+
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   const [transfers, setTransfers] = useState([]);
   const [stats, setStats] = useState(null);
   const [pagination, setPagination] = useState({
@@ -1216,15 +1208,15 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={(value) => setYearFilter(clampYearToCurrent(value))}
-                  options={YEAR_OPTIONS}
+                  onChange={handleYearChange}
+                  options={yearOptions}
                   aria-label="Transfer year"
                   disabled={loading || generating}
                 />
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={SALARY_MONTH_OPTIONS}
+                  options={monthOptions}
                   aria-label="Transfer month"
                   disabled={loading || generating}
                 />
@@ -1632,18 +1624,22 @@ export default function AdminSalarySummary() {
     ? searchParams.get('tab')
     : 'monthly';
 
-  const [yearFilter, setYearFilter] = useState(() =>
-    clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
-  );
-  const [monthPartFilter, setMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
-  const [transferYearFilter, setTransferYearFilter] = useState(() =>
-    clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
-  );
-  const [transferMonthPartFilter, setTransferMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
+  const [yearFilter, setYearFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampYearToCurrentIst(year);
+  });
+  const [monthPartFilter, setMonthPartFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampMonthPartForYear(clampYearToCurrentIst(year), month);
+  });
+  const [transferYearFilter, setTransferYearFilter] = useState(() => {
+    const { year } = parseMonthFilterValue(getTodayMonthIst());
+    return clampYearToCurrentIst(year);
+  });
+  const [transferMonthPartFilter, setTransferMonthPartFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampMonthPartForYear(clampYearToCurrentIst(year), month);
+  });
   const month = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
     [yearFilter, monthPartFilter],

@@ -4,7 +4,13 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { formatINRCurrency } from '../../utils/datetime.js';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
 import SalaryDetailModal from '../../components/SalaryDetailModal.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -16,25 +22,6 @@ const HISTORY_PAGE_SIZE = 20;
 function currentIstYear() {
   return Number(getTodayMonthIst().split('-')[0]);
 }
-
-function buildYearOptions() {
-  const currentYear = currentIstYear();
-  const years = [];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-const HISTORY_YEAR_OPTIONS = buildYearOptions();
-
-const AUDIT_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -181,6 +168,8 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     [employees],
   );
 
+  const historyYearOptions = useMemo(() => buildSalaryYearOptions(), [year]);
+
   const rows = history?.history ?? [];
 
   return (
@@ -201,7 +190,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
             <SelectField
               value={year}
               onChange={setYear}
-              options={HISTORY_YEAR_OPTIONS}
+              options={historyYearOptions}
               aria-label="History year"
               disabled={loading}
             />
@@ -332,8 +321,18 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
  */
 export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary audit' }) {
   const { showSuccess } = useToast();
-  const [yearFilter, setYearFilter] = useState(() => getTodayMonthIst().split('-')[0]);
-  const [monthPartFilter, setMonthPartFilter] = useState(() => getTodayMonthIst().split('-')[1]);
+  const initialPeriod = useMemo(() => {
+    const [year, month] = getTodayMonthIst().split('-');
+    const clampedYear = clampYearToCurrentIst(year);
+    return {
+      year: clampedYear,
+      month: clampMonthPartForYear(clampedYear, month),
+    };
+  }, []);
+  const [yearFilter, setYearFilter] = useState(initialPeriod.year);
+  const [monthPartFilter, setMonthPartFilter] = useState(initialPeriod.month);
+  const auditYearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const auditMonthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const [departmentId, setDepartmentId] = useState('');
   const [departments, setDepartments] = useState([]);
   const periodKey = `${yearFilter}-${monthPartFilter}`;
@@ -443,6 +442,12 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     }
   }
 
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   return (
     <>
       <p className="salary-disclaimer muted small">
@@ -457,15 +462,15 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={setYearFilter}
-                  options={HISTORY_YEAR_OPTIONS}
+                  onChange={handleYearChange}
+                  options={auditYearOptions}
                   aria-label="Audit year"
                   disabled={loading}
                 />
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={AUDIT_MONTH_OPTIONS}
+                  options={auditMonthOptions}
                   aria-label="Audit month"
                   disabled={loading}
                 />
