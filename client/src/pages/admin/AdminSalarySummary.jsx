@@ -427,17 +427,17 @@ function MonthlyPayrollTab({
                 </button>
               </div>
             ) : null}
+          </div>
 
-            <div className="salary-toolbar__actions filter-bar__field">
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={onExport}
-                disabled={exporting || loading}
-              >
-                Export Excel
-              </button>
-            </div>
+          <div className="salary-toolbar__actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={onExport}
+              disabled={exporting || loading}
+            >
+              Export Excel
+            </button>
           </div>
         </div>
 
@@ -1279,28 +1279,28 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
                 </button>
               </div>
             ) : null}
-
-            {canManageSalary ? (
-              <div className="salary-toolbar__actions filter-bar__field">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={handleSettle}
-                  disabled={settling || generating || loading}
-                >
-                  {settling ? 'Settling…' : 'Settle month'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={handleGenerate}
-                  disabled={generating || settling || loading}
-                >
-                  {generating ? 'Generating…' : 'Generate pending transfers'}
-                </button>
-              </div>
-            ) : null}
           </div>
+
+          {canManageSalary ? (
+            <div className="salary-toolbar__actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleSettle}
+                disabled={settling || generating || loading}
+              >
+                {settling ? 'Settling…' : 'Settle month'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleGenerate}
+                disabled={generating || settling || loading}
+              >
+                {generating ? 'Generating…' : 'Generate pending transfers'}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}

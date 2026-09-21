@@ -9384,6 +9384,14 @@ body::-webkit-scrollbar-thumb {
   border-bottom: 1px solid var(--border);
 }
 
+.attendance-history-panel__filters.filter-bar {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: 0;
+  gap: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  box-sizing: border-box;
+}
+
 .attendance-history-scroll {
   max-height: 32rem;
   overflow-y: auto;
@@ -11710,48 +11718,16 @@ body::-webkit-scrollbar-thumb {
 }
 
 /*
- * Mid widths: two-line toolbar. Flattening the filters group lets its fields
- * flow as direct siblings of the actions group, so the date fields land on
- * line 2 with Clear / Edit columns / Add Employee pushed right beside them
- * (aligned with the calendar inputs) instead of spilling onto a third line.
- */
-@media (min-width: 961px) and (max-width: 1439px) {
-  .employees-toolbar__filters > .employees-toolbar__group--filters {
-    display: contents;
-  }
-
-  /* Two tidy lines: search + selects on line 1, both date fields on line 2
-     with the actions pushed right beside them. NOTE: the filters group is
-     display:contents, so the labels stay DOM children of that group — the
-     date selector must be a descendant selector, not a child selector.
-     The full-width ::before break (order 5) sits after every non-date item
-     (order 0) and before the dates (order 6) + actions (order 7), so
-     Joined-from never strands on line 1 while Joined-to wraps alone. */
-  .employees-toolbar__filters::before {
-    content: "";
-    flex-basis: 100%;
-    height: 0;
-    order: 5;
-  }
-
-  .employees-toolbar__filters .employees-toolbar__field:has(.date-field) {
-    order: 6;
-  }
-
-  .employees-toolbar__filters > .employees-toolbar__group--actions {
-    align-self: flex-end;
-    order: 7;
-  }
-}
-
-/*
- * Wide-desktop single-line filter row: every filter shares shrink and the
+ * Laptop+ single-line filter row: every filter shares shrink and the
  * controls ellipsis gracefully (select/date value spans already clip with
  * ellipsis), so search, department, role, status and both dates fit one
  * line with no scrolling and no overlap. Action buttons keep natural size.
- * Below 1440px the wrapping behaviour above takes over (two tidy rows).
+ * Below 961px the mobile stacking rules take over.
  */
-@media (min-width: 1440px) {
+@media (min-width: 961px) {
+  .employees-toolbar {
+    flex-wrap: nowrap;
+  }
   .employees-toolbar__filters {
     flex-wrap: nowrap;
   }
@@ -15194,7 +15170,7 @@ body::-webkit-scrollbar-thumb {
 
 .salary-toolbar__filters {
   flex: 1 1 auto;
-  min-width: min(100%, 16rem);
+  min-width: 0;
   padding-bottom: 0;
   margin-bottom: 0;
   border-bottom: none;
@@ -15227,7 +15203,7 @@ body::-webkit-scrollbar-thumb {
   flex: 1 1 16rem;
   max-width: none;
   width: auto;
-  min-width: min(100%, 14rem);
+  min-width: 0;
 }
 
 .salary-toolbar__period .field-inline {
@@ -16202,15 +16178,6 @@ body::-webkit-scrollbar-thumb {
   max-width: 13rem;
 }
 
-@media (min-width: 1024px) {
-  .today-present-toolbar__row {
-    flex-wrap: nowrap;
-  }
-
-  .today-present-toolbar__row .btn {
-    flex-shrink: 0;
-  }
-}
 
 /* Dashboard roster preview: the search row sits directly in the card body
    (no toolbar wrapper), so it takes the toolbar's own padding to clear the
@@ -16295,23 +16262,91 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-@media (min-width: 1024px) {
-  .salary-toolbar__filters {
+@media (min-width: 961px) {
+  .salary-toolbar {
     flex-wrap: nowrap;
   }
 
-  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__filters .filter-bar__field {
-    flex: 0 1 auto;
+  .salary-toolbar__filters {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
     min-width: 0;
   }
 
+  /* Proportional shrink (matches approvals-toolbar) — avoids filter overlap at laptop width. */
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__filters .filter-bar__field,
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .field-inline {
+    min-width: 0;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .field-inline .select-field,
+  .card--table > .card__toolbar.salary-toolbar .field-inline select,
+  .card--table > .card__toolbar.salary-toolbar .filter-bar__field .select-field {
+    min-width: 0;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__field--period {
+    flex: 2 1 0;
+    min-width: 0;
+  }
+
+  .salary-toolbar__field--period > .salary-toolbar__period {
+    flex-wrap: nowrap;
+  }
+
+  .salary-toolbar__field--period > .salary-toolbar__period > .field-inline {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .salary-toolbar__field--period > .salary-toolbar__period .select-field {
+    flex: 1 1 7rem;
+    min-width: 0;
+  }
+
+  .salary-toolbar__field--period > .salary-toolbar__period .field-inline:last-child .select-field {
+    flex: 1.15 1 8rem;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .filter-bar__search.salary-toolbar__search,
   .card--table > .card__toolbar.salary-toolbar .salary-toolbar__search {
-    flex: 1 1 14rem;
+    flex: 2 1 0;
+    width: auto;
     max-width: 20rem;
+    min-width: 0;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__clear {
+    flex: 0 0 auto;
+  }
+
+  .salary-toolbar__actions {
+    flex: 0 0 auto;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+
+  .salary-toolbar__actions .btn {
+    flex: 0 0 auto;
+    min-width: 0;
   }
 
   .today-present-toolbar__row.filter-bar {
     flex-wrap: nowrap;
+  }
+
+  .today-present-toolbar__row .btn {
+    flex-shrink: 0;
+  }
+
+  .attendance-history-panel__filters.filter-bar {
+    flex-wrap: nowrap;
+    gap: var(--space-2) var(--space-4);
   }
 }
 
