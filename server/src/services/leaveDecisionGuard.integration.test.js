@@ -246,3 +246,27 @@ test('healthy decision still stages normally', async () => {
   assert.equal(live.status, 'pending');
   assert.equal(live.pendingDecision, 'approved');
 });
+
+test('safety net: stuck row with null notifyAfter finalizes after undo expiry', async () => {
+  const actor = await createUser();
+  const applicant = await createUser();
+  const type = await createType();
+  await createBalance(applicant, type);
+  const request = await createRequest(applicant, type);
+
+  await processLeaveDecision(await freshRequest(request._id), actor, 'approved');
+
+  const past = new Date(Date.now() - 60_000);
+  await LeaveRequest.updateOne(
+    { _id: request._id },
+    { $set: { undoExpiresAt: past, notifyAfter: null, notificationsSent: false } },
+  );
+
+  const job = await runLeaveDecisionNotifyJob(new Date());
+  assert.equal(job.processed, 1);
+
+  const live = await freshRequest(request._id);
+  assert.equal(live.status, 'approved');
+  assert.equal(live.pendingDecision, null);
+  assert.ok(live.finalizedAt);
+});

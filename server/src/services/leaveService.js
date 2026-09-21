@@ -93,6 +93,25 @@ function provisionalTiming(windowMs, fromTime = Date.now()) {
   return { undoExpiresAt, notifyAfter };
 }
 
+/**
+ * Mongo filter for staged leave decisions due for the finalizer sweep.
+ * Primary path: notifyAfter reached. Safety net: undo window elapsed but
+ * notifyAfter missing or also due (legacy / poison rows that would never match
+ * the old notificationsSent-only query).
+ */
+function dueStagedLeaveDecisionFilter(now) {
+  return {
+    pendingDecision: { $ne: null },
+    $or: [
+      { notifyAfter: { $ne: null, $lte: now } },
+      {
+        undoExpiresAt: { $ne: null, $lte: now },
+        $or: [{ notifyAfter: null }, { notifyAfter: { $lte: now } }],
+      },
+    ],
+  };
+}
+
 const pendingSubmitTimers = new Map();
 
 /** Single-flight guard so the in-memory timer and the sweeper job never dispatch the same request concurrently. */
@@ -2482,11 +2501,7 @@ async function expirePendingWfhAttendance(now) {
  */
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const expiredPendingWfh = await expirePendingWfhAttendance(now);
-  const dueDecisions = await LeaveRequest.find({
-    pendingDecision: { $ne: null },
-    notifyAfter: { $ne: null, $lte: now },
-    notificationsSent: false,
-  }).populate(LEAVE_REQUEST_POPULATE);
+  const dueDecisions = await LeaveRequest.find(dueStagedLeaveDecisionFilter(now)).populate(LEAVE_REQUEST_POPULATE);
   const dueSubmits = await LeaveRequest.find({
     status: 'pending',
     pendingDecision: null,
@@ -2503,6 +2518,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   for (const request of dueDecisions) {
     const decision = request.pendingDecision;
     const requestKey = request._id.toString();
+    const skipNotify = request.notificationsSent === true;
     try {
       // Stale-guard: only the revision that staged this outcome may finalize
       // it. Anything else means a newer action superseded it — no-op.
@@ -2579,47 +2595,51 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   }
 
       // Deferred notification — post-commit only, never blocking finality.
-      try {
-        if (decision === 'cancelled') {
-          const approverId = request.approverId?._id?.toString?.()
-            ?? request.approverId?.toString?.()
-            ?? null;
-          // request.* is the populated sweep doc re-read after staging, so
-          // cancelledBy records who actually initiated the cancellation
-          // (owner vs approver), which approverId alone cannot tell (it
-          // keeps pointing at the original approver).
-          const cancelledBy = request.cancelledBy?._id?.toString?.()
-            ?? request.cancelledBy?.toString?.()
-            ?? null;
-          await notifyLeaveCancelled(request, true, approverId, { sendChannels: true, cancelledBy });
-        } else {
-          const requester = await loadRequester(userId);
-          await notifyApplicantDecision({
-            applicant: requester,
-            request,
-            leaveType: request.leaveTypeId,
-            status: decision === 'approved' ? 'approved' : 'rejected',
-            decisionComment: request.decisionComment,
-            sendChannels: true,
+      // Skip when notificationsSent was already true (stuck-row recovery) so
+      // a half-applied row never double-mails the applicant.
+      if (!skipNotify) {
+        try {
+          if (decision === 'cancelled') {
+            const approverId = request.approverId?._id?.toString?.()
+              ?? request.approverId?.toString?.()
+              ?? null;
+            // request.* is the populated sweep doc re-read after staging, so
+            // cancelledBy records who actually initiated the cancellation
+            // (owner vs approver), which approverId alone cannot tell (it
+            // keeps pointing at the original approver).
+            const cancelledBy = request.cancelledBy?._id?.toString?.()
+              ?? request.cancelledBy?.toString?.()
+              ?? null;
+            await notifyLeaveCancelled(request, true, approverId, { sendChannels: true, cancelledBy });
+          } else {
+            const requester = await loadRequester(userId);
+            await notifyApplicantDecision({
+              applicant: requester,
+              request,
+              leaveType: request.leaveTypeId,
+              status: decision === 'approved' ? 'approved' : 'rejected',
+              decisionComment: request.decisionComment,
+              sendChannels: true,
+            });
+          }
+        } catch (notifyErr) {
+          // Final state stands; delivery failure is logged for ops follow-up.
+          // No retry by design (the decision is final) — surface request context
+          // so a missed applicant/manager email can be found and re-sent manually.
+          console.error('[leave] finalized notification failed', {
+            requestId: requestKey,
+            decision,
+            revision: request.pendingRevision ?? request.revision,
+            error: notifyErr?.message,
+          });
+          auditLog('leave_finalized_notification_failed', {
+            userId: userId?.toString?.(),
+            requestId: requestKey,
+            decision,
+            error: notifyErr?.message ?? 'unknown',
+            ...submittedAuditContext(request),
           });
         }
-      } catch (notifyErr) {
-        // Final state stands; delivery failure is logged for ops follow-up.
-        // No retry by design (the decision is final) — surface request context
-        // so a missed applicant/manager email can be found and re-sent manually.
-        console.error('[leave] finalized notification failed', {
-          requestId: requestKey,
-          decision,
-          revision: request.pendingRevision ?? request.revision,
-          error: notifyErr?.message,
-        });
-        auditLog('leave_finalized_notification_failed', {
-          userId: userId?.toString?.(),
-          requestId: requestKey,
-          decision,
-          error: notifyErr?.message ?? 'unknown',
-          ...submittedAuditContext(request),
-        });
       }
 
       auditLog('leave_request_finalized', {

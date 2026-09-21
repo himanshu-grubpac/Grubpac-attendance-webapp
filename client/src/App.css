@@ -8461,10 +8461,17 @@ body::-webkit-scrollbar-thumb {
   min-width: min(100%, 9rem);
 }
 
-.approvals-toolbar__clear {
+.approvals-toolbar__clear,
+.approvals-toolbar__actions {
   display: flex;
   align-items: flex-end;
   align-self: flex-end;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+}
+
+.approvals-toolbar__actions .btn {
+  white-space: nowrap;
 }
 
 /* Desktop (≥961px): every approval filter dropdown sits in one line —
@@ -8491,20 +8498,24 @@ body::-webkit-scrollbar-thumb {
 
   .approvals-toolbar__field--period > .approvals-toolbar__period {
     flex-wrap: nowrap;
+    min-width: 0;
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field {
-    flex: 1 1 8rem;
-    min-width: min(100%, 8rem);
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field:last-child {
-    flex: 1.15 1 9rem;
-    min-width: min(100%, 9rem);
+    flex: 1.15 1 0;
+    min-width: 0;
   }
 
-  .approvals-toolbar__filters > .approvals-toolbar__clear {
+  .approvals-toolbar__filters > .approvals-toolbar__clear,
+  .approvals-toolbar__filters > .approvals-toolbar__actions {
     flex: 0 0 auto;
+    flex-shrink: 0;
+    margin-left: var(--space-2);
   }
 }
 
@@ -8972,7 +8983,8 @@ body::-webkit-scrollbar-thumb {
    otherwise cramp the period selects and Clear action into one row. */
 @media (max-width: 640px) {
   .approvals-toolbar__field,
-  .approvals-toolbar__clear {
+  .approvals-toolbar__clear,
+  .approvals-toolbar__actions {
     width: 100%;
     min-width: 0;
   }
@@ -16251,6 +16263,13 @@ body::-webkit-scrollbar-thumb {
     flex: 1.15 1 9rem;
     min-width: min(100%, 9rem);
   }
+
+@media (min-width: 961px) {
+  .approvals-toolbar__period .select-field,
+  .approvals-toolbar__period .select-field:last-child {
+    min-width: 0;
+  }
+}
 
 @media (max-width: 768px) {
   /* Salary filters stack full-width on mobile (Audit Logs pattern):

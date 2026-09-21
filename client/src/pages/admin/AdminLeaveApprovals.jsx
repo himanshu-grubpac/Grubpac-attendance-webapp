@@ -779,7 +779,7 @@ export default function AdminLeaveApprovals() {
                 </button>
               </div>
             ) : null}
-            <div className="filter-bar__field approvals-toolbar__clear">
+            <div className="filter-bar__field approvals-toolbar__actions">
               <button type="button" className="btn btn-ghost btn-sm" onClick={openLeaveEditor}>
                 Edit columns
               </button>
