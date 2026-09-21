@@ -466,7 +466,7 @@ function AppLayoutShell() {
       variant: 'danger',
       onConfirm: async () => {
         await logout();
-        navigate('/login', { replace: true });
+        navigate('/login', { replace: true, state: null });
       },
     });
   }, [loggingOut, logout, navigate, requestConfirm]);

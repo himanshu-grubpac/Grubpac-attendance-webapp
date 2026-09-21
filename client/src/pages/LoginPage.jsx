@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { loginSchema } from '@shared/validation/auth.js';
-import { getDefaultRoute } from '../config/nav.js';
+import { resolvePostLoginPath } from '../utils/authNavigation.js';
 import { BRANDING } from '../config/branding.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { getErrorMessage } from '../services/api.js';
@@ -23,14 +23,8 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Internal return path saved by ProtectedRoute (e.g. an approvals deep
-  // link with ?decision&requestId). Strictly same-origin paths only.
-  function returnPath() {
-    const from = location.state?.from;
-    if (typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') && !from.startsWith('/login')) {
-      return from;
-    }
-    return null;
+  function postLoginPath(user, portal) {
+    return resolvePostLoginPath(location.state?.from, user, portal);
   }
   const [role, setRole] = useState('employee');
   const [identifier, setIdentifier] = useState('');
@@ -41,7 +35,7 @@ export default function LoginPage() {
   const [forgotOpen, setForgotOpen] = useState(false);
 
   if (user) {
-    return <Navigate to={returnPath() ?? getDefaultRoute(user, loginPortal)} replace />;
+    return <Navigate to={postLoginPath(user, loginPortal)} replace />;
   }
 
   async function handleSubmit(event) {
@@ -60,7 +54,7 @@ export default function LoginPage() {
         validation.data.identifier,
         validation.data.password,
       );
-      navigate(returnPath() ?? getDefaultRoute(loggedIn, signedInPortal));
+      navigate(postLoginPath(loggedIn, signedInPortal));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

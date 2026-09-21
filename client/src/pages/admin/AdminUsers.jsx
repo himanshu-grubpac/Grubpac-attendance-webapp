@@ -19,6 +19,7 @@ import StatusBadge from '../../components/StatusBadge.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { broadcastEmployeeSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
+import { ADMIN_USERS_FILTER_STORAGE_KEY as FILTER_STORAGE_KEY } from '../../utils/moduleFilterStorage.js';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
@@ -81,7 +82,6 @@ function visibleColumnsToPayload(visibleKeys) {
 }
 
 // Filter memory across the details round-trip (per-tab session storage).
-const FILTER_STORAGE_KEY = 'grubpac.adminUsers.filters.v1';
 
 function readStoredFilters() {
   try {

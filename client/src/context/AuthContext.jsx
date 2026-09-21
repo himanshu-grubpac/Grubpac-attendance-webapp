@@ -19,12 +19,39 @@ import { usePortalSync } from '../hooks/usePortalSync.js';
 import { coldStartPing, restoreSession } from '../utils/coldStartPing.js';
 import { resolveLoginPortal } from '../config/nav.js';
 import { PORTAL_TOPICS } from '../utils/portalSync.js';
+import { clearModuleFilterStorage } from '../utils/moduleFilterStorage.js';
 
 const AuthContext = createContext(null);
 
 const LOGIN_PORTAL_KEY = 'attendance.loginPortal';
+const LAST_SESSION_USER_ID_KEY = 'attendance.lastSessionUserId';
 /** Poll / focus-check interval for cross-user permission refresh after role edits. */
 const PERMISSIONS_SYNC_MS = 30 * 1000;
+
+function resolveUserId(user) {
+  if (!user) return null;
+  return user.id ?? user._id?.toString?.() ?? String(user._id ?? '');
+}
+
+function readLastSessionUserId() {
+  try {
+    return sessionStorage.getItem(LAST_SESSION_USER_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeLastSessionUserId(userId) {
+  try {
+    if (userId) {
+      sessionStorage.setItem(LAST_SESSION_USER_ID_KEY, userId);
+    } else {
+      sessionStorage.removeItem(LAST_SESSION_USER_ID_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 function readStoredLoginPortal() {
   try {
@@ -96,6 +123,8 @@ export function AuthProvider({ children }) {
     } catch {
       // Session may already be expired.
     }
+    clearModuleFilterStorage();
+    storeLastSessionUserId(null);
     setUser(null);
     setLoginPortal(null);
     storeLoginPortal(null);
@@ -108,6 +137,12 @@ export function AuthProvider({ children }) {
         ? await authApi.adminLogin(identifier, password)
         : await authApi.employeeLogin(identifier, password);
     const portal = result.user?.loginPortal ?? role;
+    const nextUserId = resolveUserId(result.user);
+    const previousUserId = readLastSessionUserId();
+    if (previousUserId && nextUserId && previousUserId !== nextUserId) {
+      clearModuleFilterStorage();
+    }
+    storeLastSessionUserId(nextUserId);
     setUser(result.user);
     setLoginPortal(portal);
     storeLoginPortal(portal);
@@ -209,8 +244,10 @@ export function AuthProvider({ children }) {
         if (!currentUser) {
           setLoginPortal(null);
           storeLoginPortal(null);
+          storeLastSessionUserId(null);
           return;
         }
+        storeLastSessionUserId(resolveUserId(currentUser));
         const stored = readStoredLoginPortal();
         const deep = deepLinkPortal();
         const portal = resolveLoginPortal(deep ?? stored, currentUser);
