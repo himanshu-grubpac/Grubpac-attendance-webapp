@@ -651,7 +651,7 @@ export async function canViewSalarySummary(actor, subject, permissions) {
 
   if (
     hasPermission(permissions, PERMISSIONS.SALARY_PAYROLL_R) &&
-    hasCompanyWideScope(permissions)
+    hasCompanyWideScope(permissions, actor)
   ) {
     return true;
   }

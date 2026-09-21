@@ -25,7 +25,7 @@ import {
   resolveRoleByNameOrSlug,
 } from './excelImportService.js';
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 
 let memoryServer;
 let sequence = 0;
@@ -620,14 +620,18 @@ test('dry-run preview enforces scope exactly like sync', async () => {
   assert.match(previewRow.message, /outside your assigned scope/);
 });
 
-test('read-all actor bypasses department scope', async () => {
+test('company-wide Admin/HR actor bypasses department scope', async () => {
   const actor = await createScopedActor();
   await Department.create({ name: 'Design', code: `DSB${sequence}`, isActive: true });
 
   const { results } = await importEmployeesFromRowsUpsert(
     [row(6, baseCreate({ department: 'Design' }))],
     createdBy(),
-    { actorId: actor._id.toString(), actorPermissions: [PERMISSIONS.ATTENDANCE_READ_ALL] },
+    {
+      actorId: actor._id.toString(),
+      actorPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
+      actor: { ...actor.toObject(), roleSlug: SYSTEM_ROLE_SLUGS.ADMIN },
+    },
   );
 
   assert.equal(results[0].status, 'created');

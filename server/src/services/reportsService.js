@@ -10,7 +10,7 @@ import { LeaveRequest } from '../models/LeaveRequest.js';
 import { HelpTicket } from '../models/HelpTicket.js';
 import { User } from '../models/User.js';
 import { Role } from '../models/Role.js';
-import { SYSTEM_ROLE_SLUGS, PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { SYSTEM_ROLE_SLUGS, PERMISSIONS, hasCompanyWideScope } from '../../../shared/permissions.js';
 import { resolveLeaveApprovalUserIds } from './teamScopeService.js';
 
 /** Help tickets are raised by `createdBy` (not `userId`) — map the scope filter. */
@@ -32,9 +32,7 @@ function adminUserFilter(adminRole) {
 }
 
 export async function getAdminReportsSummary(actor = null, permissions = []) {
-  const unscoped =
-    hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL) ||
-    hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const unscoped = hasCompanyWideScope(permissions, actor);
   // Team-scoped callers (e.g. reporting managers) see only their direct
   // reports (+ delegate chain) — never org-wide counts.
   const scopedIds = unscoped || !actor?._id ? null : await resolveLeaveApprovalUserIds(actor);

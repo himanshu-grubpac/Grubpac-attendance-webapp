@@ -56,7 +56,7 @@ import {
   recalculateAllBalancesForPolicy,
 } from '../services/leaveBalanceService.js';
 import { PERMISSIONS, hasCompanyWideScope, hasPermission } from '../../../shared/permissions.js';
-import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
+import { isUserInTeamScope } from '../services/teamScopeService.js';
 import {
   cancelLeaveRequest,
   cancelApprovedLeaveByApprover,
@@ -349,18 +349,12 @@ export async function getLeaveBalances(req, res) {
   const userId = parsed.userId ?? req.user._id.toString();
   const year = parsed.year ?? getISTYear();
 
-  // Read-all / adjust roles see anyone; team roles (RM) see their scope only.
+  // Company-wide (Admin/HR) and balance-adjust roles see anyone; team roles see managed scope only.
   const canReadAll =
-    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) ||
+    hasCompanyWideScope(req.userPermissions, req.user) ||
     hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES);
   if (!canReadAll && userId !== req.user._id.toString()) {
-    const inScope = await isUserInTeamScope(
-      req.user,
-      req.userPermissions,
-      userId,
-      PERMISSIONS.LEAVE_READ_ALL,
-      PERMISSIONS.LEAVE_READ_TEAM,
-    );
+    const inScope = await isUserInTeamScope(req.user, req.userPermissions, userId);
     if (!inScope) {
       return res.status(403).json({ message: "You do not have permission to view this employee's leave balances." });
     }
@@ -460,7 +454,7 @@ export async function getLeaveRequestHandler(req, res) {
   const request = await loadLeaveRequest(req.params.id);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   const isOwner = requesterId === req.user._id.toString();
-  const canViewAll = hasCompanyWideScope(req.userPermissions);
+  const canViewAll = hasCompanyWideScope(req.userPermissions, req.user);
   const canViewTeam = hasPermission(req.userPermissions, PERMISSIONS.LEAVE_REQUEST_R);
 
   if (isOwner || canViewAll) {
@@ -1003,17 +997,16 @@ export async function getLopRecordsHandler(req, res) {
     return res.status(400).json({ message: 'userId is required.' });
   }
 
-  // Scope gate: own rows always allowed; READ_ALL / ADJUST bypass; otherwise
-  // confined to the caller's direct reports (+ delegate chain) so any
-  // LEAVE_READ holder cannot enumerate anyone's LOP rows via :userId.
+  // Scope gate: own rows always allowed; company-wide / ADJUST bypass; otherwise
+  // confined to managed team scope so leave.request.r cannot enumerate anyone.
   const callerId = req.user._id.toString();
   if (
     String(userId) !== callerId &&
-    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) &&
+    !hasCompanyWideScope(req.userPermissions, req.user) &&
     !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES)
   ) {
-    const allowedIds = await resolveLeaveTeamUserIds(req.user);
-    if (!allowedIds.map(String).includes(String(userId))) {
+    const inScope = await isUserInTeamScope(req.user, req.userPermissions, userId);
+    if (!inScope) {
       return res.status(403).json({ message: "You are not authorized to view this user's LOP records." });
     }
   }

@@ -396,9 +396,26 @@ export function hasEmployeePortalAccess(userPermissions) {
   return hasPermission(userPermissions, PERMISSIONS.PORTAL_EMPLOYEE);
 }
 
-/** Company-wide directory / salary rollup scope (row 5 READ). */
-export function hasCompanyWideScope(userPermissions) {
-  return hasPermission(userPermissions, COMPANY_WIDE_SCOPE_SLUG);
+/**
+ * Company-wide directory scope: employees.record.r is a read permission;
+ * company-wide visibility is limited to Admin/HR system roles. Other roles
+ * with record.r remain team/department scoped via teamScopeService.
+ *
+ * @param {string[]} userPermissions
+ * @param {{ roleSlug?: string, roleId?: { slug?: string } } | null} [actor]
+ */
+export function hasCompanyWideScope(userPermissions, actor = null) {
+  if (!hasPermission(userPermissions, COMPANY_WIDE_SCOPE_SLUG)) {
+    return false;
+  }
+  const roleSlug =
+    actor?.roleSlug ??
+    (typeof actor?.roleId === 'object' ? actor.roleId?.slug : null) ??
+    null;
+  if (!roleSlug) {
+    return false;
+  }
+  return roleSlug === SYSTEM_ROLE_SLUGS.ADMIN || roleSlug === SYSTEM_ROLE_SLUGS.HR;
 }
 
 export function canViewSalaryFields(userPermissions) {

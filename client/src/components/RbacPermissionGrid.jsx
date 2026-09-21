@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { slugsFromRow } from '@shared/permissionCatalog.js';
 import SearchInput from './SearchInput.jsx';
+import StickyHScrollBar from './StickyHScrollBar.jsx';
 
 const CRUD_COLUMNS = [
   { key: 'create', label: 'Create', short: 'C' },
@@ -207,6 +208,7 @@ export default function RbacPermissionGrid({
   hideActions = false,
 }) {
   const gridId = useId();
+  const tableWrapRef = useRef(null);
   const [search, setSearch] = useState('');
   const [collapsedModules, setCollapsedModules] = useState(() => new Set());
 
@@ -249,6 +251,16 @@ export default function RbacPermissionGrid({
       }))
       .filter((mod) => mod.pages.length > 0);
   }, [grouped, query, metadata]);
+
+  const tableSyncKey = useMemo(
+    () =>
+      filteredGrouped.reduce(
+        (count, mod) =>
+          count + mod.pages.reduce((pageCount, page) => pageCount + page.rows.length, 0),
+        0,
+      ),
+    [filteredGrouped],
+  );
 
   const toggleSlug = useCallback(
     (slug) => {
@@ -346,7 +358,10 @@ export default function RbacPermissionGrid({
         </div>
       </div>
 
-      <div className="rbac-grid__table-wrap roles-permissions">
+      <div
+        ref={tableWrapRef}
+        className="rbac-grid__table-wrap roles-permissions table-wrap"
+      >
         <table className="rbac-grid__table" aria-labelledby={gridId}>
           <caption id={gridId} className="visually-hidden">
             Permission matrix — select CRUD actions and extra permissions for this role
@@ -409,6 +424,7 @@ export default function RbacPermissionGrid({
           </tbody>
         </table>
       </div>
+      <StickyHScrollBar targetRef={tableWrapRef} syncKey={tableSyncKey} />
     </div>
   );
 }

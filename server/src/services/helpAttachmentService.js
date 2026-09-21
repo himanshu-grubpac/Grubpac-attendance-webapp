@@ -192,7 +192,7 @@ export async function listAttachmentsForTicket(ticketId) {
 
 export async function presignUpload(actor, ticketId, permissions, payload) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
   if (!canUploadToTicket(actor, ticket)) {
@@ -256,7 +256,7 @@ export async function presignUpload(actor, ticketId, permissions, payload) {
 
 export async function confirmUpload(actor, ticketId, attachmentId, permissions) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
 
@@ -315,7 +315,7 @@ export async function confirmUpload(actor, ticketId, attachmentId, permissions) 
 
 export async function getDownloadUrl(actor, ticketId, attachmentId, permissions) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
 
@@ -394,7 +394,7 @@ async function countActiveCommentAttachments(commentId) {
 
 export async function presignCommentUpload(actor, ticketId, commentId, permissions, payload) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
   if (ticket.status === 'closed' || ticket.status === 'resolved') {
@@ -469,7 +469,7 @@ export async function presignCommentUpload(actor, ticketId, commentId, permissio
 
 export async function confirmCommentUpload(actor, ticketId, commentId, attachmentId, permissions) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
   if (ticket.status === 'closed' || ticket.status === 'resolved') {

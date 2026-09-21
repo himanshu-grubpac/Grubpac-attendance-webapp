@@ -7,13 +7,20 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, buildDefaultRolePermissions } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  buildDefaultRolePermissions,
+  hasCompanyWideScope,
+} from '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import {
   assertDepartmentInAccessibleSet,
+  isUserInTeamScope,
   resolveAccessibleDepartmentIds,
+  resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import {
   listLopSummaries,
@@ -73,6 +80,32 @@ async function seedRmWithDepts() {
   return { deptA, deptB, rm, inTeam, outsider, rmPerms };
 }
 
+test('hasCompanyWideScope: employees.record.r does not bypass team scope for RM', () => {
+  const rmPermsWithRecordR = [...DEFAULTS['reporting-manager'], PERMISSIONS.EMPLOYEES_RECORD_R];
+  const rmActor = { roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER };
+  assert.equal(hasCompanyWideScope(rmPermsWithRecordR, rmActor), false);
+  assert.equal(hasCompanyWideScope(DEFAULTS.admin, { roleSlug: SYSTEM_ROLE_SLUGS.ADMIN }), true);
+  assert.equal(hasCompanyWideScope(DEFAULTS.hr, { roleSlug: SYSTEM_ROLE_SLUGS.HR }), true);
+});
+
+test('RM with employees.record.r and managedDepartmentIds cannot see deptB employees', async () => {
+  const { rm, inTeam, outsider, rmPerms } = await seedRmWithDepts();
+  const rmPermsWithRecordR = [...rmPerms, PERMISSIONS.EMPLOYEES_RECORD_R];
+  const rmActor = {
+    ...rm.toObject(),
+    _id: rm._id,
+    roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER,
+  };
+
+  const scopedIds = await resolveTeamScopedUserIds(rmActor, rmPermsWithRecordR);
+  assert.notEqual(scopedIds, null);
+  const idSet = new Set(scopedIds.map(String));
+  assert.ok(idSet.has(inTeam._id.toString()));
+  assert.ok(!idSet.has(outsider._id.toString()));
+  assert.equal(await isUserInTeamScope(rmActor, rmPermsWithRecordR, inTeam._id), true);
+  assert.equal(await isUserInTeamScope(rmActor, rmPermsWithRecordR, outsider._id), false);
+});
+
 test('scoped RM listSalarySummariesForMonth excludes out-of-scope employees', async () => {
   const { rm, inTeam, outsider, rmPerms } = await seedRmWithDepts();
 
@@ -125,7 +158,7 @@ test('resolveAccessibleDepartmentIds returns managed and lead departments only f
   assert.ok(!accessibleSet.has(deptB._id.toString()));
 });
 
-test('bulk import rejects out-of-scope department row', async () => {
+test('bulk import rejects out-of-scope department row even when RM has attendance.record.r', async () => {
   const { deptA, deptB, rm, rmPerms } = await seedRmWithDepts();
   const empRole = await Role.create({
     name: 'Employee',
@@ -162,10 +195,11 @@ test('bulk import rejects out-of-scope department row', async () => {
     },
   ];
 
+  const rmPermsWithAttendanceR = [...rmPerms, PERMISSIONS.ATTENDANCE_READ_ALL];
   const result = await importEmployeesFromRowsUpsert(rows, rm._id, {
     dryRun: true,
-    actor: rm,
-    permissions: rmPerms,
+    actor: { ...rm.toObject(), _id: rm._id, roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER },
+    actorPermissions: rmPermsWithAttendanceR,
   });
 
   assert.equal(result.results[0].status, 'validation_error');

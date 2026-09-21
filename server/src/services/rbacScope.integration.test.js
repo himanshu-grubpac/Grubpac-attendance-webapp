@@ -14,13 +14,13 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LopRecord } from '../models/LopRecord.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
-import { getLopRecordsHandler } from '../controllers/leaveController.js';
+import { getLeaveBalances, getLopRecordsHandler } from '../controllers/leaveController.js';
 import { listManagers } from '../controllers/adminController.js';
 import { createLopOnApproval } from './lopSettlementService.js';
 
@@ -148,20 +148,55 @@ test('LOP records: manager reads report, blocked on outsider', async () => {
   assert.equal(deniedRes.statusCode, 403);
 });
 
-test('LOP records: READ_ALL bypasses scope', async () => {
+test('LOP records: RM with leave.request.r cannot bypass scope', async () => {
   const { manager, outsider } = await seedLopTree();
   const res = mockRes();
   await getLopRecordsHandler(
     {
       params: { userId: outsider._id.toString() },
       query: {},
-      user: actorAs(manager, 'reporting-manager'),
-      userPermissions: ADMIN_PERMS,
+      user: actorAs(manager, SYSTEM_ROLE_SLUGS.REPORTING_MANAGER),
+      userPermissions: [...RM_PERMS, PERMISSIONS.LEAVE_READ_ALL],
+    },
+    res,
+  );
+  assert.equal(res.statusCode, 403);
+});
+
+test('LOP records: company-wide Admin/HR bypasses scope', async () => {
+  const { admin, outsider } = await seedLopTree();
+  const res = mockRes();
+  await getLopRecordsHandler(
+    {
+      params: { userId: outsider._id.toString() },
+      query: {},
+      user: actorAs(admin, SYSTEM_ROLE_SLUGS.ADMIN),
+      userPermissions: [...ADMIN_PERMS, PERMISSIONS.EMPLOYEES_RECORD_R],
     },
     res,
   );
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.records.length, 1);
+});
+
+test('leave balances: RM with leave.request.r blocked on outsider', async () => {
+  const { manager, report, outsider } = await seedLopTree();
+  const actor = actorAs(manager, SYSTEM_ROLE_SLUGS.REPORTING_MANAGER);
+  const rmWithLeaveReadAll = [...RM_PERMS, PERMISSIONS.LEAVE_READ_ALL];
+
+  const okRes = mockRes();
+  await getLeaveBalances(
+    { query: { userId: report._id.toString() }, user: actor, userPermissions: rmWithLeaveReadAll },
+    okRes,
+  );
+  assert.equal(okRes.statusCode, 200);
+
+  const deniedRes = mockRes();
+  await getLeaveBalances(
+    { query: { userId: outsider._id.toString() }, user: actor, userPermissions: rmWithLeaveReadAll },
+    deniedRes,
+  );
+  assert.equal(deniedRes.statusCode, 403);
 });
 
 // ── comp-off credit in LOP math ──────────────────────────────────────────

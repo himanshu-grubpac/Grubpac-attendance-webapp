@@ -29,7 +29,7 @@ function scopeError(message, statusCode = 403) {
  * or an array of user ObjectIds.
  */
 export async function resolveTeamScopedUserIds(actor, permissions) {
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return null;
   }
   if (!actor?._id) {
@@ -39,7 +39,7 @@ export async function resolveTeamScopedUserIds(actor, permissions) {
 }
 
 export async function applyTeamScopeToEmployeeQuery(query, actor, permissions) {
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return query;
   }
   if (!actor?._id) {
@@ -64,7 +64,7 @@ export async function applyTeamScopeToUserIdQuery(query, actor, permissions) {
  * departments, and own department. Returns null when company-wide.
  */
 export async function resolveAccessibleDepartmentIds(actor, permissions) {
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return null;
   }
   if (!actor?._id) {
@@ -131,7 +131,7 @@ export async function assertManagedDepartmentsAccessible(actor, permissions, man
 }
 
 export async function isUserInTeamScope(actor, permissions, targetUserId) {
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return true;
   }
   const scopedIds = await resolveTeamScopedUserIds(actor, permissions);
@@ -173,9 +173,9 @@ async function resolveVisibilityReportUserIds(actor) {
   ];
 }
 
-/** Team-scope user set for leave reads — same membership as approvals. */
+/** Team-scope user set for leave reads/calendar — full managed-team membership. */
 export async function resolveLeaveTeamUserIds(actor) {
-  return resolveLeaveApprovalUserIds(actor);
+  return resolveManagedTeamUserIds(actor);
 }
 
 /**
@@ -225,7 +225,7 @@ export async function resolveTeamScopedUserIdsLegacy(
   readAllPermission,
   readTeamPermission,
 ) {
-  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions)) {
+  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions, actor)) {
     return null;
   }
   if (!hasPermission(permissions, readTeamPermission) && !hasPermission(permissions, COMPANY_WIDE_SCOPE_SLUG)) {
@@ -243,7 +243,7 @@ export async function applyTeamScopeToEmployeeQueryLegacy(
   readAllPermission,
   readTeamPermission,
 ) {
-  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions)) {
+  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions, actor)) {
     return query;
   }
   if (!hasPermission(permissions, readTeamPermission) && !actor?._id) {
@@ -261,7 +261,7 @@ export async function isUserInTeamScopeLegacy(
   readAllPermission,
   readTeamPermission,
 ) {
-  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions)) {
+  if (hasPermission(permissions, readAllPermission) || hasCompanyWideScope(permissions, actor)) {
     return true;
   }
   if (!hasPermission(permissions, readTeamPermission)) {

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, hasCompanyWideScope, hasPermission } from '../../../shared/permissions.js';
+import { isUserInTeamScope, resolveManagedTeamUserIds } from './teamScopeService.js';
 import { HelpTicket, HELP_TICKET_POPULATE } from '../models/HelpTicket.js';
 import { HelpComment, HELP_COMMENT_POPULATE } from '../models/HelpComment.js';
 import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachment.js';
@@ -56,20 +57,33 @@ export async function findUsersWithPermission(permission) {
     .populate({ path: 'roleId', select: 'permissions' });
 }
 
-export function canViewTicket(actor, ticket, permissions) {
+export async function canViewTicket(actor, ticket, permissions) {
   const actorId = actor._id.toString();
   const creatorId = getCreatorId(ticket);
 
   if (creatorId === actorId) return true;
-  if (hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
-    if (hasPermission(permissions, PERMISSIONS.USERS_WRITE)) {
-      return true;
-    }
-    const creatorDoc =
-      ticket.createdBy && typeof ticket.createdBy === 'object' ? ticket.createdBy : null;
-    const managerId = getManagerId(creatorDoc ?? { reportingManagerId: null });
-    if (managerId === actorId) return true;
+
+  const canViewTeamTickets =
+    hasPermission(permissions, PERMISSIONS.HELP_TICKET_R) ||
+    hasPermission(permissions, PERMISSIONS.HELP_TICKET_U) ||
+    hasPermission(permissions, PERMISSIONS.HELP_MANAGE);
+
+  if (!canViewTeamTickets) {
+    return false;
   }
+
+  if (hasCompanyWideScope(permissions, actor)) {
+    return true;
+  }
+
+  if (hasPermission(permissions, PERMISSIONS.HELP_MANAGE) && hasPermission(permissions, PERMISSIONS.USERS_WRITE)) {
+    return true;
+  }
+
+  if (creatorId) {
+    return isUserInTeamScope(actor, permissions, creatorId);
+  }
+
   return false;
 }
 
@@ -184,14 +198,15 @@ export async function listHelpTickets(actor, permissions, query) {
   if (scope === 'mine') {
     filter.createdBy = actor._id;
   } else if (scope === 'team') {
-    if (!hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
+    if (
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_R) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_U) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)
+    ) {
       throwError('You do not have permission to view team help tickets.', 403);
     }
-    const directReports = await User.find({
-      reportingManagerId: actor._id,
-      isActive: true,
-    }).select('_id');
-    filter.createdBy = { $in: directReports.map((item) => item._id) };
+    const teamIds = await resolveManagedTeamUserIds(actor);
+    filter.createdBy = { $in: teamIds };
   } else if (scope === 'all') {
     if (
       !hasPermission(permissions, PERMISSIONS.HELP_MANAGE) ||
@@ -250,7 +265,7 @@ export async function listHelpTickets(actor, permissions, query) {
 
 export async function getHelpTicketById(ticketId, actor, permissions) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to view this ticket.', 403);
   }
 
@@ -378,7 +393,7 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
 
 export async function addHelpComment(ticketId, actor, permissions, payload, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to comment on this ticket.', 403);
   }
   if (ticket.status === 'closed' || ticket.status === 'resolved') {
@@ -496,7 +511,7 @@ export async function deleteHelpTicket(ticketId, actor, permissions, auditContex
 
 export async function deleteHelpComment(ticketId, commentId, actor, permissions, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
-  if (!canViewTicket(actor, ticket, permissions)) {
+  if (!(await canViewTicket(actor, ticket, permissions))) {
     throwError('You do not have permission to delete this comment.', 403);
   }
 

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { HelpTicket } from '../models/HelpTicket.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -74,7 +74,8 @@ test('RM sees only direct-report counts, admin sees the org', async () => {
   assert.equal(rmSummary.presentToday, 0);
   assert.equal(rmSummary.pendingLeaveRequests, 0);
 
-  const adminSummary = await getAdminReportsSummary(manager, ADMIN_PERMS);
+  const adminActor = { ...manager.toObject(), _id: manager._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
+  const adminSummary = await getAdminReportsSummary(adminActor, ADMIN_PERMS);
   assert.equal(adminSummary.activeEmployees, 3, 'admin counts the whole org');
 });
 
@@ -96,6 +97,7 @@ test('RM present-today excludes outsiders checked in today', async () => {
   assert.equal(rmSummary.presentToday, 1, 'only the report counts as present');
   assert.equal(rmSummary.absentToday, 0, 'no phantom absents in scoped view');
 
-  const adminSummary = await getAdminReportsSummary(manager, ADMIN_PERMS);
+  const adminActor = { ...manager.toObject(), _id: manager._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
+  const adminSummary = await getAdminReportsSummary(adminActor, ADMIN_PERMS);
   assert.equal(adminSummary.presentToday, 2, 'admin sees both check-ins');
 });

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import '../models/Department.js';
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
@@ -219,9 +219,10 @@ test('inactive ex-reports stay visible with an inactive status (directory parity
   assert.equal(byId.get(String(offboarded._id)).status, 'inactive');
 });
 
-test('read-all admins still see everyone', async () => {
+test('company-wide Admin/HR still see everyone', async () => {
   const { boss, otherEmp } = await setupTree();
-  const rows = await getTeamTodayStatusService(boss, ADMIN_PERMS);
+  const adminActor = { ...boss.toObject(), _id: boss._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
+  const rows = await getTeamTodayStatusService(adminActor, ADMIN_PERMS);
   const seen = new Set(idsOf(rows));
   assert.ok(seen.has(String(otherEmp._id)), 'admin sees other branch');
 });

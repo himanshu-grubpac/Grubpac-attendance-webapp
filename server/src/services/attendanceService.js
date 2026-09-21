@@ -389,7 +389,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const todayKey = getISTDateInputValue();
   const istToday = todayKey;
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   let userIds = [];
@@ -1138,7 +1138,7 @@ export async function getAdminAttendance({
     }
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && canReadTeam && actor?._id) {
@@ -1506,7 +1506,7 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
     return actor._id;
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && !canReadTeam) {
