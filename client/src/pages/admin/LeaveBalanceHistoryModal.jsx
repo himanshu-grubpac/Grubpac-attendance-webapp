@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getErrorMessage, leaveApi } from '../../services/api.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
-import { formatISTDate } from '../../utils/datetime.js';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { formatISTDate, getISTYear } from '../../utils/datetime.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 
@@ -33,15 +35,12 @@ export default function LeaveBalanceHistoryModal({ userId, userName, policyYear,
   const previouslyFocused = useRef(null);
   // End year of the 3-year window — admin can look further back than the
   // policy year the drawer was opened from.
-  const [year, setYear] = useState(() => String(policyYear ?? new Date().getFullYear()));
-
-  const yearOptions = useMemo(() => {
-    const currentYear = new Date().getFullYear();
-    return Array.from({ length: 6 }, (_, index) => {
-      const value = String(currentYear - index);
-      return { value, label: value };
-    });
-  }, []);
+  const [year, setYear] = useState(() => String(policyYear ?? getISTYear()));
+  const oldestJoiningYear = useOldestJoiningYear();
+  const yearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestJoiningYear, getISTYear()),
+    [oldestJoiningYear],
+  );
 
   useEscapeKey(Boolean(userId), onClose);
 
@@ -58,7 +57,7 @@ export default function LeaveBalanceHistoryModal({ userId, userName, policyYear,
   }, [userId]);
 
   useEffect(() => {
-    setYear(String(policyYear ?? new Date().getFullYear()));
+    setYear(String(policyYear ?? getISTYear()));
   }, [userId, policyYear]);
 
   useEffect(() => {

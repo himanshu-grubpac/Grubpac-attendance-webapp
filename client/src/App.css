@@ -1541,6 +1541,12 @@ textarea:disabled {
   color: color-mix(in srgb, var(--primary) 80%, var(--text-h));
 }
 
+.table-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .table-link.cell-ellipsis {
   display: block;
   max-width: 100%;
@@ -8445,8 +8451,14 @@ body::-webkit-scrollbar-thumb {
 }
 
 .approvals-toolbar__period .select-field {
-  flex: 1 1 6.5rem;
-  min-width: 6.5rem;
+  flex: 1 1 8rem;
+  min-width: min(100%, 8rem);
+}
+
+/* Month select (second in pair) needs room for "All months" and long month names. */
+.approvals-toolbar__period .select-field:last-child {
+  flex: 1.15 1 9rem;
+  min-width: min(100%, 9rem);
 }
 
 .approvals-toolbar__clear {
@@ -8482,8 +8494,13 @@ body::-webkit-scrollbar-thumb {
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 1 1 8rem;
+    min-width: min(100%, 8rem);
+  }
+
+  .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field:last-child {
+    flex: 1.15 1 9rem;
+    min-width: min(100%, 9rem);
   }
 
   .approvals-toolbar__filters > .approvals-toolbar__clear {
@@ -11629,11 +11646,6 @@ body::-webkit-scrollbar-thumb {
   color: var(--text-h);
 }
 
-.employees-table__row:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-
 .employees-table__manage .action-menu__trigger {
   width: auto;
   min-width: 5.5rem;
@@ -13120,8 +13132,24 @@ body::-webkit-scrollbar-thumb {
 
 .departments-modal {
   width: min(100%, 32rem);
-  border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
-  box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
+}
+
+.faq-demo-modal {
+  width: min(100%, 32rem);
+}
+
+.faq-demo-modal .modal__body {
+  gap: var(--space-3);
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 62%, transparent) var(--surface-2);
+}
+
+.faq-demo-modal .modal__body textarea.input {
+  padding-block: 0.75rem;
+  line-height: 1.5;
 }
 
 @media (min-width: 961px) {
@@ -15202,6 +15230,17 @@ body::-webkit-scrollbar-thumb {
   min-width: min(100%, 14rem);
 }
 
+.salary-toolbar__period .field-inline {
+  flex: 1 1 8rem;
+  min-width: min(100%, 8rem);
+}
+
+.salary-toolbar__filters > .salary-toolbar__actions.filter-bar__field {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-end;
+}
+
 .salary-toolbar__actions {
   flex: 0 0 auto;
   display: flex;
@@ -15214,6 +15253,10 @@ body::-webkit-scrollbar-thumb {
 }
 
 .salary-panel .alert {
+  margin: 0 var(--space-4) var(--space-3);
+}
+
+.salary-panel > .summary-row {
   margin: 0 var(--space-4) var(--space-3);
 }
 
@@ -15588,8 +15631,13 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-.auto-checkout-summary { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
-.auto-checkout-summary span { background: rgba(255,255,255,0.08); padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.1); }
+.auto-checkout-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 0.5rem 0 1rem;
+  min-width: 0;
+}
 
 /* Action confirmation popup (distinct from toasts) */
 .action-popup-stack {
@@ -16125,6 +16173,19 @@ body::-webkit-scrollbar-thumb {
   min-width: 0;
 }
 
+.card--table > .today-present-toolbar__row.filter-bar {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  box-sizing: border-box;
+}
+
+.today-present-toolbar__title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .today-present-toolbar__search {
   flex: 1 1 min(100%, 16rem);
   min-width: 0;
@@ -16219,6 +16280,12 @@ body::-webkit-scrollbar-thumb {
     min-width: min(100%, 8rem);
   }
 
+  .approvals-toolbar__period .select-field:last-child {
+    flex: 1.15 1 9rem;
+    min-width: min(100%, 9rem);
+  }
+
+@media (max-width: 768px) {
   /* Salary filters stack full-width on mobile (Audit Logs pattern):
      label above controls, no side-by-side collisions at any width.
      Specificity (0,4,0) beats the generic 50% card-toolbar rule (0,3,0). */
@@ -16226,6 +16293,28 @@ body::-webkit-scrollbar-thumb {
     flex: 1 1 100%;
     min-width: 0;
   }
+}
+
+@media (min-width: 1024px) {
+  .salary-toolbar__filters {
+    flex-wrap: nowrap;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__filters .filter-bar__field {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .card--table > .card__toolbar.salary-toolbar .salary-toolbar__search {
+    flex: 1 1 14rem;
+    max-width: 20rem;
+  }
+
+  .today-present-toolbar__row.filter-bar {
+    flex-wrap: nowrap;
+  }
+}
+
 .salary-toolbar__search {
   flex: 1 1 min(100%, 14rem);
   min-width: 0;
@@ -16283,11 +16372,7 @@ body::-webkit-scrollbar-thumb {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
-  min-width: 0;
-}
-
-.auto-checkout-summary span {
-  overflow-wrap: anywhere;
+  margin: 0.5rem 0 1rem;
   min-width: 0;
 }
 

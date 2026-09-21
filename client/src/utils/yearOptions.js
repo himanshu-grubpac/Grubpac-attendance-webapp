@@ -1,7 +1,9 @@
 /**
- * Dynamic year dropdowns (§8 rule): oldest employee joining year through the
- * current year — never hardcoded windows, never future years (unless a page
- * explicitly opts into next-year planning via `includeNextYear`).
+ * Dynamic year dropdowns: oldest employee joining year through the current IST
+ * year — no hardcoded windows, no future years in leave/salary selectors.
+ *
+ * `includeNextYear` exists for non-leave edge cases only; leave module must
+ * not pass it.
  *
  * When the oldest year is unknown (stats unavailable), falls back to the
  * legacy currentYear-4 window so the UI keeps working.

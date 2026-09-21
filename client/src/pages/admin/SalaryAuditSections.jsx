@@ -441,6 +441,8 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const auditMonthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const [departmentId, setDepartmentId] = useState('');
   const [departments, setDepartments] = useState([]);
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 350);
   const periodKey = `${yearFilter}-${monthPartFilter}`;
 
   const [employees, setEmployees] = useState([]);
@@ -620,6 +622,19 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
   };
 
+  const hasActiveSearch = Boolean(debouncedSearch.trim());
+
+  const filteredEmployees = useMemo(() => {
+    const query = debouncedSearch.trim().toLowerCase();
+    if (!query) return employees;
+    return employees.filter(
+      (row) =>
+        row.employeeName?.toLowerCase().includes(query) ||
+        row.employeeCode?.toLowerCase().includes(query) ||
+        row.departmentName?.toLowerCase().includes(query),
+    );
+  }, [debouncedSearch, employees]);
+
   return (
     <>
       <p className="salary-disclaimer muted small">
@@ -631,25 +646,39 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
       <section className="salary-panel card card--table" aria-label={title}>
         <div className="salary-toolbar card__toolbar">
           <div className="salary-toolbar__filters filter-bar">
-            <div className="field-inline filter-bar__field salary-toolbar__field salary-toolbar__field--period">
-              <span className="label">Pay period</span>
+            <SearchInput
+              className="filter-bar__search salary-toolbar__search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search name, code, or department…"
+              ariaLabel="Search salary audit"
+            />
+
+            <div className="filter-bar__field salary-toolbar__field salary-toolbar__field--period">
               <div className="salary-toolbar__period">
-                <SelectField
-                  value={yearFilter}
-                  onChange={handleYearChange}
-                  options={auditYearOptions}
-                  aria-label="Audit year"
-                  disabled={loading}
-                />
-                <SelectField
-                  value={monthPartFilter}
-                  onChange={setMonthPartFilter}
-                  options={auditMonthOptions}
-                  aria-label="Audit month"
-                  disabled={loading}
-                />
+                <div className="field-inline">
+                  <span className="label">Year</span>
+                  <SelectField
+                    value={yearFilter}
+                    onChange={handleYearChange}
+                    options={auditYearOptions}
+                    aria-label="Audit year"
+                    disabled={loading}
+                  />
+                </div>
+                <div className="field-inline">
+                  <span className="label">Month</span>
+                  <SelectField
+                    value={monthPartFilter}
+                    onChange={setMonthPartFilter}
+                    options={auditMonthOptions}
+                    aria-label="Audit month"
+                    disabled={loading}
+                  />
+                </div>
               </div>
             </div>
+
             <div className="field-inline filter-bar__field salary-toolbar__field">
               <span className="label">Department</span>
               <SelectField
@@ -660,6 +689,18 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                 disabled={loading}
               />
             </div>
+
+            {hasActiveSearch ? (
+              <div className="filter-bar__field salary-toolbar__clear">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setSearch('')}
+                >
+                  Clear search
+                </button>
+              </div>
+            ) : null}
           </div>
 
           {allowDownload ? (
@@ -699,6 +740,17 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
             title="No audit rows"
             description="No employees in scope for this month."
           />
+        ) : filteredEmployees.length === 0 ? (
+          <EmptyState
+            icon={EMPTY_ICONS.payroll}
+            title="No employees match your search"
+            description="Try a different name, code, or department, or clear search."
+            action={(
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setSearch('')}>
+                Clear search
+              </button>
+            )}
+          />
         ) : (
           <div ref={tableWrapRef} className="table-wrap table-wrap--responsive salary-table-wrap">
             <table className="table data-table salary-table">
@@ -719,7 +771,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                 </tr>
               </thead>
               <tbody>
-                {employees.map((row) => {
+                {filteredEmployees.map((row) => {
                   const status = auditStatusBadge(row.status);
                   return (
                     <tr key={row.employeeId}>
@@ -782,7 +834,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
           </div>
         )}
 
-        <StickyHScrollBar targetRef={tableWrapRef} syncKey={employees.length} />
+        <StickyHScrollBar targetRef={tableWrapRef} syncKey={filteredEmployees.length} />
 
         <SalaryDetailModal
           open={auditDetailOpen}

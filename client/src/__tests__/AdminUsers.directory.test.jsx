@@ -63,6 +63,8 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
     ...actual,
     useAuth: () => ({
       hasPermission: () => true,
+      hasAnyPermission: () => true,
+      user: { id: 'admin1', name: 'Admin' },
     }),
   };
 });
@@ -136,6 +138,20 @@ describe('AdminUsers directory', () => {
     );
     // Current rows stay on screen while the quiet refresh lands.
     expect(screen.getByText('Test User')).toBeInTheDocument();
+  });
+
+  it('links employee detail only from the name cell, not the full row', async () => {
+    setup();
+    await waitFor(() => {
+      expect(screen.getByText('Test User')).toBeInTheDocument();
+    });
+
+    const row = screen.getByText('Test User').closest('tr');
+    expect(row).not.toHaveAttribute('role', 'link');
+    expect(row).not.toHaveClass('table-row--clickable');
+
+    const nameLink = screen.getByRole('link', { name: /view test user/i });
+    expect(nameLink).toHaveAttribute('href', '/admin/users/emp1');
   });
 
   it('disables admin row actions with a tooltip and no detail link', async () => {

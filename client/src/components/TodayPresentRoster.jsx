@@ -57,7 +57,7 @@ export default function TodayPresentRoster({
   return (
     <>
       {(onSearchChange || toolbarActions || showFilters) && (
-        <div className="today-present-toolbar__row">
+        <div className="today-present-toolbar__row filter-bar">
           {onSearchChange ? (
             <div className="search-input today-present-toolbar__search">
               <svg className="search-input__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+import SelectField from '../../components/SelectField.jsx';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 export default function EmployeeLeaveBalances() {
-  const [year, setYear] = useState(getISTYear());
+  const [year, setYear] = useState(() => String(getISTYear()));
+  const yearOptions = useMemo(() => buildDynamicYearOptions(null, getISTYear()), []);
   const [balances, setBalances] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,8 +20,8 @@ export default function EmployeeLeaveBalances() {
     setError('');
     try {
       const [balanceData, policyData] = await Promise.all([
-        leaveApi.getMyBalances({ year }),
-        leaveApi.listPolicies({ year }),
+        leaveApi.getMyBalances({ year: Number(year) }),
+        leaveApi.listPolicies({ year: Number(year) }),
       ]);
       setBalances(balanceData.balances ?? []);
       setPolicies(policyData.policies ?? []);
@@ -45,13 +48,11 @@ export default function EmployeeLeaveBalances() {
         <div className="card__toolbar">
           <label className="field-inline form-field--sm">
             <span className="label">Year</span>
-            <input
-              className="input--narrow"
-              type="number"
-              min="2020"
-              max="2100"
+            <SelectField
               value={year}
-              onChange={(event) => setYear(Number(event.target.value))}
+              onChange={setYear}
+              options={yearOptions}
+              aria-label="Year"
             />
           </label>
           <span className="muted small form-actions__hint">As of {getISTDateInputValue()}</span>

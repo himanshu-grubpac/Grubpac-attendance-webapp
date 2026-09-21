@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { objectIdSchema, paginationSchema } from './common.js';
+import { objectIdSchema, paginationSchema, pastOrCurrentYearSchema } from './common.js';
 
 export const istDateInputSchema = z
   .string()
@@ -34,12 +34,12 @@ export const updateLeaveTypeSchema = z
   });
 
 export const leavePolicyQuerySchema = z.object({
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  year: pastOrCurrentYearSchema.optional(),
 });
 
 export const createLeavePolicySchema = z.object({
   leaveTypeId: objectIdSchema,
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  year: pastOrCurrentYearSchema.optional(),
   annualQuota: z.number().min(0).max(365),
   accrualPerMonth: z.number().min(0).max(31).default(0),
   carryForwardMax: z.number().min(0).max(365).default(0),
@@ -95,18 +95,18 @@ export const previewLeaveDaysQuerySchema = z.object({
 
 export const encashLeaveSchema = z.object({
   leaveTypeId: objectIdSchema,
-  year: z.coerce.number().int().min(2000).max(2100),
+  year: pastOrCurrentYearSchema,
   days: z.number().min(0.5).max(365),
   reason: z.string().trim().min(3).max(500),
 });
 
 export const carryForwardPreviewQuerySchema = z.object({
-  fromYear: z.coerce.number().int().min(2000).max(2100),
+  fromYear: pastOrCurrentYearSchema,
   userId: objectIdSchema.optional(),
 });
 
 export const carryForwardSchema = z.object({
-  fromYear: z.coerce.number().int().min(2000).max(2100),
+  fromYear: pastOrCurrentYearSchema,
   userId: objectIdSchema.optional(),
   userIds: z.array(objectIdSchema).min(1).max(500).optional(),
 });
@@ -118,7 +118,7 @@ export const leaveDecisionSchema = z.object({
 
 export const adjustLeaveBalanceSchema = z.object({
   leaveTypeId: objectIdSchema,
-  year: z.coerce.number().int().min(2000).max(2100),
+  year: pastOrCurrentYearSchema,
   entitled: z.number().min(0).max(365).optional(),
   used: z.number().min(0).max(365).optional(),
   pending: z.number().min(0).max(365).optional(),
@@ -130,13 +130,13 @@ export const adjustLeaveBalanceSchema = z.object({
 
 export const leaveBalanceQuerySchema = z.object({
   userId: objectIdSchema.optional(),
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  year: pastOrCurrentYearSchema.optional(),
 });
 
 export const leaveRequestQuerySchema = paginationSchema.extend({
   status: z.enum(['pending', 'approved', 'rejected', 'cancelled', 'all']).default('all'),
   userId: objectIdSchema.optional(),
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  year: pastOrCurrentYearSchema.optional(),
   month: z
     .string()
     .regex(/^\d{4}-\d{2}$/, 'Month must be YYYY-MM.')

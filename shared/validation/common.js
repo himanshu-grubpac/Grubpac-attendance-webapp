@@ -71,3 +71,28 @@ export const deviceIdSchema = z
 export function formatZodErrors(error) {
   return error.issues.map((issue) => issue.message).join(' ');
 }
+
+const IST_TIMEZONE = 'Asia/Kolkata';
+
+/** Current calendar year in IST — evaluated at validation time, not module load. */
+export function getCurrentIstYearValue() {
+  return Number(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: IST_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+      .format(new Date())
+      .slice(0, 4),
+  );
+}
+
+/** Leave/salary year selectors: 2000 through current IST year inclusive. */
+export const pastOrCurrentYearSchema = z.coerce
+  .number()
+  .int()
+  .min(2000)
+  .refine((year) => year <= getCurrentIstYearValue(), {
+    message: 'Year cannot be in the future.',
+  });

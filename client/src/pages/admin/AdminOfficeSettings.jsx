@@ -330,9 +330,23 @@ export default function AdminOfficeSettings() {
               check-ins close the same day; WFH check-ins close the next day (IST).
             </p>
             <div className="auto-checkout-summary">
-              <span>Enabled: {form.autoCheckout?.enabled ? 'Yes' : 'No'}</span>
-              <span>Office: {form.autoCheckout?.office ? `${form.autoCheckout.office.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.office.time) ?? form.autoCheckout.office.time}` : 'Same day at 11:59 PM'}</span>
-              <span>WFH: {form.autoCheckout?.wfh ? `${form.autoCheckout.wfh.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.wfh.time) ?? form.autoCheckout.wfh.time}` : 'Next day at 6:00 AM'}</span>
+              <span
+                className={`stat-pill ${form.autoCheckout?.enabled ? 'stat-pill--success' : 'stat-pill--muted'}`}
+              >
+                Enabled: {form.autoCheckout?.enabled ? 'Yes' : 'No'}
+              </span>
+              <span className="stat-pill stat-pill--info">
+                Office:{' '}
+                {form.autoCheckout?.office
+                  ? `${form.autoCheckout.office.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.office.time) ?? form.autoCheckout.office.time}`
+                  : 'Same day at 11:59 PM'}
+              </span>
+              <span className="stat-pill stat-pill--warning">
+                WFH:{' '}
+                {form.autoCheckout?.wfh
+                  ? `${form.autoCheckout.wfh.day === 'next' ? 'Next day' : 'Same day'} at ${formatTimeDisplay(form.autoCheckout.wfh.time) ?? form.autoCheckout.wfh.time}`
+                  : 'Next day at 6:00 AM'}
+              </span>
             </div>
             <button type="button" className="btn" onClick={() => setAutoOpen(true)}>
               Set Auto-Checkout Timings

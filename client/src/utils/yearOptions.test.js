@@ -24,6 +24,12 @@ describe('buildDynamicYearOptions', () => {
     expect(options.map((option) => option.value)).toEqual(['2026', '2025', '2024', '2023', '2022']);
   });
 
+  it('does not include a future year by default', () => {
+    const options = buildDynamicYearOptions(2021, 2026);
+    expect(options.map((option) => option.value)).not.toContain('2027');
+    expect(options[0].value).toBe('2026');
+  });
+
   it('supports a leading option and next-year planning', () => {
     const options = buildDynamicYearOptions(2025, 2026, {
       leading: { value: '', label: 'All years' },

@@ -268,10 +268,17 @@ export const PERMISSIONS = {
   ATTENDANCE_READ_OWN: 'emp.attendance.r',
   AUDIT_READ: 'audit.log.r',
   DEPARTMENTS_MANAGE: 'ops.department.r',
+  /** @deprecated Prefer NOTIFICATIONS_PORTAL_PERMISSIONS — employee portal slug only (legacy alias). */
   NOTIFICATIONS_READ: 'portal.employee.r',
   DEMO_FAQ_READ: 'emp.faq.r',
   DEMO_FAQ_MANAGE: 'ops.faq.c',
 };
+
+/** Portal gates for in-app notifications — matches GET /api/notifications auth. */
+export const NOTIFICATIONS_PORTAL_PERMISSIONS = [
+  PERMISSIONS.PORTAL_ADMIN,
+  PERMISSIONS.PORTAL_EMPLOYEE,
+];
 
 export const ALL_PERMISSIONS = getAllCatalogSlugs();
 
@@ -394,6 +401,10 @@ export function hasAdminPortalAccess(userPermissions) {
 
 export function hasEmployeePortalAccess(userPermissions) {
   return hasPermission(userPermissions, PERMISSIONS.PORTAL_EMPLOYEE);
+}
+
+export function canReadNotifications(userPermissions) {
+  return hasAnyPermission(userPermissions, NOTIFICATIONS_PORTAL_PERMISSIONS);
 }
 
 /**

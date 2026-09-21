@@ -391,23 +391,28 @@ function MonthlyPayrollTab({
               ariaLabel="Search salary estimates"
             />
 
-            <div className="field-inline filter-bar__field salary-toolbar__field salary-toolbar__field--period">
-              <span className="label">Pay period</span>
+            <div className="filter-bar__field salary-toolbar__field salary-toolbar__field--period">
               <div className="salary-toolbar__period">
-                <SelectField
-                  value={yearFilter}
-                  onChange={handleYearChange}
-                  options={yearOptions}
-                  aria-label="Salary year"
-                  disabled={loading}
-                />
-                <SelectField
-                  value={monthPartFilter}
-                  onChange={setMonthPartFilter}
-                  options={monthOptions}
-                  aria-label="Salary month"
-                  disabled={loading}
-                />
+                <div className="field-inline">
+                  <span className="label">Year</span>
+                  <SelectField
+                    value={yearFilter}
+                    onChange={handleYearChange}
+                    options={yearOptions}
+                    aria-label="Salary year"
+                    disabled={loading}
+                  />
+                </div>
+                <div className="field-inline">
+                  <span className="label">Month</span>
+                  <SelectField
+                    value={monthPartFilter}
+                    onChange={setMonthPartFilter}
+                    options={monthOptions}
+                    aria-label="Salary month"
+                    disabled={loading}
+                  />
+                </div>
               </div>
             </div>
 
@@ -422,17 +427,17 @@ function MonthlyPayrollTab({
                 </button>
               </div>
             ) : null}
-          </div>
 
-          <div className="salary-toolbar__actions">
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={onExport}
-              disabled={exporting || loading}
-            >
-              Export Excel
-            </button>
+            <div className="salary-toolbar__actions filter-bar__field">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={onExport}
+                disabled={exporting || loading}
+              >
+                Export Excel
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1227,23 +1232,28 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
       <section className="salary-panel card card--table" aria-label="Salary transfers">
         <div className="salary-toolbar card__toolbar">
           <div className="salary-toolbar__filters filter-bar">
-            <div className="field-inline filter-bar__field salary-toolbar__field salary-toolbar__field--period">
-              <span className="label">Pay period</span>
+            <div className="filter-bar__field salary-toolbar__field salary-toolbar__field--period">
               <div className="salary-toolbar__period">
-                <SelectField
-                  value={yearFilter}
-                  onChange={handleYearChange}
-                  options={yearOptions}
-                  aria-label="Transfer year"
-                  disabled={loading || generating}
-                />
-                <SelectField
-                  value={monthPartFilter}
-                  onChange={setMonthPartFilter}
-                  options={monthOptions}
-                  aria-label="Transfer month"
-                  disabled={loading || generating}
-                />
+                <div className="field-inline">
+                  <span className="label">Year</span>
+                  <SelectField
+                    value={yearFilter}
+                    onChange={handleYearChange}
+                    options={yearOptions}
+                    aria-label="Transfer year"
+                    disabled={loading || generating}
+                  />
+                </div>
+                <div className="field-inline">
+                  <span className="label">Month</span>
+                  <SelectField
+                    value={monthPartFilter}
+                    onChange={setMonthPartFilter}
+                    options={monthOptions}
+                    aria-label="Transfer month"
+                    disabled={loading || generating}
+                  />
+                </div>
               </div>
             </div>
 
@@ -1269,28 +1279,28 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
                 </button>
               </div>
             ) : null}
-          </div>
 
-          {canManageSalary ? (
-            <div className="salary-toolbar__actions">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={handleSettle}
-                disabled={settling || generating || loading}
-              >
-                {settling ? 'Settling…' : 'Settle month'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleGenerate}
-                disabled={generating || settling || loading}
-              >
-                {generating ? 'Generating…' : 'Generate pending transfers'}
-              </button>
-            </div>
-          ) : null}
+            {canManageSalary ? (
+              <div className="salary-toolbar__actions filter-bar__field">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={handleSettle}
+                  disabled={settling || generating || loading}
+                >
+                  {settling ? 'Settling…' : 'Settle month'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleGenerate}
+                  disabled={generating || settling || loading}
+                >
+                  {generating ? 'Generating…' : 'Generate pending transfers'}
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}

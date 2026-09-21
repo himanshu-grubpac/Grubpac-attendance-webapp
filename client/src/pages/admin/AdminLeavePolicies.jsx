@@ -21,8 +21,6 @@ import StatusBadge from '../../components/StatusBadge.jsx';
 import LeaveCarryBulkModal from './LeaveCarryBulkModal.jsx';
 import EmployeeLeaveAdjustment from './EmployeeLeaveAdjustment.jsx';
 
-const currentCalendarYear = getISTYear();
-
 const LEAVE_POLICY_TABS = [
   { id: 'types', label: 'Leave types' },
   { id: 'policies', label: 'Policies' },
@@ -36,9 +34,10 @@ const emptyTypeForm = {
   isActive: true,
 };
 
-const emptyPolicyForm = {
+function createEmptyPolicyForm(defaultYear = getISTYear()) {
+  return {
   leaveTypeId: '',
-  year: String(currentCalendarYear),
+  year: String(defaultYear),
   annualQuota: '',
   accrualPerMonth: '0',
   carryForwardMax: '0',
@@ -48,7 +47,8 @@ const emptyPolicyForm = {
   combinedCarryGroup: '',
   paid: true,
   isActive: true,
-};
+  };
+}
 
 
 
@@ -121,11 +121,10 @@ export default function AdminLeavePolicies() {
   const canManagePolicies = hasPermission(PERMISSIONS.LEAVE_MANAGE_POLICIES);
 
   const [policies, setPolicies] = useState([]);
-  const [policyYear, setPolicyYear] = useState(String(currentCalendarYear));
-  // Next-year planning stays possible (§8 exception for policy years).
+  const [policyYear, setPolicyYear] = useState(() => String(getISTYear()));
   const oldestPolicyYear = useOldestJoiningYear();
   const balanceYearOptions = useMemo(
-    () => buildDynamicYearOptions(oldestPolicyYear, currentCalendarYear, { includeNextYear: true }),
+    () => buildDynamicYearOptions(oldestPolicyYear, getISTYear()),
     [oldestPolicyYear],
   );
   const [loading, setLoading] = useState(true);
@@ -150,7 +149,7 @@ export default function AdminLeavePolicies() {
   const typeEditing = leaveTypes.find((item) => item.id === typeEditingId) ?? null;
 
   const [policyModalOpen, setPolicyModalOpen] = useState(false);
-  const [policyForm, setPolicyForm] = useState(emptyPolicyForm);
+  const [policyForm, setPolicyForm] = useState(() => createEmptyPolicyForm());
   const [policyFieldErrors, setPolicyFieldErrors] = useState({});
   const [policyModalError, setPolicyModalError] = useState('');
   const [policySubmitting, setPolicySubmitting] = useState(false);
@@ -328,7 +327,7 @@ export default function AdminLeavePolicies() {
 
   function openPolicyModal() {
     setPolicyForm({
-      ...emptyPolicyForm,
+      ...createEmptyPolicyForm(),
       year: policyYear,
     });
     setPolicyFieldErrors({});
@@ -339,7 +338,7 @@ export default function AdminLeavePolicies() {
   function closePolicyModal() {
     if (policySubmitting) return;
     setPolicyModalOpen(false);
-    setPolicyForm(emptyPolicyForm);
+    setPolicyForm(createEmptyPolicyForm());
     setPolicyFieldErrors({});
     setPolicyModalError('');
   }

@@ -518,7 +518,7 @@ function FaqDemoModal({
   return (
     <div className="modal__backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal modal--compact departments-modal"
+        className="modal modal--compact faq-demo-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby={modalTitleId}

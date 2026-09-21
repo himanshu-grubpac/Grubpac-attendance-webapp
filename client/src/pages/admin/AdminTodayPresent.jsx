@@ -286,8 +286,8 @@ export default function AdminTodayPresent() {
       </section>
 
       <section className="card card--table" aria-label="Team present status">
-        <div className="card__toolbar today-present-toolbar" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-          <h2 className="card__title">Team Attendance Today</h2>
+        <div className="card__toolbar today-present-toolbar">
+          <h2 className="card__title today-present-toolbar__title">Team Attendance Today</h2>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { PERMISSIONS } from '@shared/permissions.js';
+import { NOTIFICATIONS_PORTAL_PERMISSIONS } from '@shared/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { notificationsApi } from '../services/api.js';
@@ -18,7 +18,7 @@ function BellIcon() {
 }
 
 export default function NotificationBell() {
-  const { hasPermission } = useAuth();
+  const { hasAnyPermission } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const panelId = useId();
@@ -29,7 +29,7 @@ export default function NotificationBell() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const canRead = hasPermission(PERMISSIONS.NOTIFICATIONS_READ);
+  const canRead = hasAnyPermission(NOTIFICATIONS_PORTAL_PERMISSIONS);
 
   const refreshUnreadCount = useCallback(async () => {
     if (!canRead) return;

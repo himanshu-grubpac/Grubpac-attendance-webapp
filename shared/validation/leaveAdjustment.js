@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { objectIdSchema, paginationSchema } from './common.js';
+import { objectIdSchema, paginationSchema, pastOrCurrentYearSchema } from './common.js';
 
 export const leaveAdjustmentGridQuerySchema = paginationSchema.extend({
-  year: z.coerce.number().int().min(2000).max(2100),
+  year: pastOrCurrentYearSchema,
   search: z.string().trim().max(200).optional(),
   departmentId: objectIdSchema.optional(),
 });
@@ -10,7 +10,7 @@ export const leaveAdjustmentGridQuerySchema = paginationSchema.extend({
 export const leaveAdjustmentBatchItemSchema = z.object({
   userId: objectIdSchema,
   leaveTypeId: objectIdSchema,
-  year: z.coerce.number().int().min(2000).max(2100),
+  year: pastOrCurrentYearSchema,
   // Negative carried stock is allowed as a LOP deduction (reduces available
   // balance). Core balance math already tolerates negatives (available may go
   // negative; combined pools and carry-forward clamp per-type at 0).
@@ -23,7 +23,7 @@ export const leaveAdjustmentBatchSchema = z.object({
 });
 
 export const leaveAdjustmentHistoryQuerySchema = z.object({
-  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  year: pastOrCurrentYearSchema.optional(),
 });
 
 export const DEFAULT_LEAVE_ADJUSTMENT_REASON = 'Manual carried adjustment via leave policies';

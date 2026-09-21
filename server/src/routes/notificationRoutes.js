@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { NOTIFICATIONS_PORTAL_PERMISSIONS } from '../../../shared/permissions.js';
 import {
   getUnreadCountForCurrentUser,
   listForCurrentUser,
@@ -12,7 +12,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 
 const router = Router();
 
-router.use(authenticate, requirePermission(PERMISSIONS.PORTAL_EMPLOYEE, PERMISSIONS.PORTAL_ADMIN));
+router.use(authenticate, requirePermission(...NOTIFICATIONS_PORTAL_PERMISSIONS));
 
 router.get('/', asyncHandler(listForCurrentUser));
 router.get('/unread-count', asyncHandler(getUnreadCountForCurrentUser));

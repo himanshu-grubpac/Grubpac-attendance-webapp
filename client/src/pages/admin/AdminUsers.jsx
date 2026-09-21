@@ -840,10 +840,6 @@ export default function AdminUsers() {
     }
   }
 
-  function goToEmployee(employee) {
-    navigate(`/admin/users/${employee.id}`);
-  }
-
   async function toggleStatus(employee) {
     const nextActive = !employee.isActive;
     await requestConfirm({
@@ -942,25 +938,6 @@ export default function AdminUsers() {
         onClick: () => toggleStatus(employee),
       }]),
     ];
-  }
-
-  function handleRowClick(employee, event) {
-    if (event.target.closest('button, a, [role="menu"], .employees-table__manage')) return;
-    if (isSystemAdminRow(employee)) return;
-    goToEmployee(employee);
-  }
-
-  function handleRowKeyDown(employee, event) {
-    if (event.target !== event.currentTarget) return;
-    if (isSystemAdminRow(employee)) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      goToEmployee(employee);
-    }
-  }
-
-  function stopActionsBubble(event) {
-    event.stopPropagation();
   }
 
   function isColumnVisible(key) {
@@ -1302,15 +1279,7 @@ export default function AdminUsers() {
                     const actionItems = getActionItems(employee);
                     const rowNumber = index + 1;
                     return (
-                      <tr
-                        key={employee.id}
-                        className="table-row--clickable employees-table__row"
-                        onClick={(event) => handleRowClick(employee, event)}
-                        onKeyDown={(event) => handleRowKeyDown(employee, event)}
-                        tabIndex={0}
-                        role="link"
-                        aria-label={`Open ${employee.name}`}
-                      >
+                      <tr key={employee.id} className="employees-table__row">
                         <td
                           data-label="#"
                           className="employees-table__row-num"
@@ -1331,7 +1300,7 @@ export default function AdminUsers() {
                               <Link
                                 to={`/admin/users/${employee.id}`}
                                 className="table-link employees-table__name-link"
-                                onClick={(event) => event.stopPropagation()}
+                                aria-label={`View ${employee.name}`}
                               >
                                 {employee.name}
                               </Link>
@@ -1398,9 +1367,6 @@ export default function AdminUsers() {
                         <td
                           data-label="Actions"
                           className="cell-actions cell-actions--text employees-table__actions"
-                          onPointerDown={stopActionsBubble}
-                          onMouseDown={stopActionsBubble}
-                          onClick={stopActionsBubble}
                         >
                           {actionItems.length > 0 ? (
                             <div className="employees-table__manage">

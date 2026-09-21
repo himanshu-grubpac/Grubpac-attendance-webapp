@@ -325,7 +325,7 @@ export const LEGACY_PERMISSION_MAP = {
   'attendance.read_own': ['emp.attendance.r', 'emp.punch.c', 'emp.punch.u', 'emp.calendar.r'],
   'audit.read': ['audit.log.r'],
   'departments.manage': ['ops.department.r', 'ops.department.c', 'ops.department.u', 'ops.department.d'],
-  'notifications.read': ['portal.employee.r'],
+  'notifications.read': ['portal.employee.r', 'portal.admin.r'],
   'demo_faq.read': ['emp.faq.r', 'ops.faq.r', 'ops.guide.r'],
   'demo_faq.manage': ['ops.faq.c', 'ops.faq.u', 'ops.faq.d'],
 };
