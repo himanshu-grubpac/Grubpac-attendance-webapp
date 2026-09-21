@@ -78,6 +78,14 @@ function ToastCard({ toast, onDismiss }) {
       className={`toast toast--${toast.variant}`}
       role={toast.variant === 'error' ? 'alert' : 'status'}
     >
+      {toast.durationMs > 0 ? (
+        <span className="toast__progress" aria-hidden="true">
+          <span
+            className="toast__progress-bar"
+            style={{ animationDuration: `${toast.durationMs}ms` }}
+          />
+        </span>
+      ) : null}
       <span>{toast.message}</span>
       {toast.action ? (
         <button

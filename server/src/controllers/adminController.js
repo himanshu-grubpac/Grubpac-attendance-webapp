@@ -1009,7 +1009,9 @@ async function getActorManagedDepartmentIds(actor) {
  * the actor's department scope. Returns { rejected, message, warnings }.
  */
 async function validateBulkDepartmentScope(rows, actor, permissions) {
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  // Company-wide scope (employees record read) bypasses; the collapsed
+  // ATTENDANCE_READ_ALL slug is RM-held and cannot gate this.
+  const canReadAll = hasCompanyWideScope(permissions);
   if (canReadAll) return { rejected: false, warnings: [] };
 
   const managedIds = await getActorManagedDepartmentIds(actor);

@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
 import '../models/Department.js';
 import { Department } from '../models/Department.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -32,7 +32,8 @@ let memoryServer;
 let sequence = 0;
 
 const RM_PERMS = [PERMISSIONS.LEAVE_READ, PERMISSIONS.LEAVE_READ_TEAM, PERMISSIONS.LEAVE_APPROVE];
-const ADMIN_PERMS = [...RM_PERMS, PERMISSIONS.LEAVE_READ_ALL, PERMISSIONS.USERS_WRITE];
+const ADMIN_PERMS = [...RM_PERMS, COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.LEAVE_READ_ALL,
+  PERMISSIONS.USERS_WRITE];
 
 before(async () => {
   memoryServer = await MongoMemoryReplSet.create({ replSet: { count: 1 } });

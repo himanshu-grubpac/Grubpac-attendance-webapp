@@ -164,8 +164,8 @@ test('bulk import rejects out-of-scope department row', async () => {
 
   const result = await importEmployeesFromRowsUpsert(rows, rm._id, {
     dryRun: true,
-    actor: rm,
-    permissions: rmPerms,
+    actorId: rm._id.toString(),
+    actorPermissions: rmPerms,
   });
 
   assert.equal(result.results[0].status, 'validation_error');

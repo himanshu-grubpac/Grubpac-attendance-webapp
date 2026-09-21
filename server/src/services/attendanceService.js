@@ -394,10 +394,13 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
 
   let userIds = [];
   if (canReadAll) {
-    // Directory parity with the Employee List: non-admin accounts of all
-    // statuses so totals reconcile with directory stats. Inactive members
-    // render as inactive rows, never as absent.
-    const roster = await User.find(await buildEmployeeDirectoryQuery()).select('_id').lean();
+    // Directory parity with the Employee List (All includes admins): the
+    // roster carries every account of all statuses, so admins are
+    // searchable and the totals reconcile with the directory stats.
+    // Inactive members render as inactive rows, never as absent.
+    const roster = await User.find(
+      await buildEmployeeDirectoryQuery({ includeAdmins: true }),
+    ).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
     // Visibility roster (managed departments + reports + delegates + self +

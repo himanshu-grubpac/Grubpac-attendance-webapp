@@ -40,13 +40,17 @@ vi.mock('../services/api.js', () => ({
   getErrorMessage: (err) => err?.message ?? 'Something went wrong.',
 }));
 
-// Reporting-manager viewer: no users.write, non-admin slug.
+// Reporting-manager viewer: no employee-record write or role administration,
+// non-admin slug. (New RBAC catalog slugs.)
+const canSee = (permission) =>
+  permission !== 'employees.record.u' && permission !== 'rbac.role.r';
 vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useAuth: () => ({
-      hasPermission: (permission) => permission !== 'users.write' && permission !== 'roles.manage',
+      hasPermission: canSee,
+      hasAnyPermission: (permissions) => permissions.some(canSee),
       user: { id: 'rm1', roleSlug: 'reporting-manager', managedDepartmentIds: ['d1'] },
     }),
   };

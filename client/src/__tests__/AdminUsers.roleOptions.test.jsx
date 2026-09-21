@@ -48,13 +48,16 @@ vi.mock('../services/api.js', () => ({
   getErrorMessage: (err) => err?.message ?? 'Something went wrong.',
 }));
 
-// Team RM viewer: every permission except roles.manage, non-admin slug.
+// Team RM viewer: every permission except role administration, non-admin slug.
+// New RBAC model: role administration is the rbac role read slug.
+const canSee = (permission) => permission !== 'rbac.role.r';
 vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useAuth: () => ({
-      hasPermission: (permission) => permission !== 'roles.manage',
+      hasPermission: canSee,
+      hasAnyPermission: (permissions) => permissions.some(canSee),
       user: { roleSlug: 'reporting-manager' },
     }),
   };

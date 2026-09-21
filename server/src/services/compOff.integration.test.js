@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
@@ -21,6 +21,7 @@ import { User } from '../models/User.js';
 import {
   assessCompOffWork,
   cancelApprovedCompOff,
+  cancelPendingCompOffRequest,
   consumeCompOffDecisionToken,
   createCompOffRequest,
   decideCompOffRequest,
@@ -48,6 +49,7 @@ import {
 } from '../utils/istDate.js';
 
 const ADMIN_PERMS = [
+  COMPANY_WIDE_SCOPE_SLUG,
   PERMISSIONS.LEAVE_READ_ALL,
   PERMISSIONS.LEAVE_APPROVE,
   PERMISSIONS.LEAVE_READ,
@@ -192,6 +194,32 @@ test('undo inside the submit window deletes the never-live request silently', as
   // The same dates are immediately reusable — no staged row blocks resubmit.
   const second = await submitCompOff(employee, satKey, null, 'Second attempt');
   assert.equal(second.status, 'pending');
+});
+
+test('withdraw after the submit window flips pending to cancelled (no 410)', async () => {
+  const { employee, satKey } = await createCompOffFixture();
+  const created = await submitCompOff(employee, satKey);
+  // Simulate an expired undo window with the manager already notified.
+  await CompOffRequest.updateOne(
+    { _id: created.id },
+    {
+      $set: {
+        undoExpiresAt: new Date(Date.now() - 1000),
+        notifyAfter: new Date(Date.now() - 1000),
+        submitNotificationsSent: true,
+      },
+    },
+  );
+  await assert.rejects(
+    undoCompOffSubmit(created.id, employee),
+    (err) => err.statusCode === 410,
+  );
+  const result = await cancelPendingCompOffRequest(created.id, employee);
+  assert.equal(result.request.status, 'cancelled');
+  const live = await CompOffRequest.findById(created.id).lean();
+  assert.equal(live.status, 'cancelled');
+  assert.equal(live.pendingAction, null);
+  assert.ok(live.finalizedAt, 'cancelled row is terminal');
 });
 
 test('repeated submit/withdraw notifies the manager exactly once for the surviving request', async () => {

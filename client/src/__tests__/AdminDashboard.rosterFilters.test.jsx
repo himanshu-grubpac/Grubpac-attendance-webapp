@@ -63,7 +63,12 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    useAuth: () => ({ hasPermission: () => true }),
+    useAuth: () => ({
+      // Admin viewer: company-wide scope plus record reads.
+      permissions: ['employees.record.r', 'attendance.record.r'],
+      hasPermission: () => true,
+      hasAnyPermission: () => true,
+    }),
   };
 });
 

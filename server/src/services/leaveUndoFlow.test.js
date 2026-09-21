@@ -586,7 +586,7 @@ test('canApproveLeave: returns false without LEAVE_APPROVE permission', () => {
 test('canApproveLeave: returns true with LEAVE_READ_ALL permission', () => {
   const actor = mockUser({ _id: '507f1f77bcf86cd799439099' });
   const requester = mockUser({ _id: '507f1f77bcf86cd799439011' });
-  const result = canApproveLeave(actor, requester, ['leave.approve', 'leave.read_all']);
+  const result = canApproveLeave(actor, requester, ['leave.request.x0', 'employees.record.r']);
   assert.equal(result, true);
 });
 
@@ -597,7 +597,7 @@ test('canApproveLeave: returns true when actor is reporting manager', () => {
     _id: '507f1f77bcf86cd799439011',
     reportingManagerId: managerId,
   });
-  const result = canApproveLeave(actor, requester, ['leave.approve']);
+  const result = canApproveLeave(actor, requester, ['leave.request.x0']);
   assert.equal(result, true);
 });
 
@@ -607,7 +607,7 @@ test('canApproveLeave: returns false when actor is not reporting manager', () =>
     _id: '507f1f77bcf86cd799439011',
     reportingManagerId: '507f1f77bcf86cd799439088',
   });
-  const result = canApproveLeave(actor, requester, ['leave.approve']);
+  const result = canApproveLeave(actor, requester, ['leave.request.x0']);
   assert.equal(result, false);
 });
 
@@ -619,7 +619,7 @@ test('canApproveLeave: returns true when actor is delegate approver', () => {
     _id: '507f1f77bcf86cd799439011',
     reportingManagerId: manager,
   });
-  const result = canApproveLeave(actor, requester, ['leave.approve']);
+  const result = canApproveLeave(actor, requester, ['leave.request.x0']);
   assert.equal(result, true);
 });
 

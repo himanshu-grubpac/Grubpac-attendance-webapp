@@ -11,14 +11,16 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+  '../../../shared/permissions.js';
 import '../models/Department.js';
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import { getTeamTodayStatusService } from './attendanceService.js';
 
-const ADMIN_PERMS = [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM];
+const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.ATTENDANCE_READ_ALL,
+  PERMISSIONS.ATTENDANCE_READ_TEAM];
 
 let memoryServer;
 let sequence = 0;

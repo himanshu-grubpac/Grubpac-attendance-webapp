@@ -60,14 +60,25 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
     ...actual,
     useAuth: () => ({
       user: { managedDepartmentIds: mockManagedDepartments },
+      // New RBAC model: company-wide scope comes from the employees record
+      // read slug (admin/HR); attendance record read alone is team-scoped.
+      permissions: mockPermissionSlugs(),
       hasPermission: (permission) => {
         if (permission === 'attendance.read_all') return allowRoster;
         if (permission === 'attendance.read_team') return allowTeamRoster;
+        if (permission === 'employees.record.r') return allowRoster;
+        if (permission === 'attendance.record.r') return allowRoster || allowTeamRoster;
         return true;
       },
     }),
   };
 });
+
+function mockPermissionSlugs() {
+  if (allowRoster) return ['employees.record.r', 'attendance.record.r'];
+  if (allowTeamRoster) return ['attendance.record.r'];
+  return [];
+}
 
 import { adminApi } from '../services/api.js';
 

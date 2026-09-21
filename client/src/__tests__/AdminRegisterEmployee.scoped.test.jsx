@@ -33,16 +33,20 @@ vi.mock('../services/api.js', () => ({
   getFieldErrors: () => ({}),
 }));
 
-// Reporting-manager viewer without users.write and one managed department.
+// Reporting-manager viewer without employee-record write, role
+// administration, or salary-structure write; one managed department.
+// (New RBAC catalog slugs.)
+const canSee = (permission) =>
+  permission !== 'employees.record.u'
+  && permission !== 'rbac.role.r'
+  && permission !== 'salary.structure.u';
 vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useAuth: () => ({
-      hasPermission: (permission) =>
-        permission !== 'users.write'
-        && permission !== 'roles.manage'
-        && permission !== 'salary.write',
+      hasPermission: canSee,
+      hasAnyPermission: (permissions) => permissions.some(canSee),
       user: {
         id: 'rm1',
         name: 'Remy Manager',

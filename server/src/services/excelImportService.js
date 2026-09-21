@@ -2,7 +2,8 @@ import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasCompanyWideScope, hasPermission } from
+  '../../../shared/permissions.js';
 import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
@@ -473,7 +474,7 @@ export function generateBulkPassword(firstName, employeeCode) {
  */
 export async function resolveBulkDepartmentScope(actorId, actorPermissions) {
   if (actorPermissions === undefined) return null;
-  if (hasPermission(actorPermissions, PERMISSIONS.ATTENDANCE_READ_ALL)) {
+  if (hasCompanyWideScope(actorPermissions)) {
     return { all: true, departmentIds: [] };
   }
   const actor = actorId

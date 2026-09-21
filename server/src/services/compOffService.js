@@ -645,6 +645,71 @@ export async function undoCompOffSubmit(requestId, actor) {
 }
 
 /**
+ * Owner cancellation of a still-pending comp-off request AFTER the submit
+ * undo window has expired (manager may already have been notified). Mirrors
+ * the leave pending-cancel path: immediate flip to `cancelled`, no undo.
+ * Pending comp-off holds no balance/credit, so there is nothing to release —
+ * just clear the provisional timers and close the lifecycle. Staged rows
+ * (pendingAction set) and non-pending rows are rejected so approver flows
+ * keep their own undo semantics.
+ */
+export async function cancelPendingCompOffRequest(requestId, actor) {
+  const request = await loadCompOffRequest(requestId);
+  const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
+  if (requesterId !== actor._id.toString()) {
+    throwError('You can only withdraw your own comp off requests.', 403);
+  }
+  if (request.status !== 'pending') {
+    throwError('This request can no longer be withdrawn.', 409);
+  }
+  if (request.pendingAction) {
+    throwError('A change is already pending. Undo it first to keep editing this request.', 409);
+  }
+
+  const now = new Date();
+  const claimed = await CompOffRequest.findOneAndUpdate(
+    { _id: request._id, status: 'pending', pendingAction: null },
+    {
+      $set: {
+        status: 'cancelled',
+        decidedAt: now,
+        approverId: null,
+        comment: null,
+        cancelledBy: null,
+        undoExpiresAt: null,
+        notifyAfter: null,
+        pendingRevision: null,
+        finalizedAt: now,
+        notificationsSent: true,
+        submitNotificationsSent: true,
+        decisionTokens: [],
+      },
+      $inc: { revision: 1 },
+    },
+    { returnDocument: 'after' },
+  );
+
+  if (!claimed) {
+    throwError('This request can no longer be withdrawn. Refresh and try again.', 409);
+  }
+
+  const existing = pendingSubmitTimers.get(String(requestId));
+  if (existing) {
+    clearTimeout(existing);
+    pendingSubmitTimers.delete(String(requestId));
+  }
+
+  auditLog('comp_off_withdrawn', {
+    userId: actor._id.toString(),
+    requestId: request._id.toString(),
+    previous: { status: 'pending' },
+    next: { status: 'cancelled' },
+  });
+
+  return { request: (await CompOffRequest.findById(request._id).populate(COMP_OFF_REQUEST_POPULATE)).toSafeJSON() };
+}
+
+/**
  * Undoes a staged employee withdrawal inside its undo window, restoring the
  * request to a live pending request with a FRESH submit undo window (so the
  * manager is still notified afterwards — the withdrawal never happened as

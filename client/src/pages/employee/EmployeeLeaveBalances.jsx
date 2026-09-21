@@ -21,7 +21,11 @@ export default function EmployeeLeaveBalances() {
         leaveApi.listPolicies({ year }),
       ]);
       setBalances(balanceData.balances ?? []);
-      setPolicies(policyData.policies ?? []);
+      // The summary mirrors the balances table: only active policies grant
+      // balances (ensureBalancesForUser skips inactive ones), so listing a
+      // deactivated type here advertises entitlement the employee can never
+      // use. The admin Leave Policies page keeps the unfiltered endpoint.
+      setPolicies((policyData.policies ?? []).filter((policy) => policy.isActive !== false));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {

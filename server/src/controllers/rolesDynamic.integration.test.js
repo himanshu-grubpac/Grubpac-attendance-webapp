@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { ADMIN_LOCK_SLUGS, PERMISSIONS } from '../../../shared/permissions.js';
 import { Role } from '../models/Role.js';
 import { updateRole } from './rolesController.js';
 
@@ -84,9 +84,8 @@ test('reporting-manager permissions update applies immediately', async () => {
   assert.ok(reloaded.permissions.includes(PERMISSIONS.LEAVE_APPLY), 'persisted to DB');
 });
 
-test('admin role permissions are locked (403, untouched)', async () => {
+test('admin role keeps lockout-protection slugs on permission edits (merged, not stripped)', async () => {
   const { admin } = await seedRoles();
-  const before = [...admin.permissions].sort();
   const res = mockRes();
   await updateRole(
     {
@@ -96,9 +95,13 @@ test('admin role permissions are locked (403, untouched)', async () => {
     },
     res,
   );
-  assert.equal(res.statusCode, 403);
+  assert.equal(res.statusCode, 200);
   const reloaded = await Role.findById(admin._id).lean();
-  assert.deepEqual([...reloaded.permissions].sort(), before, 'untouched');
+  // Requested slug applied, lockout-protection slugs force-retained.
+  assert.ok(reloaded.permissions.includes(PERMISSIONS.LEAVE_READ));
+  for (const slug of ADMIN_LOCK_SLUGS) {
+    assert.ok(reloaded.permissions.includes(slug), `lock slug retained: ${slug}`);
+  }
 });
 
 test('admin display name stays editable', async () => {

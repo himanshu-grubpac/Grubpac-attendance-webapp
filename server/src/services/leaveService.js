@@ -2834,9 +2834,9 @@ export async function getLeavePendingCounts(actor, permissions) {
 }
 
 export async function getTeamCalendar(actor, permissions, query) {
-  const canViewAllLeave =
-    hasCompanyWideScope(permissions)
-    || hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  // Company-wide scope decides full-vs-team here: ATTENDANCE_READ_ALL is
+  // held by RMs too since the catalog migration, so it cannot gate this.
+  const canViewAllLeave = hasCompanyWideScope(permissions);
   const canViewTeamLeave =
     canViewAllLeave || hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM);
 

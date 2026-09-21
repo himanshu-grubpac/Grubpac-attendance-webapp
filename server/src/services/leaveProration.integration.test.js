@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
@@ -22,7 +22,8 @@ import {
 import { getLeaveAdjustmentHistory } from './leaveAdjustmentService.js';
 import { getISTDateInputValue, getISTYear } from '../utils/istDate.js';
 
-const ADMIN_PERMS = [PERMISSIONS.LEAVE_ADJUST_BALANCES, PERMISSIONS.ATTENDANCE_READ_ALL];
+const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.LEAVE_ADJUST_BALANCES,
+  PERMISSIONS.ATTENDANCE_READ_ALL];
 
 let memoryServer;
 let sequence = 0;

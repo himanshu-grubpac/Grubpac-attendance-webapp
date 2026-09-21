@@ -63,6 +63,7 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
     ...actual,
     useAuth: () => ({
       hasPermission: () => true,
+      hasAnyPermission: () => true,
     }),
   };
 });

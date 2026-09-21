@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+  '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { User } from '../models/User.js';
 import { getAdminAttendance } from './attendanceService.js';
 
-const ADMIN_PERMS = [PERMISSIONS.ATTENDANCE_READ_ALL];
+const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.ATTENDANCE_READ_ALL];
 
 let memoryServer;
 let sequence = 0;

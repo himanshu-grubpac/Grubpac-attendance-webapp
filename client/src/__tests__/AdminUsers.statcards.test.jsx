@@ -71,7 +71,7 @@ vi.mock('../services/api.js', () => {
 });
 
 vi.mock('../context/AuthContext.jsx', () => ({
-  useAuth: () => ({ hasPermission: () => true }),
+  useAuth: () => ({ hasPermission: () => true, hasAnyPermission: () => true }),
 }));
 
 import { adminApi } from '../services/api.js';

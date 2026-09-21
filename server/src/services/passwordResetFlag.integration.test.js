@@ -5,6 +5,7 @@ import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
 import { User } from '../models/User.js';
 import { previewFirstLoginFlags, clearAllFirstLoginFlags } from '../migrateFirstLoginFlags.js';
 import { resetEmployeePassword } from '../controllers/adminController.js';
@@ -77,7 +78,9 @@ test('admin reset on an existing account does not force a password change', asyn
       params: { id: employee._id.toString() },
       body: { newPassword: 'BrandNew@123', confirmPassword: 'BrandNew@123' },
       user: { _id: admin._id },
-      userPermissions: [],
+      // Admin readability gate: company-wide scope + employee record read,
+      // mirroring what real admin roles hold.
+      userPermissions: [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.EMPLOYEES_RECORD_R],
       ip: '127.0.0.1',
       headers: {},
     },

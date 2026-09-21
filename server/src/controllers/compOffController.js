@@ -10,11 +10,11 @@ import {
   assessCompOffWork,
   autoLoginByCompOffDecisionToken,
   cancelApprovedCompOff,
+  cancelPendingCompOffRequest,
   createCompOffRequest,
   decideCompOffRequest,
   getCompOffApprovalsCount,
   getCompOffRequest,
-  getEligibleCompOffDays,
   listCompOffRequests,
   undoCompOffAssessment,
   undoCompOffDecision,
@@ -52,8 +52,20 @@ export async function getCompOffApprovalsCountHandler(req, res) {
 }
 
 export async function withdrawCompOffRequestHandler(req, res) {
-  const result = await undoCompOffSubmit(req.params.id, req.user);
-  res.json(result);
+  // Inside the submit undo window the never-live row is deleted outright;
+  // afterwards a still-pending request flips to `cancelled` instead of
+  // surfacing a 410 to the employee.
+  try {
+    const result = await undoCompOffSubmit(req.params.id, req.user);
+    return res.json(result);
+  } catch (err) {
+    const expired = err?.statusCode === 410;
+    const alreadySent = err?.statusCode === 409
+      && /already sent to your manager/i.test(err?.message ?? '');
+    if (!expired && !alreadySent) throw err;
+    const result = await cancelPendingCompOffRequest(req.params.id, req.user);
+    return res.json(result);
+  }
 }
 
 export async function undoCompOffWithdrawHandler(req, res) {

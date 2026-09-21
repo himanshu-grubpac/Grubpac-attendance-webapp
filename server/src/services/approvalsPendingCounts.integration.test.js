@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+  '../../../shared/permissions.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
@@ -31,7 +32,7 @@ let memoryServer;
 let sequence = 0;
 
 const MANAGER_PERMS = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ];
-const ADMIN_PERMS = [...MANAGER_PERMS, PERMISSIONS.LEAVE_READ_ALL];
+const ADMIN_PERMS = [...MANAGER_PERMS, COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.LEAVE_READ_ALL];
 const NO_APPROVE_PERMS = [PERMISSIONS.LEAVE_READ, PERMISSIONS.LEAVE_APPLY];
 
 before(async () => {

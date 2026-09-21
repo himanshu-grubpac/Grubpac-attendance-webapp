@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+  '../../../shared/permissions.js';
 import { User } from '../models/User.js';
 import { LeaveType } from '../models/LeaveType.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
@@ -149,9 +150,10 @@ test('salary summary exposes which dates became LOP', async () => {
   const { user, leaveType, request } = await createOverdrawnFixture();
   await createLopOnApproval(user._id, leaveType._id, request._id, START, 5);
 
+  // Self view uses the employee-portal pay read slug (not payroll read).
   const { summary } = await getSalarySummaryForUser(
     user,
-    [PERMISSIONS.SALARY_READ],
+    [PERMISSIONS.EMP_PAY_R],
     user._id.toString(),
     PERIOD,
   );
@@ -201,7 +203,7 @@ test('monthly audit reflects settled LOP for the employee', async () => {
 
   const audit = await getMonthlySalaryAudit(
     { _id: user._id },
-    [PERMISSIONS.SALARY_READ],
+    [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.SALARY_READ],
     PERIOD,
   );
 

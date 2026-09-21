@@ -8201,8 +8201,25 @@ body::-webkit-scrollbar-thumb {
 .toast__progress-bar {
   display: block;
   height: 100%;
+  width: 100%;
   background: #f59e0b;
   transition: width 0.1s linear;
+  /* Receding countdown: starts at mount, the same moment the auto-dismiss
+     timeout is scheduled, so the bar hitting zero coincides with dismissal.
+     Duration is set per toast via inline animation-duration. */
+  animation-name: toast-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes toast-progress {
+  from {
+    width: 100%;
+  }
+
+  to {
+    width: 0;
+  }
 }
 
 .toast > span {

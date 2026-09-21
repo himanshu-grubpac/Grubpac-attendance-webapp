@@ -2,9 +2,10 @@
  * Admin-role assignment guard (integration, real Mongo).
  *
  * Only role administrators — holders of the Admin role slug or the
- * roles.manage permission — may grant the Admin system role via single
- * register (updateEmployee shares the same guard). Everyone else gets a 403
- * before any validation runs; non-Admin assignments always pass the guard.
+ * role-administration permission (rbac.role.r) — may grant the Admin system
+ * role via single register (updateEmployee shares the same guard). Everyone
+ * else gets a 403 before any validation runs; non-Admin assignments always
+ * pass the guard. Explicit roleIds also need the register-assign permission.
  */
 process.env.NODE_ENV = 'test';
 
@@ -61,7 +62,7 @@ const guardError = (err) => err?.statusCode === 403
 
 test('RM without roles.manage cannot grant the Admin role', async () => {
   await assert.rejects(
-    registerEmployee(reqFor(rmRole._id, ['users.write'], adminRole._id), resStub()),
+    registerEmployee(reqFor(rmRole._id, ['employees.register.x1'], adminRole._id), resStub()),
     guardError,
     'guard blocks with 403',
   );
@@ -69,7 +70,7 @@ test('RM without roles.manage cannot grant the Admin role', async () => {
 
 test('RM can still assign non-Admin roles (guard passes, validation decides)', async () => {
   const err = await registerEmployee(
-    reqFor(rmRole._id, ['users.write'], empRole._id),
+    reqFor(rmRole._id, ['employees.register.x1'], empRole._id),
     resStub(),
   ).then(() => null, (e) => e);
   assert.ok(err, 'bare body still fails downstream validation');
@@ -78,7 +79,7 @@ test('RM can still assign non-Admin roles (guard passes, validation decides)', a
 
 test('admin holder can grant the Admin role (guard passes)', async () => {
   const err = await registerEmployee(
-    reqFor(adminRole._id, ['users.write'], adminRole._id),
+    reqFor(adminRole._id, ['employees.register.x1'], adminRole._id),
     resStub(),
   ).then(() => null, (e) => e);
   assert.ok(err, 'bare body still fails downstream validation');
@@ -87,7 +88,7 @@ test('admin holder can grant the Admin role (guard passes)', async () => {
 
 test('roles.manage holder without the Admin slug can grant the Admin role', async () => {
   const err = await registerEmployee(
-    reqFor(rmRole._id, ['users.write', 'roles.manage'], adminRole._id),
+    reqFor(rmRole._id, ['employees.register.x1', 'rbac.role.r'], adminRole._id),
     resStub(),
   ).then(() => null, (e) => e);
   assert.ok(err, 'bare body still fails downstream validation');

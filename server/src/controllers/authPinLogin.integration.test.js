@@ -5,8 +5,9 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { User } from '../models/User.js';
 // Register referenced schemas for USER_POPULATE_FIELDS (roleId, departmentId).
-import '../models/Role.js';
+import { Role } from '../models/Role.js';
 import '../models/Department.js';
+import { PERMISSIONS } from '../../../shared/permissions.js';
 import { loginUser } from './authController.js';
 
 const PASSWORD = 'Strong@123';
@@ -16,6 +17,7 @@ const WRONG_PIN = '1357';
 let memoryServer;
 let passwordHash;
 let pinHash;
+let employeeRole;
 let sequence = 0;
 
 function assertInvalidCredentials(error) {
@@ -30,6 +32,13 @@ before(async () => {
   await mongoose.connect(memoryServer.getUri(), { maxPoolSize: 1 });
   passwordHash = await bcrypt.hash(PASSWORD, 12);
   pinHash = await bcrypt.hash(PIN, 12);
+  // Employee-portal access comes strictly from the Role document — mirror
+  // production where every active user has a roleId with portal slugs.
+  employeeRole = await Role.create({
+    name: 'Employee',
+    slug: 'employee',
+    permissions: [PERMISSIONS.PORTAL_EMPLOYEE],
+  });
 });
 
 beforeEach(async () => {
@@ -53,6 +62,7 @@ async function createEmployee({ withPin = true } = {}) {
     passwordHash,
     ...(withPin ? { pin4Hash: pinHash } : {}),
     role: 'employee',
+    roleId: employeeRole._id,
     isActive: true,
   });
 }

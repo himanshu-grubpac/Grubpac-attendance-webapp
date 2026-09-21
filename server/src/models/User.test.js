@@ -36,9 +36,9 @@ test('toSafeJSON keeps salary fields when canViewSalary is true', () => {
 });
 
 test('canViewSalaryFields mirrors the salary column rule', () => {
-  assert.equal(canViewSalaryFields(['salary.read']), true);
-  assert.equal(canViewSalaryFields(['salary.read_team']), true);
-  assert.equal(canViewSalaryFields(['users.read']), false);
+  assert.equal(canViewSalaryFields(['employees.salary.r']), true);
+  assert.equal(canViewSalaryFields(['salary.team_audit.r']), true);
+  assert.equal(canViewSalaryFields(['employees.record.r']), false);
   assert.equal(canViewSalaryFields([]), false);
   assert.equal(canViewSalaryFields(undefined), false);
 });

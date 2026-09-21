@@ -2,8 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { getVisibleNavItems } from '../config/nav.js';
 
-const EMPLOYEE = { permissions: [PERMISSIONS.LEAVE_APPLY, PERMISSIONS.LEAVE_READ] };
-const MANAGER = { permissions: [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ] };
+const EMPLOYEE = {
+  permissions: [
+    PERMISSIONS.PORTAL_EMPLOYEE,
+    PERMISSIONS.LEAVE_APPLY,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.EMP_WFH_C,
+    PERMISSIONS.EMP_COMPOFF_C,
+  ],
+};
+const MANAGER = {
+  permissions: [PERMISSIONS.PORTAL_ADMIN, PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ],
+};
 
 function employeeLeaveItems() {
   return getVisibleNavItems(EMPLOYEE, 'employee').filter((item) => item.section === 'Leave');

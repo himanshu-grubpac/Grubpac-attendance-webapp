@@ -273,13 +273,23 @@ export default function EmployeeCompOff() {
   }
 
   async function handleWithdraw(item) {
-    // No confirm dialog: like the Apply Leave undo, withdrawing a request the
-    // manager never saw deletes it immediately — the row simply disappears
-    // and only final decisions ever leave an entry behind.
+    // Inside the submit undo window the manager never saw the request, so
+    // the row is deleted immediately; afterwards withdrawing flips the
+    // pending request to `cancelled` (it stays visible with a Cancelled
+    // badge). Legacy staged rows still surface with an Undo action.
     setError('');
     try {
       const response = await compOffApi.withdraw(item.id);
       if (response?.deleted) {
+        broadcastLeavePayrollSync({
+          userId: item.userId,
+          startDate: item.startDate,
+        });
+        showSuccess('Comp off request withdrawn.');
+        loadRequests(page);
+        return;
+      }
+      if (response?.request?.status === 'cancelled') {
         broadcastLeavePayrollSync({
           userId: item.userId,
           startDate: item.startDate,
@@ -313,10 +323,13 @@ export default function EmployeeCompOff() {
 
   const canWithdraw = useCallback(
     (item) => {
+      // Withdraw works for every live pending request: inside the submit
+      // undo window the never-live row is deleted; afterwards it flips to
+      // `cancelled`. Only staged rows (pendingAction) and non-pending rows
+      // hide the button — never show a button that 410s on click.
       if (item.status !== 'pending') return false;
       if (item.pendingAction) return false;
-      const expiresAt = Date.parse(item.decisionUndoExpiresAt ?? '');
-      return Number.isFinite(expiresAt) && expiresAt > Date.now();
+      return true;
     },
     [],
   );

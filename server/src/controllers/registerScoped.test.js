@@ -65,9 +65,13 @@ async function createRm({ managedDepartmentIds = [deptManaged._id] } = {}) {
   });
 }
 
+// Production req.user is the full user document (findById + populate), so
+// the department pre-check sees managed/own departments — mirror that here.
 const actorAs = (userDoc, userPermissions) => ({
   _id: userDoc._id,
   roleId: { _id: rmRole._id, slug: 'reporting-manager' },
+  departmentId: userDoc.departmentId ?? null,
+  managedDepartmentIds: userDoc.managedDepartmentIds ?? [],
 });
 
 function validBody(overrides = {}) {
@@ -81,7 +85,8 @@ function validBody(overrides = {}) {
     designation: 'Analyst',
     joiningDate: '2026-09-01',
     departmentId: deptManaged._id.toString(),
-    roleId: empRole._id.toString(),
+    // No roleId: scoped creators never assign roles — the server forces
+    // Employee. (Explicit roleIds require the register-assign permission.)
     reportingManagerId: new mongoose.Types.ObjectId().toString(),
     ...overrides,
   };
@@ -121,24 +126,26 @@ test('RM creates an Employee in a managed department (201, reports to self)', as
 
 test('RM cannot create outside managed departments', async () => {
   const rm = await createRm();
-  const err = await registerEmployee(
+  const res = resStub();
+  await registerEmployee(
     { body: validBody({ departmentId: deptOther._id.toString() }), user: actorAs(rm), userPermissions: RM_PERMS },
-    resStub(),
-  ).then(() => null, (e) => e);
-  assert.ok(err, 'rejected');
-  assert.equal(err?.statusCode, 400);
-  assert.match(err?.message ?? '', /outside your assigned scope/);
+    res,
+  );
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body?.message ?? '', /selected department/);
 });
 
 test('RM cannot create non-Employee roles', async () => {
   const rm = await createRm();
-  const err = await registerEmployee(
+  // Explicit role assignment needs the register-assign permission, which
+  // scoped creators never hold — rejected before the scoped path runs.
+  const res = resStub();
+  await registerEmployee(
     { body: validBody({ roleId: rmRole._id.toString() }), user: actorAs(rm), userPermissions: RM_PERMS },
-    resStub(),
-  ).then(() => null, (e) => e);
-  assert.ok(err, 'rejected');
-  assert.equal(err?.statusCode, 403);
-  assert.match(err?.message ?? '', /only create Employee/);
+    res,
+  );
+  assert.equal(res.statusCode, 403);
+  assert.match(res.body?.message ?? '', /assign roles/);
 });
 
 test('RM without managed departments cannot create', async () => {
@@ -155,8 +162,10 @@ test('RM without managed departments cannot create', async () => {
 test('non-RM without users.write cannot create', async () => {
   const rm = await createRm();
   const actor = { _id: rm._id, roleId: { _id: empRole._id, slug: 'employee' } };
+  // No department: skips the department pre-check so the call reaches the
+  // scoped creator, which rejects non-reporting-managers outright.
   const err = await registerEmployee(
-    { body: validBody(), user: actor, userPermissions: ['users.read'] },
+    { body: validBody({ departmentId: undefined }), user: actor, userPermissions: ['users.read'] },
     resStub(),
   ).then(() => null, (e) => e);
   assert.ok(err, 'rejected');

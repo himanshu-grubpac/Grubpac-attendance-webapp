@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasCompanyWideScope } from '@shared/permissions.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
@@ -77,7 +77,7 @@ function DashboardCardSkeleton() {
 }
 
 export default function AdminDashboard() {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, permissions, user } = useAuth();
   const [reports, setReports] = useState(null);
   const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -86,7 +86,11 @@ export default function AdminDashboard() {
   // Today-present roster: every role with an admin view (READ_ALL or
   // READ_TEAM) gets the section; the server scopes rows to the managed
   // departments for team viewers. Department/role narrow within scope.
-  const canSeeFullRoster = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  // Full-vs-team is decided by the company-wide scope slug (employees
+  // record read): ATTENDANCE_READ_* slugs alone no longer distinguish the
+  // two since the RBAC catalog grants record read to admin, HR and RMs
+  // alike — the scope slug is admin/HR-only.
+  const canSeeFullRoster = hasCompanyWideScope(permissions ?? []);
   const canSeeTeamRoster =
     canSeeFullRoster || hasPermission(PERMISSIONS.ATTENDANCE_READ_TEAM);
   // Managed department scope for team viewers (single managed department

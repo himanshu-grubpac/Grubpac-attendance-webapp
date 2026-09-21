@@ -350,8 +350,10 @@ export async function getLeaveBalances(req, res) {
   const year = parsed.year ?? getISTYear();
 
   // Read-all / adjust roles see anyone; team roles (RM) see their scope only.
+  // Company-wide scope is the employees record read slug: LEAVE_READ_ALL is
+  // RM-held since the catalog migration and cannot gate this alone.
   const canReadAll =
-    hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) ||
+    hasCompanyWideScope(req.userPermissions) ||
     hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES);
   if (!canReadAll && userId !== req.user._id.toString()) {
     const inScope = await isUserInTeamScope(
@@ -1009,7 +1011,7 @@ export async function getLopRecordsHandler(req, res) {
   const callerId = req.user._id.toString();
   if (
     String(userId) !== callerId &&
-    !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_READ_ALL) &&
+    !hasCompanyWideScope(req.userPermissions) &&
     !hasPermission(req.userPermissions, PERMISSIONS.LEAVE_ADJUST_BALANCES)
   ) {
     const allowedIds = await resolveLeaveTeamUserIds(req.user);

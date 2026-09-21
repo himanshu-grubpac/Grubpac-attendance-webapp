@@ -25,7 +25,8 @@ import {
   resolveRoleByNameOrSlug,
 } from './excelImportService.js';
 import { clearTestEmailOutbox, testEmailOutbox } from './emailService.js';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+  '../../../shared/permissions.js';
 
 let memoryServer;
 let sequence = 0;
@@ -624,10 +625,12 @@ test('read-all actor bypasses department scope', async () => {
   const actor = await createScopedActor();
   await Department.create({ name: 'Design', code: `DSB${sequence}`, isActive: true });
 
+  // Company-wide admins bypass scope: the scope slug mirrors what real
+  // admin roles hold (record read alone is team-bounded since the catalog).
   const { results } = await importEmployeesFromRowsUpsert(
     [row(6, baseCreate({ department: 'Design' }))],
     createdBy(),
-    { actorId: actor._id.toString(), actorPermissions: [PERMISSIONS.ATTENDANCE_READ_ALL] },
+    { actorId: actor._id.toString(), actorPermissions: [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.ATTENDANCE_READ_ALL] },
   );
 
   assert.equal(results[0].status, 'created');
