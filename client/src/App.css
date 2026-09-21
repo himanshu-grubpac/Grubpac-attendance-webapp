@@ -5739,6 +5739,16 @@ body::-webkit-scrollbar-thumb {
   margin-inline: auto;
 }
 
+/* Desktop: dashboard spans the full content width like Today Present (the
+   48rem cap above only binds viewports wider than 768px, so phones are
+   untouched and tablets below 961px keep the centered column). */
+@media (min-width: 961px) {
+  .page--admin-home {
+    max-width: none;
+    margin-inline: 0;
+  }
+}
+
 .admin-home__intro {
   margin: 0;
   font-size: 0.875rem;
@@ -15496,6 +15506,33 @@ body::-webkit-scrollbar-thumb {
 /* Today-present toolbar: search + action wrap, never nested */
 .today-present-toolbar {
   gap: 0.75rem;
+  align-items: center;
+}
+
+/* Card header action hugs the right edge, like the audit-logs toolbar
+   actions. The filter row below then holds search + dropdowns only —
+   the same placement as the dashboard preview. */
+.today-present-toolbar > .today-present-toolbar__action {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Desktop: lift the action out of flow and center it over the band, so the
+   header measures exactly like the dashboard's title-only band (same
+   padding, same height) with the button floating at the right edge.
+   Mobile/tablet keep the normal flow (button wraps below the title). */
+@media (min-width: 961px) {
+  .today-present-toolbar {
+    position: relative;
+  }
+
+  .today-present-toolbar > .today-present-toolbar__action {
+    position: absolute;
+    right: 1.15rem;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 0;
+  }
 }
 
 .today-present-toolbar__row {
@@ -15533,11 +15570,11 @@ body::-webkit-scrollbar-thumb {
   }
 }
 
-/* Dashboard roster preview: the search row sits directly in the card body
-   (no toolbar wrapper), so it takes the toolbar's own padding to clear the
-   section header and card borders on every viewport. Scoped to the new
-   dashboard section only — finalized pages are untouched. */
-.admin-home__roster > .today-present-toolbar__row {
+/* Roster filter row (dashboard preview + Today Present page): sits directly
+   in the card body (no toolbar wrapper), so it takes the toolbar's own
+   padding to clear the section header and card borders on every viewport.
+   Shared by both — the two rows place identically. */
+.today-present-toolbar__row {
   padding: 0.85rem 1.15rem;
 }
 

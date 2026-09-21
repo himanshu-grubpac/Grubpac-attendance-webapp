@@ -286,8 +286,15 @@ export default function AdminTodayPresent() {
       </section>
 
       <section className="card card--table" aria-label="Team present status">
-        <div className="card__toolbar today-present-toolbar" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+        <div className="card__toolbar today-present-toolbar">
           <h2 className="card__title">Team Attendance Today</h2>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm today-present-toolbar__action"
+            onClick={openColumnEditor}
+          >
+            Edit columns
+          </button>
         </div>
 
         {error ? <div className="alert alert--error">{error}</div> : null}
@@ -308,15 +315,6 @@ export default function AdminTodayPresent() {
           onRoleChange={showRoleFilter ? handleRoleChange : null}
           roleValue={roleFilter}
           roleOptions={roleOptions}
-          toolbarActions={(
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={openColumnEditor}
-            >
-              Edit columns
-            </button>
-          )}
           footer={(
             <>
               <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />
