@@ -8493,7 +8493,8 @@ body::-webkit-scrollbar-thumb {
 
   .approvals-toolbar__filters > .approvals-toolbar__field--period {
     flex: 2 1 0;
-    min-width: 0;
+    /* Year + month selects each keep label room; gap ≈ 0.5rem. */
+    min-width: min(100%, 18rem);
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period {
@@ -8502,12 +8503,12 @@ body::-webkit-scrollbar-thumb {
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 1 1 8.5rem;
+    min-width: 8.5rem;
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field:last-child {
-    flex: 1.15 1 9rem;
+    flex: 1 1 9rem;
     min-width: 9rem;
   }
 
@@ -16266,10 +16267,12 @@ body::-webkit-scrollbar-thumb {
 
 @media (min-width: 961px) {
   .approvals-toolbar__period .select-field {
-    min-width: 0;
+    flex: 1 1 8.5rem;
+    min-width: 8.5rem;
   }
 
   .approvals-toolbar__period .select-field:last-child {
+    flex: 1 1 9rem;
     min-width: 9rem;
   }
 }
