@@ -8507,8 +8507,8 @@ body::-webkit-scrollbar-thumb {
   }
 
   .approvals-toolbar__field--period > .approvals-toolbar__period > .select-field:last-child {
-    flex: 1.15 1 0;
-    min-width: 0;
+    flex: 1.15 1 9rem;
+    min-width: 9rem;
   }
 
   .approvals-toolbar__filters > .approvals-toolbar__clear,
@@ -16265,9 +16265,12 @@ body::-webkit-scrollbar-thumb {
   }
 
 @media (min-width: 961px) {
-  .approvals-toolbar__period .select-field,
-  .approvals-toolbar__period .select-field:last-child {
+  .approvals-toolbar__period .select-field {
     min-width: 0;
+  }
+
+  .approvals-toolbar__period .select-field:last-child {
+    min-width: 9rem;
   }
 }
 
