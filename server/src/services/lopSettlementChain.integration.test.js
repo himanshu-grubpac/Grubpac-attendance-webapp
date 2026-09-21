@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS } from
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from
   '../../../shared/permissions.js';
 import { User } from '../models/User.js';
 import { LeaveType } from '../models/LeaveType.js';
@@ -203,8 +203,8 @@ test('monthly audit reflects settled LOP for the employee', async () => {
   await settleMonthPayroll(PERIOD, user._id);
 
   const audit = await getMonthlySalaryAudit(
-    { _id: user._id },
-    [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.SALARY_TEAM_AUDIT_R],
+    { _id: user._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN },
+    [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.SALARY_READ],
     PERIOD,
   );
 

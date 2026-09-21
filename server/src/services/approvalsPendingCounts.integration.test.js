@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from
   '../../../shared/permissions.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
@@ -33,6 +33,13 @@ let sequence = 0;
 
 const MANAGER_PERMS = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ];
 const ADMIN_PERMS = [...MANAGER_PERMS, COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.LEAVE_READ_ALL];
+// Actor form for company-wide (admin) calls: the scope helper reads roleSlug
+// off the actor (production req.user carries the resolved slug).
+const asAdmin = (userDoc) => ({
+  ...userDoc.toObject(),
+  _id: userDoc._id,
+  roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+});
 const NO_APPROVE_PERMS = [PERMISSIONS.LEAVE_READ, PERMISSIONS.LEAVE_APPLY];
 
 before(async () => {
@@ -129,7 +136,7 @@ test('leave counts split WFH vs non-WFH within the approval queue', async () => 
   assert.equal(scoped.leave, 1, 'one non-WFH pending in queue');
   assert.equal(scoped.wfh, 1, 'one WFH pending in queue');
 
-  const admin = await getLeavePendingCounts(manager, ADMIN_PERMS);
+  const admin = await getLeavePendingCounts(asAdmin(manager), ADMIN_PERMS);
   assert.equal(admin.leave, 2, 'admin sees outsider request too');
   assert.equal(admin.wfh, 1);
 
@@ -157,7 +164,7 @@ test('comp-off counts split pending vs worked, scoped to queue', async () => {
   const scoped = await getCompOffPendingCounts(manager, MANAGER_PERMS);
   assert.deepEqual(scoped, { pending: 1, assessment: 1 });
 
-  const admin = await getCompOffPendingCounts(manager, ADMIN_PERMS);
+  const admin = await getCompOffPendingCounts(asAdmin(manager), ADMIN_PERMS);
   assert.deepEqual(admin, { pending: 2, assessment: 1 });
 
   const none = await getCompOffPendingCounts(applicant, NO_APPROVE_PERMS);

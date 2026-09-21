@@ -1,10 +1,16 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 
 const MENU_MIN_WIDTH = 176;
 const VIEWPORT_PADDING = 8;
 const GAP = 4;
+
+// App-wide single-open registry: row action cells swallow pointerdown (to
+// keep row navigation from firing), so a sibling trigger click never reaches
+// the open menu's document outside-click handler — without this, every
+// clicked Manage menu stays open and they pile up.
+let activeMenuCloser = null;
 
 function stopCardActivation(event) {
   event.stopPropagation();
@@ -16,8 +22,37 @@ export default function ActionMenu({ label, items, onOpenChange }) {
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const menuId = useId();
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
+  const closeMenu = useCallback(() => {
+    if (activeMenuCloser === closeMenuRef.current) {
+      activeMenuCloser = null;
+    }
+    setOpen(false);
+    setPosition((prev) => ({ ...prev, ready: false }));
+    onOpenChangeRef.current?.(false);
+  }, []);
+  const closeMenuRef = useRef(closeMenu);
+  closeMenuRef.current = closeMenu;
+
+  // Unmounted rows (search reloads, pagination appends) must not leave a
+  // stale closer behind.
+  useEffect(() => () => {
+    if (activeMenuCloser === closeMenuRef.current) {
+      activeMenuCloser = null;
+    }
+  }, []);
 
   function setMenuOpen(next) {
+    if (next) {
+      if (activeMenuCloser && activeMenuCloser !== closeMenuRef.current) {
+        activeMenuCloser();
+      }
+      activeMenuCloser = closeMenuRef.current;
+    } else if (activeMenuCloser === closeMenuRef.current) {
+      activeMenuCloser = null;
+    }
     setOpen(next);
     if (!next) {
       setPosition((prev) => ({ ...prev, ready: false }));
@@ -27,9 +62,10 @@ export default function ActionMenu({ label, items, onOpenChange }) {
 
   useEscapeKey(open, () => setMenuOpen(false));
 
-  useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !menuRef.current) return;
-
+  // Viewport-clamped panel placement. Shared by the open layout pass and
+  // the scroll/resize tracker below so the fixed panel follows its trigger.
+  const reposition = useCallback(() => {
+    if (!triggerRef.current || !menuRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const menuEl = menuRef.current;
     const menuWidth = Math.max(menuEl.offsetWidth, MENU_MIN_WIDTH);
@@ -52,7 +88,12 @@ export default function ActionMenu({ label, items, onOpenChange }) {
     }
 
     setPosition({ top, left, ready: true });
-  }, [open, items.length]);
+  }, [items.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    reposition();
+  }, [open, reposition]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -67,8 +108,25 @@ export default function ActionMenu({ label, items, onOpenChange }) {
       setMenuOpen(false);
     }
 
+    // Track-and-follow: the panel is viewport-fixed, so any scroll moves it
+    // off its trigger — reposition instead of closing. That also makes menu
+    // opening immune to programmatic scrolls (sticky-scrollbar sync,
+    // scroll-into-view on trigger click), which used to instantly kill a
+    // just-opened menu. Only when the trigger itself leaves the viewport
+    // is there nothing to anchor to — then close.
     function handleScroll() {
-      setMenuOpen(false);
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (
+        !rect ||
+        rect.bottom < 0 ||
+        rect.top > window.innerHeight ||
+        rect.right < 0 ||
+        rect.left > window.innerWidth
+      ) {
+        closeMenuRef.current();
+        return;
+      }
+      reposition();
     }
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -80,7 +138,7 @@ export default function ActionMenu({ label, items, onOpenChange }) {
       window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('resize', handleScroll);
     };
-  }, [open]);
+  }, [open, reposition]);
 
   return (
     <>

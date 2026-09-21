@@ -389,7 +389,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const todayKey = getISTDateInputValue();
   const istToday = todayKey;
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   let userIds = [];
@@ -403,54 +403,62 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     ).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Visibility roster (managed departments + reports + delegates + self +
-    // fellow top-level RMs, all statuses): same membership as the Employee
-    // List plus self for the today board. Inactive members render as inactive.
-    userIds = [...((await resolveTeamScopedUserIds(actor, permissions)) ?? [])];
-    if (!userIds.some((id) => id.toString() === actor._id.toString())) {
-      userIds.push(actor._id);
+    // Product visibility rule: own reports (+delegate chain, all statuses)
+    // + fellow RMs org-wide + the upline management chain. Never self;
+    // managed-department strangers are directory-only (Employee List).
+    // Inactive members render as inactive rows, never as absent.
+    const actorIdStr = String(actor._id);
+    const memberIds = new Set();
+
+    const directReports = await User.find({ reportingManagerId: actor._id }).select('_id').lean();
+    directReports.forEach((member) => memberIds.add(String(member._id)));
+    const delegatedManagers = await User.find({ delegateApproverId: actor._id }).select('_id').lean();
+    if (delegatedManagers.length > 0) {
+      const delegatedReports = await User.find({
+        reportingManagerId: { $in: delegatedManagers.map((manager) => manager._id) },
+      })
+        .select('_id')
+        .lean();
+      delegatedReports.forEach((member) => memberIds.add(String(member._id)));
     }
-    if (!actor.reportingManagerId) {
-      const rmRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER }).select('_id').lean();
-      if (rmRole) {
-        const fellowRms = await User.find({
-          roleId: rmRole._id,
-          $or: [{ reportingManagerId: null }, { reportingManagerId: { $exists: false } }],
-          _id: { $ne: actor._id },
-        })
-          .select('_id')
-          .lean();
-        for (const fellow of fellowRms) {
-          if (!userIds.some((id) => id.toString() === fellow._id.toString())) {
-            userIds.push(fellow._id);
-          }
-        }
-      }
+
+    const rmRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER }).select('_id').lean();
+    if (rmRole) {
+      const fellows = await User.find({ roleId: rmRole._id, _id: { $ne: actor._id } })
+        .select('_id')
+        .lean();
+      fellows.forEach((fellow) => memberIds.add(String(fellow._id)));
     }
+
+    const actorDoc = await User.findById(actor._id).select('reportingManagerId').lean();
+    const visited = new Set([actorIdStr]);
+    let cursor = actorDoc?.reportingManagerId ? String(actorDoc.reportingManagerId) : null;
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor);
+      memberIds.add(cursor);
+      // eslint-disable-next-line no-await-in-loop
+      const doc = await User.findById(cursor).select('reportingManagerId').lean();
+      cursor = doc?.reportingManagerId ? String(doc.reportingManagerId) : null;
+    }
+
+    memberIds.delete(actorIdStr);
+    userIds = [...memberIds].map((id) => new mongoose.Types.ObjectId(id));
   } else {
-    const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
-    const managerId = actorDoc?.reportingManagerId ?? null;
-    const actorDeptId = actorDoc?.departmentId ? String(actorDoc.departmentId) : null;
-    let teamIds = [];
+    // Product visibility rule: peers under the same RM plus the RM itself.
+    // Never self. The team is defined by the reporting line (no department
+    // restriction), mirroring the RM-side rule above.
+    const actorIdStr = String(actor?._id);
+    const actorDoc = actor?._id
+      ? await User.findById(actor._id).select('reportingManagerId').lean()
+      : null;
+    const managerId = actorDoc?.reportingManagerId ? String(actorDoc.reportingManagerId) : null;
+    const teamIds = [];
     if (managerId) {
-      const q = { reportingManagerId: managerId };
-      if (actorDeptId) q.departmentId = new mongoose.Types.ObjectId(actorDeptId);
-      const teamMembers = await User.find(q).select('_id').lean();
-      teamIds = teamMembers.map((member) => member._id);
-    }
-    if (managerId && !teamIds.some((id) => id.toString() === String(managerId))) {
-      // Show the manager only if they are in the same department (or actor has no dept).
-      if (!actorDeptId) {
-        teamIds.push(managerId);
-      } else {
-        const mgr = await User.findById(managerId).select('departmentId').lean();
-        if (String(mgr?.departmentId ?? '') === actorDeptId) {
-          teamIds.push(managerId);
-        }
+      const peers = await User.find({ reportingManagerId: managerId }).select('_id').lean();
+      for (const peer of peers) {
+        if (String(peer._id) !== actorIdStr) teamIds.push(peer._id);
       }
-    }
-    if (!teamIds.some((id) => id.toString() === String(actor._id))) {
-      teamIds.push(actor._id);
+      if (managerId !== actorIdStr) teamIds.push(managerId);
     }
     userIds = teamIds;
   }
@@ -1141,7 +1149,7 @@ export async function getAdminAttendance({
     }
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && canReadTeam && actor?._id) {
@@ -1509,7 +1517,7 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
     return actor._id;
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
+  const canReadAll = hasCompanyWideScope(permissions, actor);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && !canReadTeam) {

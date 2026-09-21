@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from
   '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { Department } from '../models/Department.js';
@@ -12,6 +12,14 @@ import { User } from '../models/User.js';
 import { getAdminAttendance } from './attendanceService.js';
 
 const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.ATTENDANCE_READ_ALL];
+
+// Actor form for company-wide (admin) calls: the scope helper reads roleSlug
+// off the actor (production req.user carries the resolved slug).
+const asAdmin = (userDoc) => ({
+  ...userDoc.toObject(),
+  _id: userDoc._id,
+  roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+});
 
 let memoryServer;
 let sequence = 0;
@@ -81,7 +89,7 @@ test('history resolves department from the ref for users without the legacy stri
     userId: employee._id.toString(),
     page: 1,
     limit: 20,
-    actor: admin,
+    actor: asAdmin(admin),
     permissions: ADMIN_PERMS,
   });
 
@@ -101,7 +109,7 @@ test('history keeps the legacy department string when no ref is set', async () =
     userId: employee._id.toString(),
     page: 1,
     limit: 20,
-    actor: admin,
+    actor: asAdmin(admin),
     permissions: ADMIN_PERMS,
   });
 

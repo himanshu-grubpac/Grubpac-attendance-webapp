@@ -1,12 +1,11 @@
 /**
  * Reporting-manager leave visibility lockdown (integration, real Mongo).
  *
- * An RM sees and acts on leave requests of employees under them and nobody
- * else: direct reports (+ delegate chain), never managed departments, and
- * explicit ?userId= / ?departmentId= filters must never widen the scope.
- * - team + approvals scopes contain only direct (+delegated) reports
- * - managed-department non-report is invisible even though the department
- *   is managed by the actor
+ * An RM sees team leave for managed-team membership (direct reports, delegate
+ * chain, managed departments) but approval queues stay on direct reports only.
+ * Explicit ?userId= / ?departmentId= filters must never widen the scope.
+ * - team scope includes managed-department members
+ * - approvals scope contains only direct (+delegated) reports
  * - out-of-scope ?userId= → 403 (approvals, team, and mine scopes)
  * - team calendar ignores cross-scope ?departmentId=
  * - delegate sees + approves the absent manager's reports
@@ -18,7 +17,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import '../models/Department.js';
 import { Department } from '../models/Department.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -127,7 +126,7 @@ async function setup() {
 
 const ids = (res) => (res.requests ?? []).map((r) => String(r.userId?._id ?? r.userId));
 
-test('team scope shows direct reports only (managed-department non-report hidden)', async () => {
+test('team scope includes managed-department members and direct reports', async () => {
   const { rm, report, deptOnly, outsider } = await setup();
   const res = await listLeaveRequests(rm, RM_PERMS, {
     scope: 'team',
@@ -137,7 +136,7 @@ test('team scope shows direct reports only (managed-department non-report hidden
   });
   const seen = ids(res);
   assert.ok(seen.includes(String(report._id)), 'direct report visible');
-  assert.ok(!seen.includes(String(deptOnly._id)), 'managed-department non-report hidden');
+  assert.ok(seen.includes(String(deptOnly._id)), 'managed-department member visible');
   assert.ok(!seen.includes(String(outsider._id)), 'outsider hidden');
 });
 
@@ -185,13 +184,12 @@ test('mine scope userId must equal self', async () => {
   );
 });
 
-test('team calendar departmentId cannot widen scope', async () => {
+test('team calendar includes managed-department members within scope', async () => {
   const { rm, report, deptOnly, dept } = await setup();
   const res = await getTeamCalendar(rm, RM_PERMS, { month: '2026-10', departmentId: String(dept._id) });
   const seen = (res.entries ?? []).map((r) => String(r.userId?._id ?? r.userId));
   const listedUsers = (res.users ?? []).map((u) => String(u.id));
-  assert.ok(!seen.includes(String(deptOnly._id)), 'department filter does not leak non-reports');
-  assert.ok(!listedUsers.includes(String(deptOnly._id)), 'user roster excludes non-reports');
+  assert.ok(seen.includes(String(deptOnly._id)) || listedUsers.includes(String(deptOnly._id)), 'managed-dept member visible');
   assert.ok(seen.includes(String(report._id)) || listedUsers.includes(String(report._id)), 'direct report visible');
 });
 
@@ -216,14 +214,16 @@ test('delegate sees and approves absent manager reports', async () => {
   assert.equal(canApproveLeave(delegate, requester, RM_PERMS), true, 'delegate can approve');
 });
 
-test('READ_ALL callers unaffected', async () => {
+test('company-wide Admin/HR callers unaffected', async () => {
   const { rm, outsider } = await setup();
-  const res = await listLeaveRequests(rm, ADMIN_PERMS, {
+  const adminActor = { ...rm.toObject(), _id: rm._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
+  const adminPerms = [...ADMIN_PERMS, PERMISSIONS.EMPLOYEES_RECORD_R];
+  const res = await listLeaveRequests(adminActor, adminPerms, {
     scope: 'team',
     status: 'all',
     page: 1,
     limit: 50,
     userId: String(outsider._id),
   });
-  assert.ok(ids(res).includes(String(outsider._id)), 'read-all still unscoped');
+  assert.ok(ids(res).includes(String(outsider._id)), 'company-wide admin still unscoped');
 });

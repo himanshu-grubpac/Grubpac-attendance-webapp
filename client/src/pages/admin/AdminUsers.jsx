@@ -796,12 +796,12 @@ export default function AdminUsers() {
             nextJoiningTo: '',
           });
         } else {
-          // New-this-month defaults to Active: carrying over Inactive (or All)
-          // from the previous card hides rows and desyncs the dropdown from
-          // the intended "active new joiners" view. Users can still switch
-          // the Status dropdown to All/Inactive afterwards to combine.
+          // New-this-month lists exactly what the card counts (all statuses
+          // registered since the 1st): forcing Active here would hide inactive
+          // new joiners and desync the card count from the table total.
+          // Users can still narrow via the Status dropdown afterwards.
           setSearch('');
-          setStatusFilter('true');
+          setStatusFilter('');
           setDepartmentFilter('');
           setRoleFilter('');
           setNewThisMonthFilter(true);
@@ -812,7 +812,7 @@ export default function AdminUsers() {
           loadEmployees({
             query: '',
             nextPage: 1,
-            nextStatus: 'true',
+            nextStatus: '',
             nextDepartment: '',
             nextRole: '',
             nextNewThisMonth: true,
@@ -1003,8 +1003,8 @@ export default function AdminUsers() {
   );
   const newThisMonthHint = formatJoinedSinceHint(stats?.monthKey);
   // Filters combine (AND): with e.g. Status=Inactive also active, the table
-  // is the intersection — spell that out so the stat count (116) vs the
-  // table count (4) never looks like a data bug again.
+  // is the intersection — spell that out so a stat count vs the table
+  // count never looks like a data bug again.
   const hasOtherFilters = Boolean(
     search || hasNonDefaultStatus || departmentFilter || roleFilter || joiningFrom || joiningTo,
   );

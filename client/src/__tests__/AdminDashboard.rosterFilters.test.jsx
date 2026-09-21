@@ -64,7 +64,9 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   return {
     ...actual,
     useAuth: () => ({
-      // Admin viewer: company-wide scope plus record reads.
+      // Admin viewer: company-wide scope plus record reads + admin role slug
+      // (the scope helper checks the actor's role, not just slugs).
+      user: { roleSlug: 'admin' },
       permissions: ['employees.record.r', 'attendance.record.r'],
       hasPermission: () => true,
       hasAnyPermission: () => true,

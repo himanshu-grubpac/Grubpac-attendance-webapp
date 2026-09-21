@@ -8,7 +8,7 @@ import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import * as XLSX from 'xlsx';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
@@ -196,6 +196,9 @@ beforeEach(async () => {
     role: 'admin',
     isActive: true,
   });
+  // Actor form for scope-aware calls: the scope helper reads roleSlug off
+  // the actor (production req.user carries the resolved slug).
+  adminUser = { ...adminUser.toObject(), _id: adminUser._id, roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
   adminPermissions = Object.values(PERMISSIONS);
 
   await seedCheckIn(employee._id, ABSENT_DAY);

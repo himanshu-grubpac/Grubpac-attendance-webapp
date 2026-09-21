@@ -118,7 +118,8 @@ test('validateCombinedAccumulation still guards growth paths directly', async ()
   const year = getISTYear(parseDateInputAsISTDay(dayKey));
   const cl = await createTypeWithPolicy('CL', { annualQuota: 12, year });
   const el = await createTypeWithPolicy('EL', { annualQuota: 100, year });
-  const { getPolicyMapForYear } = await import('./leaveBalanceService.js');
+  const { getPolicyMapForYear, ensureBalancesForUser } = await import('./leaveBalanceService.js');
+  await ensureBalancesForUser(applicant._id, year);
   const policyMap = await getPolicyMapForYear(year);
   await assert.rejects(
     validateCombinedAccumulation(applicant._id, year, policyMap, 0.5, cl._id),

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeavePolicy } from '../models/LeavePolicy.js';
@@ -28,6 +28,14 @@ const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.LEAVE_ADJUST_BALANCES,
 let memoryServer;
 let sequence = 0;
 let YEAR;
+
+// Actor form for company-wide (admin) calls: the scope helper reads roleSlug
+// off the actor (production req.user carries the resolved slug).
+const asAdmin = (userDoc) => ({
+  ...userDoc.toObject(),
+  _id: userDoc._id,
+  roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+});
 
 before(async () => {
   memoryServer = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
@@ -244,7 +252,7 @@ test('adjustment history returns three years of per-type snapshots', async () =>
     admin._id,
   );
 
-  const history = await getLeaveAdjustmentHistory(admin, ADMIN_PERMS, employee._id.toString(), {
+  const history = await getLeaveAdjustmentHistory(asAdmin(admin), ADMIN_PERMS, employee._id.toString(), {
     year: YEAR,
   });
   assert.equal(history.user.employeeCode, employee.employeeCode);
@@ -280,7 +288,7 @@ test('history shows zero leave for a pre-joining year, not an error', async () =
   const employee = await createUser('Flag Employee', {
     joiningDate: new Date(`${YEAR}-04-01T00:00:00Z`),
   });
-  const history = await getLeaveAdjustmentHistory(admin, ADMIN_PERMS, employee._id.toString(), {
+  const history = await getLeaveAdjustmentHistory(asAdmin(admin), ADMIN_PERMS, employee._id.toString(), {
     year: YEAR - 1,
   });
   assert.ok(history.user.contractStartDate, 'contract start exposed for context');
@@ -305,7 +313,7 @@ test('history flags types without a policy instead of zero-filling', async () =>
   });
   await LeaveType.create({ code: 'XX', name: 'No Policy Type', isActive: true });
 
-  const history = await getLeaveAdjustmentHistory(admin, ADMIN_PERMS, employee._id.toString(), {
+  const history = await getLeaveAdjustmentHistory(asAdmin(admin), ADMIN_PERMS, employee._id.toString(), {
     year: YEAR,
   });
   const current = history.years[0];

@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import { User } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { getEmployee, getEmployeeStats, listEmployees, updateEmployee } from './adminController.js';
-import { PERMISSIONS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 
 let memServer;
 
@@ -22,7 +22,7 @@ after(async () => {
 
 const reqFor = (page, limit) => ({
   query: { page: String(page), limit: String(limit) },
-  user: { _id: new mongoose.Types.ObjectId() },
+  user: { _id: new mongoose.Types.ObjectId(), roleSlug: SYSTEM_ROLE_SLUGS.ADMIN },
   userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_ACCOUNT_R],
 });
 
@@ -123,7 +123,7 @@ async function seedAdminAndEmployee() {
 
 const statsReq = () => ({
   query: {},
-  user: { _id: new mongoose.Types.ObjectId() },
+  user: { _id: new mongoose.Types.ObjectId(), roleSlug: SYSTEM_ROLE_SLUGS.ADMIN },
   userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
 });
 

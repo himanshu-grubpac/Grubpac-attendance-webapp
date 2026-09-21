@@ -316,8 +316,8 @@ test('WFH requests are not gated by the combined CL+EL accumulation cap', async 
   assert.equal(created.leaveTypeCode, 'WFH');
 });
 
-test('CL requests past the combined cap are still rejected', async () => {
-  const applicant = await createUser('Cap Still Enforced');
+test('CL requests past the combined cap are accepted (consumption shrinks stock)', async () => {
+  const applicant = await createUser('Cap Spend Down');
   const year = getISTYear();
   const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
   const elType = await LeaveType.create({ code: 'EL', name: 'Earned Leave', isActive: true });
@@ -333,17 +333,17 @@ test('CL requests past the combined cap are still rejected', async () => {
       isActive: true,
     });
   }
-  // Stock 60 already over the 45 cap: a new CL request must still be blocked.
+  // Stock 60 already over the 45 cap: applying still works — taking leave
+  // can only shrink the total, so the accumulation cap must never gate
+  // consumption (otherwise an over-cap user could never spend down).
   const startKey = nextDay(getISTDateInputValue(), 3);
-  await assert.rejects(
-    createLeaveRequest(applicant._id, {
-      leaveTypeId: clType._id.toString(),
-      startDate: startKey,
-      endDate: startKey,
-      reason: 'CL over the cap',
-    }),
-    /Combined CL\+EL balance cannot exceed/,
-  );
+  const created = await createLeaveRequest(applicant._id, {
+    leaveTypeId: clType._id.toString(),
+    startDate: startKey,
+    endDate: startKey,
+    reason: 'CL over the cap',
+  });
+  assert.equal(created.status, 'pending');
 });
 
 test('decision token consumption is atomic under concurrent use', async () => {

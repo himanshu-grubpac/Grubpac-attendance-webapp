@@ -4,13 +4,21 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from
   '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { User } from '../models/User.js';
 import { getAdminAttendance } from './attendanceService.js';
 
 const ADMIN_PERMS = [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.ATTENDANCE_READ_ALL];
+
+// Actor form for company-wide (admin) calls: the scope helper reads roleSlug
+// off the actor (production req.user carries the resolved slug).
+const asAdmin = (userDoc) => ({
+  ...userDoc.toObject(),
+  _id: userDoc._id,
+  roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+});
 
 let memoryServer;
 let sequence = 0;
@@ -74,7 +82,7 @@ test('check-out type filter returns check-outs (orphan filter skipped)', async (
     type: 'check_out',
     page: 1,
     limit: 20,
-    actor: admin,
+    actor: asAdmin(admin),
     permissions: ADMIN_PERMS,
   });
   assert.equal(result.pagination.total, 1);
@@ -96,7 +104,7 @@ test('check-in type filter still returns check-ins', async () => {
     type: 'check_in',
     page: 1,
     limit: 20,
-    actor: admin,
+    actor: asAdmin(admin),
     permissions: ADMIN_PERMS,
   });
   assert.equal(result.records.length, 1);
@@ -111,6 +119,6 @@ test('unfiltered list still drops true orphan check-outs', async () => {
     recordFields(employee._id, 'check_out', new Date('2026-09-15T13:00:00.000Z')),
   );
 
-  const result = await getAdminAttendance({ page: 1, limit: 20, actor: admin, permissions: ADMIN_PERMS });
+  const result = await getAdminAttendance({ page: 1, limit: 20, actor: asAdmin(admin), permissions: ADMIN_PERMS });
   assert.equal(result.records.length, 0);
 });

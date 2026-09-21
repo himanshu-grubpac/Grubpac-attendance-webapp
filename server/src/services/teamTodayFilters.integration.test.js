@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from
   '../../../shared/permissions.js';
 import '../models/Department.js';
 import { Department } from '../models/Department.js';
@@ -82,7 +82,14 @@ async function setup() {
     departmentId: design._id,
     isActive: true,
   });
-  return { admin, adminRole, empRole, rmRole, dev, design, devEmp, designRm };
+  // Actor form for company-wide (admin) calls: the scope helper reads
+  // roleSlug off the actor (production req.user carries the resolved slug).
+  const adminActor = {
+    ...admin.toObject(),
+    _id: admin._id,
+    roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+  };
+  return { admin: adminActor, adminRole, empRole, rmRole, dev, design, devEmp, designRm };
 }
 
 test('no filters returns the whole scoped roster including admins (Employee List parity)', async () => {

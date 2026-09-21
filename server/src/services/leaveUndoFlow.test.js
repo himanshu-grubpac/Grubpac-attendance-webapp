@@ -584,7 +584,7 @@ test('canApproveLeave: returns false without LEAVE_APPROVE permission', () => {
 });
 
 test('canApproveLeave: returns true with LEAVE_READ_ALL permission', () => {
-  const actor = mockUser({ _id: '507f1f77bcf86cd799439099' });
+  const actor = mockUser({ _id: '507f1f77bcf86cd799439099', roleSlug: 'admin' });
   const requester = mockUser({ _id: '507f1f77bcf86cd799439011' });
   const result = canApproveLeave(actor, requester, ['leave.request.x0', 'employees.record.r']);
   assert.equal(result, true);

@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { PERMISSIONS, buildDefaultRolePermissions } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, buildDefaultRolePermissions } from
+  '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
@@ -52,9 +53,11 @@ async function seedUser(name, fields = {}) {
 }
 
 test('HR with employees.record.r has company-wide salary scope', async () => {
-  const hr = await seedUser('HR', { role: 'admin' });
+  const hrDoc = await seedUser('HR', { role: 'admin' });
   const employee = await seedUser('Emp');
   const hrPerms = DEFAULTS.hr;
+  // Actor form: the scope helper reads roleSlug off the actor.
+  const hr = { ...hrDoc.toObject(), _id: hrDoc._id, roleSlug: SYSTEM_ROLE_SLUGS.HR };
 
   assert.equal(await canViewSalarySummary(hr, employee, hrPerms), true);
   assert.equal(await isUserInTeamScope(hr, hrPerms, employee._id), true);

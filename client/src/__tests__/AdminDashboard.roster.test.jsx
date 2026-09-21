@@ -59,7 +59,13 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   return {
     ...actual,
     useAuth: () => ({
-      user: { managedDepartmentIds: mockManagedDepartments },
+      // Role slug tracks the permission flags: full-scope cases are admins,
+      // team-only cases are reporting managers (the scope helper checks the
+      // actor's role, not just slugs).
+      user: {
+        managedDepartmentIds: mockManagedDepartments,
+        roleSlug: allowRoster ? 'admin' : 'reporting-manager',
+      },
       // New RBAC model: company-wide scope comes from the employees record
       // read slug (admin/HR); attendance record read alone is team-scoped.
       permissions: mockPermissionSlugs(),

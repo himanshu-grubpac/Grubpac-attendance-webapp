@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { CompOffRequest } from '../models/CompOffRequest.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
@@ -57,6 +57,13 @@ const ADMIN_PERMS = [
 ];
 const MANAGER_PERMS = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_READ];
 const EMPLOYEE_PERMS = [PERMISSIONS.LEAVE_APPLY, PERMISSIONS.LEAVE_READ];
+// Actor form for company-wide (admin) calls: the scope helper reads roleSlug
+// off the actor (production req.user carries the resolved slug).
+const asAdmin = (userDoc) => ({
+  ...userDoc.toObject(),
+  _id: userDoc._id,
+  roleSlug: SYSTEM_ROLE_SLUGS.ADMIN,
+});
 /** Far-future clock for sweeps: submit window (10s) + decision window (15s) + delay. */
 const FUTURE = new Date(Date.now() + 60_000);
 
@@ -370,7 +377,7 @@ test('scope enforcement: non-manager approve 403, other-manager 403, admin read_
   // Admin with read_all may act on any request.
   const second = await submitCompOff(employee, nextWeekendKey(satKey));
   await runCompOffSweep(FUTURE);
-  const adminActed = await decideCompOffRequest(second.id, otherManager, ADMIN_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
+  const adminActed = await decideCompOffRequest(second.id, asAdmin(otherManager), ADMIN_PERMS, 'approve', { comment: 'Approved. Good work planned.' });
   assert.equal(adminActed.pendingAction, 'approved');
 });
 
@@ -397,7 +404,7 @@ test('approvals list is scoped to the manager reports; mine returns own requests
     limit: 20,
   });
   assert.equal(approvals.pagination.total, 1, 'manager sees only own reports');
-  const adminView = await listCompOffRequests(otherManager, ADMIN_PERMS, {
+  const adminView = await listCompOffRequests(asAdmin(otherManager), ADMIN_PERMS, {
     scope: 'approvals',
     status: 'all',
     page: 1,
@@ -1241,7 +1248,7 @@ test('BUG-019: LEAVE_READ_ALL approver sees all pending comp-off requests compan
   const created = await submitCompOff(employee, satKey);
   await submitCompOff(otherEmployee, nextWeekendKey(satKey));
 
-  const adminApprovals = await listCompOffRequests(otherManager, ADMIN_PERMS, {
+  const adminApprovals = await listCompOffRequests(asAdmin(otherManager), ADMIN_PERMS, {
     scope: 'approvals',
     status: 'pending',
     page: 1,

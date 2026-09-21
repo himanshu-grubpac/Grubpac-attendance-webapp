@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG } from '../../../shared/permissions.js';
+import { COMPANY_WIDE_SCOPE_SLUG, SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
 import { User } from '../models/User.js';
 import { getISTDateInputValue } from '../utils/istDate.js';
 import { getTeamCalendar } from './leaveService.js';
@@ -20,7 +20,7 @@ after(async () => {
   await memServer.stop();
 });
 
-const actor = { _id: new mongoose.Types.ObjectId() };
+const actor = { _id: new mongoose.Types.ObjectId(), roleSlug: SYSTEM_ROLE_SLUGS.ADMIN };
 // Company-wide viewer (what an admin holds): scope slug grants the full
 // calendar. Record read alone is team-bounded since the catalog migration.
 const permissions = [COMPANY_WIDE_SCOPE_SLUG, 'leave.request.r'];

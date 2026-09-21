@@ -207,4 +207,40 @@ describe('AdminUsers stat cards', () => {
       expect(footerText()).toMatch(/showing 3 of 3 employees/i);
     });
   });
+
+  it('new-this-month card lists every new joiner regardless of status', async () => {
+    const user = userEvent.setup();
+    setup();
+    await waitFor(() => {
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
+    });
+
+    // The card counts all registrations since the 1st: the request must not
+    // carry an isActive predicate, and the Status dropdown follows to All.
+    await user.click(screen.getByRole('button', { name: /new this month/i }));
+    await waitFor(() => {
+      const lastCall =
+        adminApi.listEmployees.mock.calls[adminApi.listEmployees.mock.calls.length - 1][0];
+      expect(lastCall.createdAfter).toBe('2026-09-01');
+      expect(lastCall.isActive).toBeUndefined();
+      expect(lastCall.page).toBe(1);
+    });
+    expect(
+      screen.getByRole('combobox', { name: /status filter/i }),
+    ).toHaveTextContent('All');
+    expect(
+      screen.getByRole('button', { name: /new this month/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(footerText()).toMatch(/showing 10 of 15 employees/i);
+    });
+
+    // Toggling off returns to the default Active view.
+    await user.click(screen.getByRole('button', { name: /new this month/i }));
+    await waitFor(() => {
+      expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
+        expect.objectContaining({ isActive: 'true', page: 1 }),
+      );
+    });
+  });
 });

@@ -503,7 +503,9 @@ test('integration: leave apply → approve → LOP detail shows Unpaid CL', asyn
     new Date(new Date(created.decisionUndoExpiresAt).getTime() + 5000),
   );
 
-  const managerPerms = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ];
+  // Team-audit read lets the manager view a direct report's LOP detail
+  // (payroll read alone no longer implies team scope since the catalog).
+  const managerPerms = [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.SALARY_TEAM_AUDIT_R];
   await decideLeaveRequest(created.id, manager, managerPerms, 'approved', {
     comment: 'Approved despite zero balance',
   });

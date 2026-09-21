@@ -68,7 +68,7 @@ import { CompOffRequest } from './models/CompOffRequest.js';
 import { OfficeSettings } from './models/OfficeSettings.js';
 import { DemoFaqItem } from './models/DemoFaqItem.js';
 import { HelpAttachment } from './models/HelpAttachment.js';
-import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears } from './services/leaveBalanceService.js';
+import { seedLeaveTypesAndPolicies, migrateLeavePolicyYears, backfillMissingLeavePolicies } from './services/leaveBalanceService.js';
 
 const KEY_EMAILS = ['admin@grubpac.com', 'salunke.himanshu@grubpac.com'];
 const PROD_CLUSTER_HOST = 'grubpac-attendance.uvcyogy.mongodb.net';
@@ -395,6 +395,14 @@ async function migrateRecentFeatures() {
   if (backfilled === 0) {
     console.log('All leave policies already have a year.');
   }
+
+  console.log('\n=== Missing leave policies backfill ===');
+  const missingPolicies = await backfillMissingLeavePolicies();
+  console.log(
+    missingPolicies === 0
+      ? 'Every active leave type already has a current-year policy.'
+      : `Created zero-quota policies (+ balances) for ${missingPolicies} type(s) missing one.`,
+  );
 
   console.log('=== Syncing indexes ===');
   await syncAllIndexes();

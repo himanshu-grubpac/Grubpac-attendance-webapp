@@ -2,8 +2,13 @@ import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasCompanyWideScope, hasPermission } from
-  '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
+import { resolveAccessibleDepartmentIds } from './teamScopeService.js';
 import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
@@ -466,24 +471,35 @@ export function generateBulkPassword(firstName, employeeCode) {
 }
 
 /**
- * Bulk-upload department scope (§6.18–6.20): full admins (read-all) may
- * upload any department; everyone else is confined to their own +
- * managed departments. Rows outside scope become per-row validation
- * errors — identically in dry-run preview and sync. Callers that omit
- * actor info skip enforcement (legacy/test paths).
+ * Bulk-upload department scope: Admin/HR with company-wide directory access
+ * may upload any department; everyone else is confined to accessible
+ * departments (managed + lead/deputy + own). Rows outside scope become
+ * per-row validation errors — identically in dry-run preview and sync.
+ * Callers that omit actor permissions skip enforcement (legacy/test paths).
  */
-export async function resolveBulkDepartmentScope(actorId, actorPermissions) {
+export async function resolveBulkDepartmentScope(actorId, actorPermissions, actorDoc = null) {
   if (actorPermissions === undefined) return null;
-  if (hasCompanyWideScope(actorPermissions)) {
+
+  let actor = actorDoc;
+  if (!actor && actorId) {
+    actor = await User.findById(actorId)
+      .select('departmentId managedDepartmentIds roleId roleSlug')
+      .populate('roleId', 'slug')
+      .lean();
+    if (actor && !actor.roleSlug && actor.roleId?.slug) {
+      actor = { ...actor, roleSlug: actor.roleId.slug };
+    }
+  }
+
+  if (hasCompanyWideScope(actorPermissions, actor)) {
     return { all: true, departmentIds: [] };
   }
-  const actor = actorId
-    ? await User.findById(actorId).select('departmentId managedDepartmentIds').lean()
-    : null;
-  const ids = new Set();
-  if (actor?.departmentId) ids.add(String(actor.departmentId));
-  for (const id of actor?.managedDepartmentIds ?? []) ids.add(String(id));
-  return { all: false, departmentIds: [...ids] };
+
+  const accessible = await resolveAccessibleDepartmentIds(actor, actorPermissions);
+  if (accessible === null) {
+    return { all: true, departmentIds: [] };
+  }
+  return { all: false, departmentIds: accessible.map(String) };
 }
 
 function isDepartmentInScope(scope, departmentId) {
@@ -1436,8 +1452,9 @@ function handleCreateError(row, error) {
 export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {}) {
   const dryRun = options.dryRun === true;
   const departmentScope = await resolveBulkDepartmentScope(
-    options.actorId ?? createdBy,
-    options.actorPermissions,
+    options.actorId ?? options.actor?._id ?? createdBy,
+    options.actorPermissions ?? options.permissions,
+    options.actor,
   );
   const scopeOptions = departmentScope ? { departmentScope } : {};
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);

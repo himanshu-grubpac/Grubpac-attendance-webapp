@@ -727,7 +727,7 @@ export function canApproveLeave(actor, requester, permissions, leaveType = null)
   if (!hasDecisionPerm) {
     return false;
   }
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return true;
   }
   const managerId =
@@ -2681,24 +2681,24 @@ export async function listLeaveRequests(actor, permissions, query) {
   const filter = {};
   const scope = query.scope;
 
-  if (scope === 'mine' || (!hasCompanyWideScope(permissions) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && scope !== 'approvals')) {
+  if (scope === 'mine' || (!hasCompanyWideScope(permissions, actor) && !hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && scope !== 'approvals')) {
     filter.userId = actor._id;
   } else if (scope === 'approvals') {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view approval queue.', 403);
     }
     filter.status = 'pending';
-    if (hasCompanyWideScope(permissions)) {
+    if (hasCompanyWideScope(permissions, actor)) {
       // Admin/HR sees all pending
     } else {
       const reportIds = await resolveLeaveApprovalUserIds(actor);
       filter.userId = { $in: reportIds };
     }
   } else if (scope === 'team') {
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && !hasCompanyWideScope(permissions)) {
+    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM) && !hasCompanyWideScope(permissions, actor)) {
       throwError('You do not have permission to view team leave.', 403);
     }
-    if (hasCompanyWideScope(permissions)) {
+    if (hasCompanyWideScope(permissions, actor)) {
       // unscoped
     } else {
       // Direct reports (+ delegate chain) only — never managed departments.
@@ -2706,7 +2706,7 @@ export async function listLeaveRequests(actor, permissions, query) {
       filter.userId = { $in: reportIds ?? [] };
     }
   } else if (scope === 'all') {
-    if (!hasCompanyWideScope(permissions)) {
+    if (!hasCompanyWideScope(permissions, actor)) {
       throwError('You do not have permission to view all leave requests.', 403);
     }
   }
@@ -2716,7 +2716,7 @@ export async function listLeaveRequests(actor, permissions, query) {
     // LEAVE_READ_ALL it is confined to self ('mine') or the actor's reports
     // ('team' / 'approvals'). Without this, any LEAVE_READ holder could read
     // anyone's requests via ?userId=.
-    if (!hasCompanyWideScope(permissions)) {
+    if (!hasCompanyWideScope(permissions, actor)) {
       const allowedIds =
         scope === 'approvals'
           ? await resolveLeaveApprovalUserIds(actor)
@@ -2817,7 +2817,7 @@ export async function getLeavePendingCounts(actor, permissions) {
   if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
     return { leave: 0, wfh: 0 };
   }
-  const scopedIds = hasCompanyWideScope(permissions)
+  const scopedIds = hasCompanyWideScope(permissions, actor)
     ? null
     : await resolveLeaveApprovalUserIds(actor);
   const userFilter = scopedIds === null ? {} : { userId: { $in: scopedIds } };
@@ -2843,9 +2843,7 @@ export async function getLeavePendingCounts(actor, permissions) {
 }
 
 export async function getTeamCalendar(actor, permissions, query) {
-  // Company-wide scope decides full-vs-team here: ATTENDANCE_READ_ALL is
-  // held by RMs too since the catalog migration, so it cannot gate this.
-  const canViewAllLeave = hasCompanyWideScope(permissions);
+  const canViewAllLeave = hasCompanyWideScope(permissions, actor);
   const canViewTeamLeave =
     canViewAllLeave || hasPermission(permissions, PERMISSIONS.LEAVE_READ_TEAM);
 

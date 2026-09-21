@@ -13148,7 +13148,9 @@ body::-webkit-scrollbar-thumb {
 .departments-modal {
   width: min(100%, 32rem);
   border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
-  box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
+  /* No custom box-shadow: like every other popup it uses .modal's
+     var(--shadow-lg). The previous white glow (text-h based) stood out
+     against all other dialogs. */
 }
 
 @media (min-width: 961px) {
@@ -13244,7 +13246,6 @@ body::-webkit-scrollbar-thumb {
 
 .page--role-manage .rbac-grid__table-wrap.roles-permissions {
   max-height: none;
-  overflow: visible;
   overscroll-behavior: auto;
   padding: 0;
   margin: 0;
@@ -13722,6 +13723,7 @@ body::-webkit-scrollbar-thumb {
 .rbac-grid {
   display: grid;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .rbac-grid__toolbar {
@@ -13772,6 +13774,9 @@ body::-webkit-scrollbar-thumb {
 .rbac-grid__table-wrap {
   padding: 0;
   max-height: min(32rem, 55vh);
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .rbac-grid__table {
@@ -13809,7 +13814,8 @@ body::-webkit-scrollbar-thumb {
 }
 
 .rbac-grid__col-crud {
-  width: 2.4rem;
+  width: 2.75rem;
+  min-width: 2.75rem;
 }
 
 .rbac-grid__col-extras {
@@ -13967,6 +13973,8 @@ body::-webkit-scrollbar-thumb {
 
 .rbac-grid__crud-cell {
   text-align: center;
+  width: 2.75rem;
+  min-width: 2.75rem;
 }
 
 .rbac-grid__crud-check {
@@ -14044,19 +14052,66 @@ body::-webkit-scrollbar-thumb {
   cursor: default;
 }
 
-@media (max-width: 900px) {
-  .rbac-grid__table-wrap {
-    overflow-x: auto;
+@media (max-width: 960px) {
+  .page--role-manage .rbac-grid__table-wrap {
+    max-height: none;
   }
 
   .rbac-grid__table {
-    min-width: 42rem;
+    min-width: 38rem;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .rbac-grid__table thead .rbac-grid__col-resource,
+  .rbac-grid__resource-cell {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--surface);
+    box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 88%, transparent);
+  }
+
+  .rbac-grid__table thead .rbac-grid__col-resource {
+    z-index: 3;
+    background: color-mix(in srgb, var(--surface-2) 92%, var(--surface));
   }
 
   .rbac-grid__module-header {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+@media (max-width: 768px) {
+  .rbac-grid__table {
+    min-width: 36rem;
+  }
+
+  .rbac-grid__col-resource,
+  .rbac-grid__resource-cell {
+    min-width: 8.5rem;
+    max-width: 10.5rem;
+  }
+
+  .rbac-grid__col-scope {
+    min-width: 4.75rem;
+  }
+
+  .rbac-grid__scope-cell {
+    min-width: 4.75rem;
+  }
+
+  .rbac-grid__col-crud,
+  .rbac-grid__crud-cell {
+    min-width: 2.85rem;
+    width: 2.85rem;
+  }
+
+  .rbac-grid__col-extras {
+    min-width: 8rem;
+  }
+
 }
 
 @media (min-width: 961px) {

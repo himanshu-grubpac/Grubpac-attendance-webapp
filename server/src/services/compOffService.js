@@ -1729,7 +1729,7 @@ export async function listCompOffRequests(actor, permissions, query) {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view the comp off approval queue.', 403);
     }
-    if (!hasCompanyWideScope(permissions)) {
+    if (!hasCompanyWideScope(permissions, actor)) {
       const reportIds = await resolveLeaveApprovalUserIds(actor);
       filter.userId = { $in: reportIds };
     }
@@ -1742,7 +1742,7 @@ export async function listCompOffRequests(actor, permissions, query) {
     // employees may only ever see their own requests; approvers only their
     // reports (unless LEAVE_READ_ALL). Without this, any LEAVE_READ holder
     // could read anyone's requests via ?userId=.
-    if (!hasCompanyWideScope(permissions)) {
+    if (!hasCompanyWideScope(permissions, actor)) {
       if (scope !== 'approvals') {
         if (String(query.userId) !== String(actor._id)) {
           throwError('You can only view your own comp off requests.', 403);
@@ -1816,7 +1816,7 @@ export async function getCompOffRequest(requestId, actor, permissions) {
   if (requesterId === actor._id.toString()) {
     return request.toSafeJSON();
   }
-  if (hasCompanyWideScope(permissions)) {
+  if (hasCompanyWideScope(permissions, actor)) {
     return request.toSafeJSON();
   }
   if (hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {

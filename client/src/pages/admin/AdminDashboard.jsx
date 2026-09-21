@@ -86,11 +86,11 @@ export default function AdminDashboard() {
   // Today-present roster: every role with an admin view (READ_ALL or
   // READ_TEAM) gets the section; the server scopes rows to the managed
   // departments for team viewers. Department/role narrow within scope.
-  // Full-vs-team is decided by the company-wide scope slug (employees
-  // record read): ATTENDANCE_READ_* slugs alone no longer distinguish the
+  // Full-vs-team is decided by company-wide scope (employees record read +
+  // Admin/HR role): ATTENDANCE_READ_* slugs alone no longer distinguish the
   // two since the RBAC catalog grants record read to admin, HR and RMs
-  // alike — the scope slug is admin/HR-only.
-  const canSeeFullRoster = hasCompanyWideScope(permissions ?? []);
+  // alike — the scope helper checks the actor's role.
+  const canSeeFullRoster = hasCompanyWideScope(permissions ?? [], user);
   const canSeeTeamRoster =
     canSeeFullRoster || hasPermission(PERMISSIONS.ATTENDANCE_READ_TEAM);
   // Managed department scope for team viewers (single managed department

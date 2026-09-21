@@ -1009,10 +1009,9 @@ async function getActorManagedDepartmentIds(actor) {
  * the actor's department scope. Returns { rejected, message, warnings }.
  */
 async function validateBulkDepartmentScope(rows, actor, permissions) {
-  // Company-wide scope (employees record read) bypasses; the collapsed
-  // ATTENDANCE_READ_ALL slug is RM-held and cannot gate this.
-  const canReadAll = hasCompanyWideScope(permissions);
-  if (canReadAll) return { rejected: false, warnings: [] };
+  if (hasCompanyWideScope(permissions, actor)) {
+    return { rejected: false, warnings: [] };
+  }
 
   const managedIds = await getActorManagedDepartmentIds(actor);
   if (managedIds.length === 0) {
@@ -1354,7 +1353,7 @@ export async function getQuarterWarningSummary(req, res) {
   res.set('Cache-Control', 'no-store');
 
   let userIds = [];
-  if (hasCompanyWideScope(req.userPermissions)) {
+  if (hasCompanyWideScope(req.userPermissions, req.user)) {
     const employees = await User.find(await buildEmployeeDirectoryQuery())
       .select('_id')
       .lean();
