@@ -34,7 +34,6 @@ import {
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
-import { formatInrNumber } from '../../../shared/utils/formatInr.js';
 import { parseSalaryPeriodKey } from './salaryService.js';
 
 function throwError(message, statusCode = 400) {
@@ -241,6 +240,7 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData, options
     presentDays: mtdMetrics.presentDays,
     paidLeaveDays: mtdMetrics.paidLeaveDays,
     payableDays: mtdMetrics.payableDays,
+    paidDaysOutOf30: mtdMetrics.paidDaysOutOf30,
     lopDays: mtdMetrics.lopDays,
     lopDeduction: mtdMetrics.lopDeduction,
     perDaySalary: mtdMetrics.perDaySalary,
@@ -291,6 +291,10 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
   const transfer = transfersByUser.get(userId);
   const isSettled = settledPeriods.has(month);
 
+  const paidDaysOutOf30 = summary.hasSalaryConfigured ? summary.paidDaysOutOf30 : null;
+  const payableEstimate = summary.hasSalaryConfigured ? summary.payableEstimate : null;
+  const asOfDate = summary.asOfDate ?? null;
+
   // Inconsistent state: settled but no SalaryTransfer
   if (isSettled && !transfer) {
     return {
@@ -304,6 +308,9 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
       presentDays: summary.presentDays,
       paidLeaveDays: summary.paidLeaveDays,
       payableDays: summary.payableDays,
+      paidDaysOutOf30,
+      payableEstimate,
+      asOfDate,
       lopDays: finalLopDays,
       lopDeduction: finalLopDeduction,
       perDaySalary: summary.perDaySalary,
@@ -317,9 +324,11 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
   }
 
   // If settled and transfer exists, use transfer.amount as the source of truth
-  const netSalary = isSettled && transfer
-    ? transfer.amount
-    : roundMoney(grossSalary - totalDeductions);
+  const netSalary = !summary.hasSalaryConfigured
+    ? null
+    : isSettled && transfer
+      ? transfer.amount
+      : roundMoney(grossSalary - totalDeductions);
 
   return {
     employeeId: userId,
@@ -332,6 +341,9 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
     presentDays: summary.presentDays,
     paidLeaveDays: summary.paidLeaveDays,
     payableDays: summary.payableDays,
+    paidDaysOutOf30,
+    payableEstimate,
+    asOfDate,
     lopDays: finalLopDays,
     lopDeduction: finalLopDeduction,
     perDaySalary: summary.perDaySalary,
@@ -594,6 +606,9 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
       presentDays: row.presentDays,
       paidLeaveDays: row.paidLeaveDays,
       payableDays: row.payableDays,
+      paidDaysOutOf30: row.paidDaysOutOf30,
+      payableEstimate: row.payableEstimate,
+      asOfDate: row.asOfDate,
       lopDays: row.lopDays,
       lopDeduction: row.lopDeduction,
       perDaySalary: row.perDaySalary,
@@ -625,6 +640,55 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
 // ── API: Monthly salary audit ─────────────────────────────────────────
 
 /**
+ * Deactivates employees whose ending date has passed (same sweep as admin employee list).
+ */
+async function sweepExpiredEmploymentEndings() {
+  const now = new Date();
+  await User.updateMany(
+    { endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
+}
+
+/**
+ * Employees who were employed at any point during the audit month.
+ * joiningDate (or createdAt fallback) must be on or before month end;
+ * still active, no ending date, or ending date on/after month start.
+ */
+function buildMonthlyAuditEmployeeQuery(periodKey, scopedIds, departmentId) {
+  const range = parseMonthInputAsISTRange(periodKey);
+  const monthStart = range.start;
+  const monthEnd = range.end;
+
+  const employeeQuery = {
+    $and: [
+      {
+        $or: [
+          { joiningDate: { $lte: monthEnd } },
+          { joiningDate: null, createdAt: { $lte: monthEnd } },
+        ],
+      },
+      {
+        $or: [
+          { isActive: true },
+          { endingDate: { $gte: monthStart } },
+          { endingDate: null },
+        ],
+      },
+    ],
+  };
+
+  if (scopedIds !== null) {
+    employeeQuery._id = { $in: scopedIds };
+  }
+  if (departmentId) {
+    employeeQuery.departmentId = departmentId;
+  }
+
+  return employeeQuery;
+}
+
+/**
  * Monthly salary audit for RM/Admin: returns audit rows for all employees in scope.
  *
  * Includes employees WITHOUT salary (hasSalaryConfigured: false, monthlySalary: null).
@@ -633,7 +697,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
  * @param {object} actor - requesting user
  * @param {Array} permissions - actor's permissions
  * @param {string} periodKey - "YYYY-MM"
- * @returns {object} { periodKey, employees[], totals{} }
+ * @returns {object} { periodKey, asOfDate, employees[], totals{} }
  */
 export async function getMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   validatePeriodKey(periodKey);
@@ -643,24 +707,22 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
   }
 
   const scopedIds = await getAuditScope(actor, permissions);
+  const resolvedAsOf = resolveSalaryAsOfDate(periodKey);
+  const asOfDate = resolvedAsOf?.asOfDateKey ?? null;
 
-  // Include ALL active employees (including those without salary)
-  const employeeQuery = { isActive: true };
-  if (scopedIds !== null) {
-    employeeQuery._id = { $in: scopedIds };
-  }
-  if (options.departmentId) {
-    employeeQuery.departmentId = options.departmentId;
-  }
+  await sweepExpiredEmploymentEndings();
+
+  const employeeQuery = buildMonthlyAuditEmployeeQuery(periodKey, scopedIds, options.departmentId);
 
   const employees = await User.find(employeeQuery)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId joiningDate endingDate createdAt')
     .sort({ name: 1 })
     .lean();
 
   if (employees.length === 0) {
     return {
       periodKey,
+      asOfDate,
       employees: [],
       totals: { employees: 0, lopDays: 0, lopDeduction: 0, totalDeductions: 0, totalNetSalary: 0 },
     };
@@ -702,7 +764,7 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
     ),
   };
 
-  return { periodKey, employees: auditRows, totals };
+  return { periodKey, asOfDate, employees: auditRows, totals };
 }
 
 /**
@@ -720,25 +782,27 @@ export async function exportMonthlySalaryAudit(actor, permissions, periodKey, op
 
   const rows = audit.employees.map((row) => {
     const { year, monthName } = parseSalaryPeriodKey(row.periodKey);
+    const mtdPayable = row.netSalary ?? row.payableEstimate ?? null;
     return {
-    'Employee Code': row.employeeCode ?? '',
-    'Employee Name': row.employeeName,
-    'Department': row.departmentName ?? '',
-    Year: year,
-    Month: monthName,
-    'Monthly salary': formatInrNumber(row.grossSalary),
-    'Working Days': row.workingDays,
-    'Present Days': row.presentDays,
-    'Paid Leave Days': row.paidLeaveDays,
-    'Payable Days': row.payableDays,
-    'Loss of pay (days)': row.lopDays,
-    'Loss of pay till date': formatInrNumber(row.lopDeduction),
-    'Per day salary': formatInrNumber(row.perDaySalary),
-    'Other Deductions (INR)': formatInrNumber(row.otherDeductions),
-    'Total Deductions (INR)': formatInrNumber(row.totalDeductions),
-    'Month-to-date payable': formatInrNumber(row.netSalary),
-    'Transfer Status': row.transferStatus ?? '',
-    'Status': row.status,
+      'Employee Code': row.employeeCode ?? '',
+      'Employee Name': row.employeeName,
+      Department: row.departmentName ?? '',
+      Year: year,
+      Month: monthName,
+      'As of date': row.asOfDate ?? audit.asOfDate ?? '',
+      'Monthly salary': row.hasSalaryConfigured ? row.grossSalary : null,
+      'Working Days': row.workingDays,
+      'Present Days': row.presentDays,
+      'Paid Leave Days': row.paidLeaveDays,
+      'Paid days (out of 30)': row.paidDaysOutOf30,
+      'Loss of pay (days)': row.lopDays,
+      'Loss of pay till date': row.hasSalaryConfigured ? row.lopDeduction : null,
+      'Per day salary': row.hasSalaryConfigured ? row.perDaySalary : null,
+      'Other Deductions (INR)': row.hasSalaryConfigured ? row.otherDeductions : null,
+      'Total Deductions (INR)': row.hasSalaryConfigured ? row.totalDeductions : null,
+      'Month-to-date payable': row.hasSalaryConfigured ? mtdPayable : null,
+      'Transfer Status': row.transferStatus ?? '',
+      Status: row.status,
     };
   });
 

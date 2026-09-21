@@ -48,6 +48,7 @@ import { runMonthlyAccrualJob } from '../jobs/leaveJobs.js';
 import {
   adjustBalance,
   applyYearEndCarryForward,
+  backfillMissingLeavePolicies,
   getBalancesForUser,
   ensureBalancesForUser,
   previewYearEndCarryForward,
@@ -105,6 +106,11 @@ export async function createLeaveType(req, res) {
     leaveTypeId: leaveType._id.toString(),
     code: leaveType.code,
   });
+  // A type without a policy is a dead end in Apply Leave ("Leave policy not
+  // configured for this type."). Seed a zero-quota current-year policy plus
+  // balances immediately so the type is LOP-usable until an admin sets a
+  // real quota.
+  await backfillMissingLeavePolicies({ changedBy: req.user._id });
   res.status(201).json({ type: leaveType.toSafeJSON() });
 }
 

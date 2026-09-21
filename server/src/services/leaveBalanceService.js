@@ -156,6 +156,55 @@ export async function seedLeaveTypesAndPolicies(options = {}) {
 }
 
 /**
+ * Creates a zero-quota current-year policy for every active leave type that
+ * has none, then seeds zero-entitlement balances for all active users.
+ * Idempotent (unique index on leaveTypeId + year). Without this, a newly
+ * created leave type is a dead end in the Apply Leave dropdown: the submit
+ * fails with "Leave policy not configured for this type." A zero quota keeps
+ * the type immediately usable as LOP-eligible until an admin configures a
+ * real quota — overdrawn leave is allowed by design.
+ * Returns the number of policies created.
+ */
+export async function backfillMissingLeavePolicies({ year = getISTYear(), changedBy = null } = {}) {
+  const types = await LeaveType.find({ isActive: true }).select('_id code');
+  let created = 0;
+  for (const type of types) {
+    const existing = await LeavePolicy.findOne({ leaveTypeId: type._id, year });
+    if (existing) continue;
+    const policy = await LeavePolicy.create({
+      leaveTypeId: type._id,
+      year,
+      annualQuota: 0,
+      accrualPerMonth: 0,
+      carryForwardMax: 0,
+      maxAccumulation: 0,
+      paid: true,
+      encashmentMaxPerYear: 0,
+      combinedCarryGroup: null,
+      isActive: true,
+      history: [
+        {
+          annualQuota: 0,
+          accrualPerMonth: 0,
+          carryForwardMax: 0,
+          maxAccumulation: 0,
+          paid: true,
+          encashmentMaxPerYear: 0,
+          combinedCarryGroup: null,
+          isActive: true,
+          changedBy,
+          effectiveDate: new Date(),
+          action: 'created',
+        },
+      ],
+    });
+    await recalculateAllBalancesForPolicy(policy);
+    created += 1;
+  }
+  return created;
+}
+
+/**
  * Assigns current IST year to legacy policies missing year (idempotent).
  */
 export async function migrateLeavePolicyYears() {
@@ -291,16 +340,23 @@ export async function initBalancesForAllUsers(year = getISTYear()) {
 
 /**
  * Recalculate entitled for all active users when a policy is updated.
- * Uses each user's DOJ for pro-rata computation.
+ * Uses the same upfront joining-date proration as ensureBalancesForUser
+ * (computeProratedEntitled) so a policy save and a heal-on-read converge to
+ * the same value instead of flip-flopping between accrual and upfront math.
  * Returns the count of updated balances.
  */
 export async function recalculateAllBalancesForPolicy(policy) {
   const year = policy.year || getISTYear();
   const leaveTypeId = policy.leaveTypeId?._id ?? policy.leaveTypeId;
 
-  const activeUsers = await User.find({ isActive: true }).select('_id joiningDate').lean();
+  const activeUsers = await User.find({ isActive: true }).select('_id joiningDate salaryEffectiveFrom').lean();
   const userIds = activeUsers.map((u) => u._id);
-  const userJoiningDateMap = new Map(activeUsers.map((u) => [u._id.toString(), u.joiningDate]));
+  const userStartKey = new Map(activeUsers.map((u) => {
+    const raw = u.salaryEffectiveFrom ?? u.joiningDate ?? null;
+    const date = raw instanceof Date ? raw : raw ? new Date(raw) : null;
+    const key = date && !Number.isNaN(date.getTime()) ? getISTDateInputValue(date) : null;
+    return [u._id.toString(), key];
+  }));
 
   const existingBalances = await LeaveBalance.find({
     userId: { $in: userIds },
@@ -316,12 +372,12 @@ export async function recalculateAllBalancesForPolicy(policy) {
   const inserts = [];
 
   for (const userId of userIds) {
-    const entitled = computeEntitledForPolicy(
-      policy,
+    const entitled = computeProratedEntitled({
+      annualQuota: policy.annualQuota,
+      accrualPerMonth: policy.accrualPerMonth,
       year,
-      new Date(),
-      userJoiningDateMap.get(userId.toString()),
-    );
+      joiningDateKey: userStartKey.get(userId.toString()) ?? null,
+    });
     const existing = existingByUser.get(userId.toString());
     if (existing) {
       if (existing.entitledLocked) {
@@ -527,6 +583,13 @@ export async function adjustBalance(userId, payload, adjustedBy) {
   }
 }
 
+/**
+ * Combined-group accumulation guard — for paths where stock GROWS (grants,
+ * carry-forward, manual adjustments) ONLY. Must never gate leave
+ * applications/consumption: applying shrinks stock, so an over-cap user
+ * would be trapped forever (unable to spend down). The apply path
+ * (validateLeaveRequestInput) deliberately does not call this.
+ */
 export async function validateCombinedAccumulation(
   userId,
   year,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS } from
+import { PERMISSIONS } from
   '../../../shared/permissions.js';
 import { User } from '../models/User.js';
 import { LeaveType } from '../models/LeaveType.js';
@@ -67,6 +67,7 @@ async function createOverdrawnFixture() {
     passwordHash: 'test-password-hash',
     role: 'employee',
     isActive: true,
+    joiningDate: START,
     monthlySalary: 30000,
   });
 
@@ -203,7 +204,7 @@ test('monthly audit reflects settled LOP for the employee', async () => {
 
   const audit = await getMonthlySalaryAudit(
     { _id: user._id },
-    [COMPANY_WIDE_SCOPE_SLUG, PERMISSIONS.SALARY_READ],
+    [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.SALARY_TEAM_AUDIT_R],
     PERIOD,
   );
 

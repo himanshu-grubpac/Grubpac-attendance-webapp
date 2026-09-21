@@ -28,8 +28,6 @@ import { createNotification } from './notificationService.js';
 import {
   approvePendingDays,
   ensureBalancesForUser,
-  getAvailableBalance,
-  getPolicyMapForYear,
   refreshAccruedEntitlements,
   reclaimApprovedDays,
   releaseApprovedDays,
@@ -38,7 +36,6 @@ import {
   resolveLeaveYear,
   resolvePolicyForLeaveType,
   reverseApproval,
-  validateCombinedAccumulation,
 } from './leaveBalanceService.js';
 import { auditLog } from '../utils/auditLog.js';
 import { createLopOnApproval } from './lopSettlementService.js';
@@ -848,7 +845,6 @@ export async function validateLeaveRequestInput({
 
   await refreshAccruedEntitlements(userId, year);
   await ensureBalancesForUser(userId, year);
-  const policyMap = await getPolicyMapForYear(year);
 
   const balance = await LeaveBalance.findOne({ userId, leaveTypeId, year });
   if (!balance) {
@@ -856,14 +852,12 @@ export async function validateLeaveRequestInput({
   }
 
   // Overdrawn leave is allowed: available may be 0 or negative; used/pending can exceed entitled.
-  const available = getAvailableBalance(balance);
-
-  // Combined CL+EL accumulation only applies when this apply stays within remaining stock.
-  if (available >= days) {
-    await validateCombinedAccumulation(userId, year, policyMap, days, leaveTypeId);
-  }
-
-  await validateSelfOverlap(userId, startDate, endDate, excludeRequestId);
+  // NOTE: no accumulation-cap check here by design — consuming leave only
+  // ever shrinks combined stock, so gating applications on maxAccumulation
+  // would trap anyone already over the cap (they could never spend down).
+  // The cap is enforced where stock grows (grants, carry-forward,
+  // adjustments), never where it is consumed.
+  await validateSelfOverlap(userId, startDate, endDate, excludeRequestId, halfDay);
   await validateLeadDeputyConflict(userId, startDate, endDate, adminException);
 
   return {
@@ -884,16 +878,31 @@ async function reserveValidatedLeaveBalance(balance, days, session = null) {
   await balance.save(session ? { session } : undefined);
 }
 
-async function validateSelfOverlap(userId, startDate, endDate, excludeRequestId = null) {
-  const overlap = await LeaveRequest.findOne({
+async function validateSelfOverlap(userId, startDate, endDate, excludeRequestId = null, halfDay = null) {
+  const overlaps = await LeaveRequest.find({
     userId,
     status: { $in: ['pending', 'approved'] },
     startDate: { $lte: endDate },
     endDate: { $gte: startDate },
     ...(excludeRequestId ? { _id: { $ne: excludeRequestId } } : {}),
-  });
+  })
+    .select('startDate endDate halfDay')
+    .lean();
 
-  if (overlap) {
+  for (const existing of overlaps) {
+    // Complementary half-days share one working day by design: an AM half
+    // plus a PM half on the same date equals one full day, so they must not
+    // block each other. Anything else overlapping still blocks.
+    if (
+      halfDay &&
+      existing.halfDay &&
+      halfDay !== existing.halfDay &&
+      startDate.getTime() === endDate.getTime() &&
+      existing.startDate.getTime() === existing.endDate.getTime() &&
+      existing.startDate.getTime() === startDate.getTime()
+    ) {
+      continue;
+    }
     throwError('You already have leave overlapping this date range.');
   }
 }

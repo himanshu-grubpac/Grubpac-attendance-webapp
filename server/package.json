@@ -16,6 +16,7 @@
     "migrate": "node src/migrateRecentFeatures.js",
     "migrate:dual-portal": "node src/migrateDualPortal.js",
     "backfill:audit-identity": "node src/backfillAuditIdentity.js",
+    "grant:team-today": "node src/grantEmployeeTeamToday.js",
     "test": "node --test --test-concurrency=4 src/**/*.test.js",
     "test:e2e": "node --env-file=.env.e2e scripts/dev/e2e-password-reset.mjs",
     "test:e2e:auto-checkout": "node --env-file=.env.e2e scripts/dev/e2e-auto-checkout.mjs",

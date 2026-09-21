@@ -7,6 +7,8 @@
  * - AttendanceRecord lateNote + edit history fields (schemaless — index sync only)
  * - LeaveCarryForwardEntry, WeekAttendanceConfirmation, SalaryTransfer collections
  * - LeavePolicy.year backfill + compound index (leaveTypeId + year) — missing year only
+ * - Missing current-year LeavePolicy zero-quota backfill for policy-less types (e.g. GG)
+ * - Missing current-year LeavePolicy zero-quota backfill for policy-less types (e.g. GG)
  * - LeaveRequest provisional→final lifecycle fields (revision, pendingRevision,
  *   undoExpiresAt, finalizedAt) + finalizer sweep indexes — additive $set only
  * - LeaveBalance.compOffEarned backfill + CompOffRequest collection (comp-off module)

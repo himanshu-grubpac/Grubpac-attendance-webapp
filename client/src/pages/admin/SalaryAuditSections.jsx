@@ -3,7 +3,7 @@ import { adminApi, getErrorMessage, leaveApi, salaryApi } from '../../services/a
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { formatINRCurrency } from '../../utils/datetime.js';
+import { formatINRCurrency, formatISTDate } from '../../utils/datetime.js';
 import {
   buildSalaryMonthOptions,
   buildSalaryYearOptions,
@@ -20,6 +20,31 @@ import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { dayKeyInMonth, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const HISTORY_PAGE_SIZE = 20;
+
+/** Maps an audit/history table row to SalaryDetailModal summary (row snapshot, not live API). */
+function auditRowToSummary(row) {
+  if (!row) return null;
+  const netPayable =
+    row.status === 'settled' && row.netSalary != null ? row.netSalary : row.payableEstimate;
+  return {
+    monthlySalary: row.hasSalaryConfigured ? row.grossSalary : null,
+    workingDaysInMonth: row.workingDays,
+    presentDays: row.presentDays,
+    paidLeaveDays: row.paidLeaveDays,
+    payableDays: row.payableDays,
+    paidDaysOutOf30: row.paidDaysOutOf30,
+    lopDays: row.lopDays,
+    lopDeduction: row.lopDeduction,
+    payableEstimate: row.hasSalaryConfigured ? netPayable : null,
+    asOfDate: row.asOfDate ?? null,
+    lopDates: [],
+  };
+}
+
+function formatNetSalary(row) {
+  if (!row?.hasSalaryConfigured || row.netSalary == null) return '—';
+  return formatINRCurrency(row.netSalary);
+}
 
 function currentIstYear() {
   return Number(getTodayMonthIst().split('-')[0]);
@@ -96,6 +121,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     try {
       const data = await adminApi.listEmployees({
         search: query || undefined,
+        isActive: 'true',
         page: 1,
         limit: HISTORY_PAGE_SIZE,
       });
@@ -135,49 +161,54 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     loadHistory(selectedId, year);
   }, [selectedId, year, loadHistory]);
 
-  const fetchDetailPayload = useCallback(async (userId, periodKey) => {
+  const fetchHistoryDetailBalances = useCallback(async (userId, periodKey) => {
     const isSelf = userId === user?.id;
-    const [summaryData, balanceData] = await Promise.all([
-      salaryApi.getSummary({ month: periodKey, userId }),
-      isSelf
-        ? leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
-        : leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) }),
-    ]);
-    return {
-      summary: summaryData.summary ?? null,
-      balances: balanceData.balances ?? [],
-      inactive: summaryData.inactive === true,
-    };
+    const balanceData = isSelf
+      ? await leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
+      : await leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) });
+    return balanceData.balances ?? [];
   }, [user?.id]);
 
-  const loadDetail = useCallback(async (userId, periodKey) => {
+  const loadDetail = useCallback(async (userId, periodKey, historyRow) => {
     setDetailOpen(true);
     setDetailMonth(periodKey);
     setDetailLoading(true);
     setDetailError('');
     try {
-      setDetail(await fetchDetailPayload(userId, periodKey));
+      const balances = await fetchHistoryDetailBalances(userId, periodKey);
+      setDetail({
+        summary: auditRowToSummary(historyRow),
+        balances,
+        inactive: false,
+      });
     } catch (err) {
       setDetail(null);
       setDetailError(getErrorMessage(err));
     } finally {
       setDetailLoading(false);
     }
-  }, [fetchDetailPayload]);
+  }, [fetchHistoryDetailBalances]);
 
   const refetchOpenDetail = useCallback(async () => {
     if (!detailOpen || !selectedId || !detailMonth) return;
+    const historyRow = (history?.history ?? []).find((item) => item.periodKey === detailMonth);
+    if (!historyRow) return;
     setDetailLoading(true);
     setDetailError('');
     try {
-      setDetail(await fetchDetailPayload(selectedId, detailMonth));
+      const balances = await fetchHistoryDetailBalances(selectedId, detailMonth);
+      setDetail({
+        summary: auditRowToSummary(historyRow),
+        balances,
+        inactive: false,
+      });
     } catch (err) {
       setDetail(null);
       setDetailError(getErrorMessage(err));
     } finally {
       setDetailLoading(false);
     }
-  }, [detailMonth, detailOpen, fetchDetailPayload, selectedId]);
+  }, [detailMonth, detailOpen, fetchHistoryDetailBalances, history?.history, selectedId]);
 
   const handleAttendanceSalarySync = useCallback(
     (detail) => {
@@ -312,7 +343,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
                 <tr>
                   <th>Month</th>
                   <th className="salary-table__num">Gross</th>
-                  <th className="salary-table__num">Payable</th>
+                  <th className="salary-table__num">Paid days / MTD</th>
                   <th className="salary-table__num">LOP days</th>
                   <th className="salary-table__num">LOP deduction</th>
                   <th className="salary-table__num">Net</th>
@@ -330,8 +361,19 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
                       <td data-label="Gross" className="salary-table__num">
                         {row.hasSalaryConfigured ? formatINRCurrency(row.grossSalary) : '—'}
                       </td>
-                      <td data-label="Payable" className="salary-table__num">
-                        {row.payableDays ?? '—'}
+                      <td data-label="Paid days / MTD" className="salary-table__num">
+                        {row.hasSalaryConfigured && row.paidDaysOutOf30 != null ? (
+                          <>
+                            {row.paidDaysOutOf30}
+                            <div className="muted small">
+                              {row.payableEstimate != null
+                                ? formatINRCurrency(row.payableEstimate)
+                                : '—'}
+                            </div>
+                          </>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td data-label="LOP days" className="salary-table__num">
                         {row.lopDays ?? '—'}
@@ -340,7 +382,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
                         {row.lopDeduction != null ? formatINRCurrency(row.lopDeduction) : '—'}
                       </td>
                       <td data-label="Net" className="salary-table__num salary-table__net">
-                        {row.netSalary != null ? formatINRCurrency(row.netSalary) : '—'}
+                        {formatNetSalary(row)}
                       </td>
                       <td data-label="Transfer">{row.transferStatus ?? '—'}</td>
                       <td data-label="Status">
@@ -350,7 +392,7 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"
-                          onClick={() => loadDetail(selectedId, row.periodKey)}
+                          onClick={() => loadDetail(selectedId, row.periodKey, row)}
                         >
                           Details
                         </button>
@@ -402,6 +444,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const periodKey = `${yearFilter}-${monthPartFilter}`;
 
   const [employees, setEmployees] = useState([]);
+  const [asOfDate, setAsOfDate] = useState(null);
   const [totals, setTotals] = useState(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -422,18 +465,11 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     setAuditDetailEmployeeId(null);
   }
 
-  const fetchAuditDetailPayload = useCallback(async (employeeId, periodKey) => {
-    const [summaryData, balanceData] = await Promise.all([
-      salaryApi.getSummary({ month: periodKey, userId: employeeId }),
-      leaveApi
-        .getBalances({ userId: employeeId, year: Number(String(periodKey).split('-')[0]) })
-        .catch(() => leaveApi.getMyBalances({ year: Number(String(periodKey).split('-')[0]) })),
-    ]);
-    return {
-      summary: summaryData.summary ?? null,
-      balances: balanceData.balances ?? [],
-      inactive: summaryData.inactive === true,
-    };
+  const fetchAuditDetailBalances = useCallback(async (employeeId, periodKey) => {
+    const balanceData = await leaveApi
+      .getBalances({ userId: employeeId, year: Number(String(periodKey).split('-')[0]) })
+      .catch(() => leaveApi.getMyBalances({ year: Number(String(periodKey).split('-')[0]) }));
+    return balanceData.balances ?? [];
   }, []);
 
   const openAuditDetail = useCallback(async (row) => {
@@ -443,28 +479,46 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     setAuditDetailLoading(true);
     setAuditDetailError('');
     try {
-      setAuditDetail(await fetchAuditDetailPayload(row.employeeId, row.periodKey));
+      const balances = await fetchAuditDetailBalances(row.employeeId, row.periodKey);
+      setAuditDetail({
+        summary: auditRowToSummary(row),
+        balances,
+        inactive: false,
+      });
     } catch (err) {
       setAuditDetail(null);
       setAuditDetailError(getErrorMessage(err));
     } finally {
       setAuditDetailLoading(false);
     }
-  }, [fetchAuditDetailPayload]);
+  }, [fetchAuditDetailBalances]);
 
   const refetchOpenAuditDetail = useCallback(async () => {
     if (!auditDetailOpen || !auditDetailEmployeeId || !auditDetailMonth) return;
+    const row = employees.find((item) => item.employeeId === auditDetailEmployeeId);
+    if (!row) return;
     setAuditDetailLoading(true);
     setAuditDetailError('');
     try {
-      setAuditDetail(await fetchAuditDetailPayload(auditDetailEmployeeId, auditDetailMonth));
+      const balances = await fetchAuditDetailBalances(auditDetailEmployeeId, auditDetailMonth);
+      setAuditDetail({
+        summary: auditRowToSummary(row),
+        balances,
+        inactive: false,
+      });
     } catch (err) {
       setAuditDetail(null);
       setAuditDetailError(getErrorMessage(err));
     } finally {
       setAuditDetailLoading(false);
     }
-  }, [auditDetailEmployeeId, auditDetailMonth, auditDetailOpen, fetchAuditDetailPayload]);
+  }, [
+    auditDetailEmployeeId,
+    auditDetailMonth,
+    auditDetailOpen,
+    employees,
+    fetchAuditDetailBalances,
+  ]);
 
   // Close stale modal when the audit period changes.
 
@@ -497,9 +551,11 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
         ...(department ? { departmentId: department } : {}),
       });
       setEmployees(data.employees ?? []);
+      setAsOfDate(data.asOfDate ?? null);
       setTotals(data.totals ?? null);
     } catch (err) {
       setEmployees([]);
+      setAsOfDate(null);
       setTotals(null);
       setError(getErrorMessage(err));
     } finally {
@@ -567,7 +623,9 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   return (
     <>
       <p className="salary-disclaimer muted small">
-        Settled months show finalized LOP and transfer amounts; pending months show live estimates.
+        Settled months show finalized LOP and transfer amounts; pending months show live estimates
+        {asOfDate ? ` as of ${formatISTDate(asOfDate)}` : ''}. Paid days use the fixed 30-day salary
+        pool (monthly salary ÷ 30).
       </p>
 
       <section className="salary-panel card card--table" aria-label={title}>
@@ -652,7 +710,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                   <th className="salary-table__num">Gross</th>
                   <th className="salary-table__num">Present</th>
                   <th className="salary-table__num">Paid leave</th>
-                  <th className="salary-table__num">Payable</th>
+                  <th className="salary-table__num">Paid days / MTD</th>
                   <th className="salary-table__num">LOP</th>
                   <th className="salary-table__num">LOP deduction</th>
                   <th className="salary-table__num">Net</th>
@@ -681,8 +739,19 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                       <td data-label="Paid leave" className="salary-table__num">
                         {row.paidLeaveDays ?? '—'}
                       </td>
-                      <td data-label="Payable" className="salary-table__num">
-                        {row.payableDays ?? '—'}
+                      <td data-label="Paid days / MTD" className="salary-table__num">
+                        {row.hasSalaryConfigured && row.paidDaysOutOf30 != null ? (
+                          <>
+                            {row.paidDaysOutOf30}
+                            <div className="muted small">
+                              {row.payableEstimate != null
+                                ? formatINRCurrency(row.payableEstimate)
+                                : '—'}
+                            </div>
+                          </>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td data-label="LOP" className="salary-table__num">
                         {row.lopDays ?? '—'}
@@ -691,7 +760,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                         {row.lopDeduction != null ? formatINRCurrency(row.lopDeduction) : '—'}
                       </td>
                       <td data-label="Net" className="salary-table__num salary-table__net">
-                        {row.netSalary != null ? formatINRCurrency(row.netSalary) : '—'}
+                        {formatNetSalary(row)}
                       </td>
                       <td data-label="Status">
                         <span className={status.className}>{status.label}</span>

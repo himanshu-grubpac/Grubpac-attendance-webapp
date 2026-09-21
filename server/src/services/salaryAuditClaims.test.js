@@ -109,10 +109,12 @@ function computeExpectedSummary(user, monthInput, bulkData, options = FULL_MONTH
     presentDays: mtdMetrics.presentDays,
     paidLeaveDays: mtdMetrics.paidLeaveDays,
     payableDays: mtdMetrics.payableDays,
+    paidDaysOutOf30: mtdMetrics.paidDaysOutOf30,
     lopDays: mtdMetrics.lopDays,
     lopDeduction: mtdMetrics.lopDeduction,
     perDaySalary: mtdMetrics.perDaySalary,
     payableEstimate: mtdMetrics.payableEstimate,
+    asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
 }
@@ -134,6 +136,9 @@ function computeExpectedAuditRow(employee, month, lopRecordsByUser, transfersByU
   const grossSalary = summary.monthlySalary ?? 0;
   const otherDeductions = 0;
   const totalDeductions = roundMoney(finalLopDeduction + otherDeductions);
+  const paidDaysOutOf30 = summary.hasSalaryConfigured ? summary.paidDaysOutOf30 : null;
+  const payableEstimate = summary.hasSalaryConfigured ? summary.payableEstimate : null;
+  const asOfDate = summary.asOfDate ?? null;
 
   const transfer = transfersByUser.get(userId);
   const isSettled = settledPeriods.has(month);
@@ -144,21 +149,27 @@ function computeExpectedAuditRow(employee, month, lopRecordsByUser, transfersByU
       employeeName: employee.name, department: employee.departmentId?.toString?.() ?? null,
       periodKey: month, grossSalary, workingDays: summary.workingDaysInMonth,
       presentDays: summary.presentDays, paidLeaveDays: summary.paidLeaveDays,
-      payableDays: summary.payableDays, lopDays: finalLopDays, lopDeduction: finalLopDeduction,
+      payableDays: summary.payableDays, paidDaysOutOf30, payableEstimate, asOfDate,
+      lopDays: finalLopDays, lopDeduction: finalLopDeduction,
       perDaySalary: summary.perDaySalary, otherDeductions, totalDeductions,
       netSalary: null, hasSalaryConfigured: summary.hasSalaryConfigured,
       transferStatus: null, status: 'inconsistent',
     };
   }
 
-  const netSalary = isSettled && transfer ? transfer.amount : roundMoney(grossSalary - totalDeductions);
+  const netSalary = !summary.hasSalaryConfigured
+    ? null
+    : isSettled && transfer
+      ? transfer.amount
+      : roundMoney(grossSalary - totalDeductions);
 
   return {
     employeeId: userId, employeeCode: employee.employeeCode ?? null,
     employeeName: employee.name, department: employee.departmentId?.toString?.() ?? null,
     periodKey: month, grossSalary, workingDays: summary.workingDaysInMonth,
     presentDays: summary.presentDays, paidLeaveDays: summary.paidLeaveDays,
-    payableDays: summary.payableDays, lopDays: finalLopDays, lopDeduction: finalLopDeduction,
+    payableDays: summary.payableDays, paidDaysOutOf30, payableEstimate, asOfDate,
+    lopDays: finalLopDays, lopDeduction: finalLopDeduction,
     perDaySalary: summary.perDaySalary, otherDeductions, totalDeductions,
     netSalary, hasSalaryConfigured: summary.hasSalaryConfigured,
     transferStatus: transfer?.status ?? null, status: isSettled ? 'settled' : 'pending',
@@ -612,6 +623,9 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
     presentDays: 24,
     paidLeaveDays: 1,
     payableDays: 25,
+    paidDaysOutOf30: 29,
+    payableEstimate: 57692.31,
+    asOfDate: '2026-09-16',
     lopDays: 1,
     lopDeduction: 2307.69,
     perDaySalary: 2307.69,
@@ -623,37 +637,37 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
     status: 'settled',
   };
 
-  // Export maps these fields to XLSX column names
+  // Export maps these fields to XLSX column names (numeric cells, not formatted strings)
   const exportRow = {
     'Employee Code': auditRow.employeeCode ?? '',
     'Employee Name': auditRow.employeeName,
-    'Department': auditRow.departmentName ?? '',
-    'Month': auditRow.periodKey,
+    Department: auditRow.departmentName ?? '',
+    'As of date': auditRow.asOfDate ?? '',
     'Monthly salary': auditRow.grossSalary,
     'Working Days': auditRow.workingDays,
     'Present Days': auditRow.presentDays,
     'Paid Leave Days': auditRow.paidLeaveDays,
-    'Payable Days': auditRow.payableDays,
+    'Paid days (out of 30)': auditRow.paidDaysOutOf30,
     'Loss of pay (days)': auditRow.lopDays,
     'Loss of pay till date': auditRow.lopDeduction,
-    'Per day salary': auditRow.perDaySalary ?? '',
+    'Per day salary': auditRow.perDaySalary ?? null,
     'Other Deductions (INR)': auditRow.otherDeductions,
     'Total Deductions (INR)': auditRow.totalDeductions,
-    'Month-to-date payable': auditRow.netSalary ?? '',
+    'Month-to-date payable': auditRow.netSalary ?? auditRow.payableEstimate ?? null,
     'Transfer Status': auditRow.transferStatus ?? '',
-    'Status': auditRow.status,
+    Status: auditRow.status,
   };
 
   // Every export value comes directly from the audit row — no transformation
   assert.equal(exportRow['Employee Code'], auditRow.employeeCode);
   assert.equal(exportRow['Employee Name'], auditRow.employeeName);
   assert.equal(exportRow['Department'], auditRow.departmentName);
-  assert.equal(exportRow['Month'], auditRow.periodKey);
+  assert.equal(exportRow['As of date'], auditRow.asOfDate);
   assert.equal(exportRow['Monthly salary'], auditRow.grossSalary);
   assert.equal(exportRow['Working Days'], auditRow.workingDays);
   assert.equal(exportRow['Present Days'], auditRow.presentDays);
   assert.equal(exportRow['Paid Leave Days'], auditRow.paidLeaveDays);
-  assert.equal(exportRow['Payable Days'], auditRow.payableDays);
+  assert.equal(exportRow['Paid days (out of 30)'], auditRow.paidDaysOutOf30);
   assert.equal(exportRow['Loss of pay (days)'], auditRow.lopDays);
   assert.equal(exportRow['Loss of pay till date'], auditRow.lopDeduction);
   assert.equal(exportRow['Per day salary'], auditRow.perDaySalary);
@@ -689,25 +703,23 @@ test('claim6: export handles inconsistent rows — netSalary shows empty string'
 });
 
 test('claim6: export column count matches audit row field count', () => {
-  // Export has exactly 17 columns
   const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month',
+    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month', 'As of date',
     'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Payable Days', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
+    'Paid days (out of 30)', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
     'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
     'Transfer Status', 'Status',
   ];
-  assert.equal(exportColumns.length, 18);
+  assert.equal(exportColumns.length, 19);
 
-  // Audit row has 20 fields (3 extra: employeeId, department, departmentName, hasSalaryConfigured)
-  // Export drops employeeId and raw department, keeps departmentName
   const auditRowFields = [
     'employeeId', 'employeeCode', 'employeeName', 'department', 'departmentName',
     'periodKey', 'grossSalary', 'workingDays', 'presentDays', 'paidLeaveDays',
-    'payableDays', 'lopDays', 'lopDeduction', 'perDaySalary', 'otherDeductions',
+    'payableDays', 'paidDaysOutOf30', 'payableEstimate', 'asOfDate',
+    'lopDays', 'lopDeduction', 'perDaySalary', 'otherDeductions',
     'totalDeductions', 'netSalary', 'hasSalaryConfigured', 'transferStatus', 'status',
   ];
-  assert.equal(auditRowFields.length, 20);
+  assert.equal(auditRowFields.length, 23);
 });
 
 test('claim6: history and export use the same buildAuditRow — row fields are identical', () => {
