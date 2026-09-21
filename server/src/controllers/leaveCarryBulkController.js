@@ -4,6 +4,7 @@ import {
   buildCarryAuditReport,
   buildCarryBulkTemplate,
   parseCarryBulkWorkbook,
+  previewCarryBulkRows,
 } from '../services/leaveCarryBulkService.js';
 import { auditRequest } from '../utils/auditLog.js';
 
@@ -37,6 +38,24 @@ export async function downloadCarryAuditReport(req, res) {
   );
   res.setHeader('Content-Length', buffer.length);
   res.end(buffer);
+}
+
+/**
+ * Dry-run preview: parse and validate the upload without writing balances
+ * or emitting audit logs.
+ */
+export async function previewCarryBulk(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Excel file is required.' });
+  }
+
+  const rows = parseCarryBulkWorkbook(req.file.buffer);
+  if (rows.length === 0) {
+    return res.status(400).json({ message: 'No rows found in file.' });
+  }
+
+  const result = await previewCarryBulkRows(rows);
+  res.json(result);
 }
 
 export async function uploadCarryBulk(req, res) {

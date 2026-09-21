@@ -764,19 +764,22 @@ async function resolveLeaveType(leaveTypeValue) {
   throwError(`Leave type "${normalized}" not found or inactive.`);
 }
 
-function summarizeResults(results, skippedCount) {
+function summarizeResults(results, skippedCount, { dryRun = false } = {}) {
   const summary = {
     total: results.length,
     success: results.filter((item) => item.status === 'success').length,
+    preview: results.filter((item) => item.status === 'preview').length,
     duplicate: results.filter((item) => item.status === 'duplicate').length,
     validation_error: results.filter((item) => item.status === 'validation_error').length,
     error: results.filter((item) => item.status === 'error').length,
     skipped: skippedCount,
+    dryRun,
   };
   return { summary, results };
 }
 
-export async function applyCarryBulkRows(rows, adjustedBy) {
+export async function applyCarryBulkRows(rows, adjustedBy, options = {}) {
+  const { dryRun = false } = options;
   const { actionable, skipped, duplicates } = partitionRows(rows);
   const results = [...duplicates];
 
@@ -831,15 +834,28 @@ export async function applyCarryBulkRows(rows, adjustedBy) {
       };
 
       const validated = adjustLeaveBalanceSchema.parse(adjustPayload);
-      await adjustBalance(user._id, validated, adjustedBy);
 
-      results.push({
-        rowNumber: row.rowNumber,
-        status: 'success',
-        employeeCode: user.employeeCode ?? employeeCode,
-        employeeName: user.name ?? employeeName,
-        message: `Credited ${validated.carried} carried day(s) to ${validated.year}.`,
-      });
+      if (dryRun) {
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'preview',
+          employeeCode: user.employeeCode ?? employeeCode,
+          employeeName: user.name ?? employeeName,
+          leaveTypeCode: leaveType.code,
+          carriedDays: validated.carried,
+          year: validated.year,
+          message: `Would set ${validated.carried} carried day(s) for ${validated.year}.`,
+        });
+      } else {
+        await adjustBalance(user._id, validated, adjustedBy);
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'success',
+          employeeCode: user.employeeCode ?? employeeCode,
+          employeeName: user.name ?? employeeName,
+          message: `Credited ${validated.carried} carried day(s) to ${validated.year}.`,
+        });
+      }
     } catch (error) {
       if (error instanceof z.ZodError) {
         results.push({
@@ -871,5 +887,9 @@ export async function applyCarryBulkRows(rows, adjustedBy) {
   }
 
   results.sort((a, b) => a.rowNumber - b.rowNumber);
-  return summarizeResults(results, skipped.length);
+  return summarizeResults(results, skipped.length, { dryRun });
+}
+
+export async function previewCarryBulkRows(rows) {
+  return applyCarryBulkRows(rows, null, { dryRun: true });
 }

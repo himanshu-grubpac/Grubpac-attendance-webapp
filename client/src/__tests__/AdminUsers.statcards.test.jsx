@@ -15,6 +15,7 @@ vi.mock('../services/api.js', () => {
     email: `emp${index + 1}@test.example`,
     mobile: `90000000${String(index + 1).padStart(2, '0')}`,
     departmentName: 'Engineering',
+    departmentId: 'dept-eng',
     isActive: index >= INACTIVE_COUNT,
     lastLoginAt: null,
   }));
@@ -25,6 +26,9 @@ vi.mock('../services/api.js', () => {
         let filtered = params.isActive === undefined
           ? all
           : all.filter((employee) => String(employee.isActive) === params.isActive);
+        if (params.departmentId) {
+          filtered = filtered.filter((employee) => employee.departmentId === params.departmentId);
+        }
         if (params.search) {
           const needle = String(params.search).toLowerCase();
           filtered = filtered.filter(
@@ -57,7 +61,11 @@ vi.mock('../services/api.js', () => {
           },
         }),
       ),
-      listDepartments: vi.fn(() => Promise.resolve({ departments: [] })),
+      listDepartments: vi.fn(() =>
+        Promise.resolve({
+          departments: [{ id: 'dept-eng', name: 'Engineering' }],
+        }),
+      ),
       listRoles: vi.fn(() => Promise.resolve({ roles: [] })),
       listManagers: vi.fn(() => Promise.resolve({ managers: [] })),
     },
@@ -71,7 +79,11 @@ vi.mock('../services/api.js', () => {
 });
 
 vi.mock('../context/AuthContext.jsx', () => ({
-  useAuth: () => ({ hasPermission: () => true }),
+  useAuth: () => ({
+    hasPermission: () => true,
+    hasAnyPermission: () => true,
+    user: { roleSlug: 'admin' },
+  }),
 }));
 
 import { adminApi } from '../services/api.js';
@@ -170,6 +182,60 @@ describe('AdminUsers stat cards', () => {
     await waitFor(() => {
       expect(footerText()).toMatch(/showing 10 of 12 employees/i);
     });
+  });
+
+  it('keeps inactive stat card selected when department filter is applied', async () => {
+    const user = userEvent.setup();
+    setup();
+    await waitFor(() => {
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
+    });
+
+    await user.click(screen.getByRole('button', { name: /inactive/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /inactive/i }),
+      ).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    await user.click(screen.getByRole('combobox', { name: /department filter/i }));
+    await user.click(await screen.findByRole('option', { name: 'Engineering' }));
+
+    await waitFor(() => {
+      expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
+        expect.objectContaining({ isActive: 'false', departmentId: 'dept-eng', page: 1 }),
+      );
+    });
+    expect(
+      screen.getByRole('button', { name: /inactive/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clears inactive stat card when status changes away from inactive', async () => {
+    const user = userEvent.setup();
+    setup();
+    await waitFor(() => {
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
+    });
+
+    await user.click(screen.getByRole('button', { name: /inactive/i }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /inactive/i }),
+      ).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    await user.click(screen.getByRole('combobox', { name: /status filter/i }));
+    await user.click(await screen.findByRole('option', { name: 'Active' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /^active\b/i }),
+      ).toHaveAttribute('aria-pressed', 'true');
+    });
+    expect(
+      screen.getByRole('button', { name: /inactive/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('inactive card clears leftover search so all inactive employees appear', async () => {

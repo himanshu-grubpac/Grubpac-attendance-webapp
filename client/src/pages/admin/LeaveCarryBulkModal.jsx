@@ -126,6 +126,7 @@ export default function LeaveCarryBulkModal({
     setDownloading(true);
     setDownloadProgress(null);
     setError('');
+    let succeeded = false;
     try {
       const params = buildReportParams();
       const blob = await leaveApi.downloadCarryAuditReport(params, {
@@ -133,11 +134,16 @@ export default function LeaveCarryBulkModal({
       });
       downloadBlob(blob, `leave-audit-report-${params.year}.xlsx`);
       showSuccess('Audit report downloaded.');
+      succeeded = true;
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setDownloading(false);
       setDownloadProgress(null);
+      if (succeeded) {
+        resetTransientState();
+        onClose();
+      }
     }
   }
 

@@ -422,6 +422,16 @@ export const leaveApi = {
       onProgress,
     });
   },
+  previewCarryBulk: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api
+      .post('/leave/carry-bulk/preview', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120000,
+      })
+      .then((r) => r.data);
+  },
   uploadCarryBulk: (file) => {
     const form = new FormData();
     form.append('file', file);

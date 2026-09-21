@@ -80,8 +80,7 @@ export default function StickyHScrollBar({ targetRef, syncKey = 0 }) {
       ref={barRef}
       className="table-hscroll"
       hidden={!hasOverflow}
-      aria-hidden="true"
-      tabIndex={-1}
+      role="presentation"
     >
       <div ref={spacerRef} className="table-hscroll__spacer" />
     </div>

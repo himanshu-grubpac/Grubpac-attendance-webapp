@@ -512,7 +512,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
     ? dirtyCount > 0
       ? `${dirtyCount} unsaved change(s). Save to apply to all edited rows, or Reset to discard.`
       : 'Bulk edit mode: change any row with − / +, then Save Changes.'
-    : 'Tip: use Edit for one employee, Bulk Edit for many rows, or Bulk Upload for Excel import. Changes are logged in audit history when saved.';
+    : 'Tip: use Edit for one employee, Bulk Edit for many rows, or Bulk Upload for Excel import. Row Save applies single-employee changes.';
 
   return (
     <section className="card leave-adjustment-panel" aria-label="Employee leave adjustment">
@@ -535,7 +535,7 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
             type="button"
             className={`btn ${bulkEditMode ? 'btn-primary' : 'btn-ghost'}`}
             onClick={handleToggleBulkEdit}
-            disabled={busy || loading}
+            disabled={busy || loading || bulkUploadOpen}
             aria-pressed={bulkEditMode}
             title={
               bulkEditMode
@@ -544,6 +544,15 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
             }
           >
             {bulkEditMode ? 'Exit Bulk Edit' : 'Bulk Edit'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setBulkUploadOpen(true)}
+            disabled={busy || loading}
+            title="Download the prefilled Excel sheet, edit carried values, then upload to sync"
+          >
+            Bulk Upload
           </button>
           <button type="button" className="btn btn-ghost" onClick={onOpenAuditReport}>
             Download audit report
@@ -734,46 +743,33 @@ export default function EmployeeLeaveAdjustment({ policyYear, onOpenAuditReport 
         </div>
       )}
 
-      <div className="leave-adjustment-panel__footer">
-        <p className="muted small leave-adjustment-panel__note">{footerNote}</p>
-        <div className="leave-adjustment-panel__footer-actions">
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setBulkUploadOpen(true)}
-            disabled={busy || loading}
-            title="Download the prefilled Excel sheet, edit carried values, then upload to sync"
-          >
-            Bulk Upload
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={handleReset}
-            disabled={!bulkEditMode || busy || dirtyCount === 0}
-            title={
-              bulkEditMode
-                ? 'Discard all bulk edits'
-                : 'Enter bulk edit mode to enable reset'
-            }
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={!bulkEditMode || busy || dirtyCount === 0}
-            title={
-              bulkEditMode
-                ? 'Save all bulk edits at once'
-                : 'Enter bulk edit mode to save many rows at once'
-            }
-          >
-            {saving ? 'Saving…' : `Save Changes${dirtyCount > 0 ? ` (${dirtyCount})` : ''}`}
-          </button>
+      {bulkEditMode ? (
+        <div className="leave-adjustment-panel__footer">
+          <p className="muted small leave-adjustment-panel__note">{footerNote}</p>
+          <div className="leave-adjustment-panel__footer-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={handleReset}
+              disabled={busy || dirtyCount === 0}
+              title="Discard all bulk edits"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={busy || dirtyCount === 0}
+              title="Save all bulk edits at once"
+            >
+              {saving ? 'Saving…' : `Save Changes${dirtyCount > 0 ? ` (${dirtyCount})` : ''}`}
+            </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <p className="muted small leave-adjustment-panel__note">{footerNote}</p>
+      )}
 
       <PaginationBar
         pagination={pagination}

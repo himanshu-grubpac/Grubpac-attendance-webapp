@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React, { StrictMode } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../context/ToastContext.jsx';
@@ -37,25 +37,38 @@ vi.mock('../services/api.js', () => ({
   getErrorMessage: (err) => err?.message ?? 'Something went wrong.',
 }));
 
+vi.mock('../utils/portalSync.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    broadcastEmployeeSync: vi.fn(),
+  };
+});
+
 vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     useAuth: () => ({
       hasPermission: () => true,
+      hasAnyPermission: () => true,
+      user: { id: 'admin1', name: 'Admin' },
     }),
   };
 });
 
 import { adminApi } from '../services/api.js';
 
-if (typeof IntersectionObserver === 'undefined') {
-  globalThis.IntersectionObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-}
+let intersectCallback;
+
+globalThis.IntersectionObserver = class {
+  constructor(callback) {
+    intersectCallback = callback;
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
 
 if (typeof ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class {
@@ -82,6 +95,7 @@ function setup() {
 describe('AdminUsers status toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    intersectCallback = undefined;
   });
 
   it('shows a success toast after deactivating an employee', async () => {
@@ -108,5 +122,71 @@ describe('AdminUsers status toggle', () => {
     await waitFor(() => {
       expect(screen.getByText(/deactivated\. they can no longer sign in/i)).toBeInTheDocument();
     });
+  });
+
+  it('reloads listEmployees from page 1 after deactivate when scrolled past page 1', async () => {
+    adminApi.listEmployees.mockImplementation(({ page }) =>
+      Promise.resolve({
+        employees: [
+          {
+            id: `emp-p${page}`,
+            name: `User Page ${page}`,
+            email: `user${page}@example.com`,
+            employeeCode: `EMP00${page}`,
+            isActive: true,
+            department: 'Development',
+          },
+        ],
+        pagination: { page, limit: 10, total: 30, totalPages: 3 },
+      }),
+    );
+
+    const user = userEvent.setup();
+    setup();
+
+    await waitFor(() => {
+      expect(screen.getByText('User Page 1')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(intersectCallback).toBeTypeOf('function');
+    });
+
+    await act(async () => {
+      intersectCallback([{ isIntersecting: true }]);
+    });
+    await waitFor(() => {
+      expect(screen.getByText('User Page 2')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(intersectCallback).toBeTypeOf('function');
+    });
+    await act(async () => {
+      intersectCallback([{ isIntersecting: true }]);
+    });
+    await waitFor(() => {
+      expect(screen.getByText('User Page 3')).toBeInTheDocument();
+    });
+    expect(adminApi.listEmployees).toHaveBeenCalledWith(expect.objectContaining({ page: 3 }));
+
+    adminApi.listEmployees.mockClear();
+
+    const row = screen.getByText('User Page 1').closest('tr');
+    const menuButton = within(row).getByRole('button', { name: /manage|actions|more/i });
+    await user.click(menuButton);
+    await user.click(await screen.findByRole('menuitem', { name: /deactivate/i }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: /deactivate/i }));
+
+    await waitFor(() => {
+      expect(adminApi.updateEmployeeStatus).toHaveBeenCalledWith('emp-p1', false);
+    });
+
+    await waitFor(() => {
+      expect(adminApi.listEmployees).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }));
+    });
+    expect(adminApi.listEmployees).not.toHaveBeenCalledWith(expect.objectContaining({ page: 3 }));
   });
 });

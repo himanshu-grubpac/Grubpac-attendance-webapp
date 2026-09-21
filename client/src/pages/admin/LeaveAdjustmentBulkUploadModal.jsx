@@ -32,6 +32,7 @@ function downloadBlob(blob, filename) {
 
 function statusPillClass(status) {
   if (status === 'success') return 'stat-pill stat-pill--success';
+  if (status === 'preview') return 'stat-pill stat-pill--info';
   if (status === 'duplicate') return 'stat-pill stat-pill--warning';
   if (status === 'validation_error' || status === 'error') return 'stat-pill stat-pill--error';
   return 'stat-pill';
@@ -67,16 +68,19 @@ export default function LeaveAdjustmentBulkUploadModal({
 
   const [departments, setDepartments] = useState([]);
   const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
-  const busy = downloadingTemplate || uploading;
+  const busy = downloadingTemplate || previewing || uploading;
 
   const resetTransientState = useCallback(() => {
     setFile(null);
+    setPreview(null);
     setResult(null);
     setError('');
     setIsDragging(false);
@@ -119,6 +123,7 @@ export default function LeaveAdjustmentBulkUploadModal({
 
   function applySelectedFile(nextFile) {
     setError('');
+    setPreview(null);
     setResult(null);
 
     if (!nextFile) {
@@ -186,27 +191,51 @@ export default function LeaveAdjustmentBulkUploadModal({
     }
   }
 
-  async function handleUpload() {
+  async function handlePreview() {
     if (!file) {
-      setError('Please choose an Excel file before uploading.');
+      setError('Please choose an Excel file before reviewing.');
       return;
     }
 
+    setPreviewing(true);
+    setError('');
+    setPreview(null);
+    setResult(null);
+    try {
+      const data = await leaveApi.previewCarryBulk(file);
+      setPreview(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function handleApply() {
+    if (!file) {
+      setError('Please choose an Excel file before applying.');
+      return;
+    }
+
+    const previewSummary = preview?.summary ?? {};
+    const applyCount = previewSummary.preview ?? previewSummary.success ?? 0;
+
     await requestConfirm({
-      title: 'Upload and apply carried leave?',
-      message: `Import "${file.name}"? Filled Carry values will update carried balances for policy year ${toYear}. This action is logged in audit history.`,
-      confirmLabel: 'Upload & Apply',
+      title: 'Apply carried leave changes?',
+      message: applyCount > 0
+        ? `Apply ${applyCount} carried leave entr${applyCount === 1 ? 'y' : 'ies'} from "${file.name}" for policy year ${toYear}? This action is logged in audit history.`
+        : `Import "${file.name}"? Filled Carry values will update carried balances for policy year ${toYear}. This action is logged in audit history.`,
+      confirmLabel: 'Confirm Apply',
       variant: 'danger',
       onConfirm: async () => {
         setUploading(true);
         setError('');
         setResult(null);
-        // Close the modal automatically only when every row applied cleanly.
-        // Rows needing review (errors/duplicates) keep it open with results.
         let autoClose = false;
         try {
           const data = await leaveApi.uploadCarryBulk(file);
           setResult(data);
+          setPreview(null);
           clearFileSelection();
           const summary = data?.summary ?? {};
           const applied = summary.success ?? 0;
@@ -230,8 +259,6 @@ export default function LeaveAdjustmentBulkUploadModal({
           setUploading(false);
         }
         if (autoClose) {
-          // Bypass closeModal's busy guard via internals: uploading has
-          // settled, but `busy` is still true in this closure until re-render.
           resetTransientState();
           onClose();
         }
@@ -244,6 +271,15 @@ export default function LeaveAdjustmentBulkUploadModal({
   }
 
   const summary = result?.summary ?? null;
+  const previewSummary = preview?.summary ?? null;
+  const previewReady = previewSummary != null;
+  const previewApplyCount = previewSummary?.preview ?? previewSummary?.success ?? 0;
+  const previewNeedsReview =
+    previewReady &&
+    ((previewSummary.validation_error ?? 0) +
+      (previewSummary.error ?? 0) +
+      (previewSummary.duplicate ?? 0) >
+      0);
 
   return createPortal(
     <div className="modal__backdrop" role="presentation" onClick={closeModal}>
@@ -384,6 +420,72 @@ export default function LeaveAdjustmentBulkUploadModal({
             </ul>
           </section>
 
+          {previewReady && !result ? (
+            <section aria-label="Upload preview">
+              <h3 className="label">Preview — nothing applied yet</h3>
+              <p className="muted small">
+                Review the rows below, then confirm to apply carried leave changes.
+              </p>
+              <div className="summary-row">
+                <span className="stat-pill">Total: {previewSummary.total}</span>
+                <span className="stat-pill stat-pill--info">
+                  Ready: {previewApplyCount}
+                </span>
+                <span className="stat-pill stat-pill--warning">
+                  Duplicate: {previewSummary.duplicate}
+                </span>
+                <span className="stat-pill stat-pill--error">
+                  Errors: {(previewSummary.validation_error || 0) + (previewSummary.error || 0)}
+                </span>
+                <span className="stat-pill stat-pill--muted">
+                  Skipped: {previewSummary.skipped}
+                </span>
+              </div>
+              <div className="table-wrap table-wrap--responsive">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Row</th>
+                      <th>Status</th>
+                      <th>Employee</th>
+                      <th>Leave</th>
+                      <th>Carry</th>
+                      <th>Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(preview.results ?? []).map((row) => (
+                      <tr key={`preview-${row.rowNumber}-${row.employeeCode}-${row.leaveTypeCode ?? ''}`}>
+                        <td data-label="Row">{row.rowNumber}</td>
+                        <td data-label="Status">
+                          <span className={statusPillClass(row.status)}>{row.status}</span>
+                        </td>
+                        <td data-label="Employee">
+                          {row.employeeName || row.employeeCode
+                            ? `${row.employeeName ?? ''}${row.employeeName && row.employeeCode ? ` (${row.employeeCode})` : (row.employeeCode ?? '')}`
+                            : '—'}
+                        </td>
+                        <td data-label="Leave">{row.leaveTypeCode ?? '—'}</td>
+                        <td data-label="Carry">{row.carriedDays ?? '—'}</td>
+                        <td data-label="Message">{row.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {previewApplyCount === 0 ? (
+                <p className="alert alert--warning small" role="note">
+                  No rows are ready to apply. Fix errors in the file and review again.
+                </p>
+              ) : null}
+              {previewNeedsReview ? (
+                <p className="alert alert--warning small" role="note">
+                  Some rows have errors or duplicates. Confirm Apply will still process valid rows only.
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
           {result ? (
             <section aria-label="Import results">
               <h3 className="label">Import results</h3>
@@ -445,21 +547,39 @@ export default function LeaveAdjustmentBulkUploadModal({
           >
             {result ? 'Close' : 'Cancel'}
           </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleUpload}
-            disabled={busy || !file}
-          >
-            {uploading ? (
-              <>
-                <span className="spinner spinner--sm" aria-hidden="true" />
-                Uploading…
-              </>
-            ) : (
-              'Upload & Apply'
-            )}
-          </button>
+          {previewReady && !result ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleApply}
+              disabled={busy || !file || previewApplyCount === 0}
+            >
+              {uploading ? (
+                <>
+                  <span className="spinner spinner--sm" aria-hidden="true" />
+                  Applying…
+                </>
+              ) : (
+                `Confirm Apply${previewApplyCount > 0 ? ` (${previewApplyCount})` : ''}`
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handlePreview}
+              disabled={busy || !file}
+            >
+              {previewing ? (
+                <>
+                  <span className="spinner spinner--sm" aria-hidden="true" />
+                  Reviewing…
+                </>
+              ) : (
+                'Review upload'
+              )}
+            </button>
+          )}
         </footer>
       </div>
 

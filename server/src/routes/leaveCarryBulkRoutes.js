@@ -7,6 +7,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   downloadCarryAuditReport,
   downloadCarryBulkTemplate,
+  previewCarryBulk,
   uploadCarryBulk,
 } from '../controllers/leaveCarryBulkController.js';
 
@@ -38,6 +39,13 @@ router.get(
   '/carry-bulk/audit-report',
   requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_X1, PERMISSIONS.LEAVE_ADJUSTMENT_U),
   asyncHandler(downloadCarryAuditReport),
+);
+
+router.post(
+  '/carry-bulk/preview',
+  requirePermission(PERMISSIONS.LEAVE_ADJUSTMENT_X0, PERMISSIONS.LEAVE_ADJUSTMENT_U),
+  singleFileUpload(upload),
+  asyncHandler(previewCarryBulk),
 );
 
 router.post(

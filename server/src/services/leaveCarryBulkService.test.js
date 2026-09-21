@@ -7,7 +7,11 @@ import {
   leaveCarryBulkTemplateQuerySchema,
 } from '../../../shared/validation/leaveCarryBulk.js';
 import { adjustLeaveBalanceSchema } from '../../../shared/validation/leave.js';
-import { applyCarryBulkRows, parseCarryBulkWorkbook } from './leaveCarryBulkService.js';
+import {
+  applyCarryBulkRows,
+  parseCarryBulkWorkbook,
+  previewCarryBulkRows,
+} from './leaveCarryBulkService.js';
 
 test('leaveCarryBulkTemplateQuerySchema requires fromYear and toYear', () => {
   const result = leaveCarryBulkTemplateQuerySchema.safeParse({
@@ -515,6 +519,25 @@ test('adjustLeaveBalanceSchema accepts negative carried as a deduction', () => {
     reason: 'Year-end correction',
   });
   assert.equal(result.success, true);
+});
+
+test('previewCarryBulkRows validates without applying (dry run summary)', async () => {
+  const { summary, results } = await previewCarryBulkRows([
+    {
+      rowNumber: 7,
+      data: {
+        employeeCode: '',
+        fromYear: 2025,
+        toYear: 2026,
+        leaveType: 'CL',
+        carriedDays: 3,
+      },
+    },
+  ]);
+  assert.equal(summary.dryRun, true);
+  assert.equal(summary.preview, 0);
+  assert.equal(summary.validation_error, 1);
+  assert.equal(results[0].status, 'validation_error');
 });
 
 test('applyCarryBulkRows names the offending field in validation messages', async () => {

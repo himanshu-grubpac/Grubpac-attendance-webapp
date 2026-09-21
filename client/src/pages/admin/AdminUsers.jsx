@@ -143,6 +143,22 @@ const STAT_CARDS = [
   },
 ];
 
+/** Core predicate per stat card — dept/role/search/joining may layer on top. */
+function statCardCoreMatch(statKey, statusFilter, newThisMonthFilter) {
+  switch (statKey) {
+    case 'inactive':
+      return statusFilter === 'false' && !newThisMonthFilter;
+    case 'active':
+      return statusFilter === 'true' && !newThisMonthFilter;
+    case 'newThisMonth':
+      return newThisMonthFilter;
+    case 'total':
+      return statusFilter === '' && !newThisMonthFilter;
+    default:
+      return false;
+  }
+}
+
 function formatJoinedSinceHint(monthKey) {
   // Registration-based (createdAt), matching the stat + list predicate —
   // deliberately "registered", not "joined": bulk-imported employees carry
@@ -625,8 +641,6 @@ export default function AdminUsers() {
 
   function handleRoleChange(value) {
     setRoleFilter(value);
-    // Hand-tuned view: drop the card highlight, predicate decides below.
-    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -641,7 +655,9 @@ export default function AdminUsers() {
 
   function handleStatusChange(value) {
     setStatusFilter(value);
-    setSelectedStat(null);
+    setSelectedStat((current) =>
+      current && statCardCoreMatch(current, value, newThisMonthFilter) ? current : null,
+    );
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -656,7 +672,6 @@ export default function AdminUsers() {
 
   function handleDepartmentChange(value) {
     setDepartmentFilter(value);
-    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -671,7 +686,6 @@ export default function AdminUsers() {
 
   function handleJoiningFromChange(value) {
     setJoiningFrom(value);
-    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -686,7 +700,6 @@ export default function AdminUsers() {
 
   function handleJoiningToChange(value) {
     setJoiningTo(value);
-    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -846,7 +859,7 @@ export default function AdminUsers() {
         await Promise.all([
           loadEmployees({
             query: search,
-            nextPage: page,
+            nextPage: 1,
             nextStatus: statusFilter,
             nextDepartment: departmentFilter,
             nextRole: roleFilter,
@@ -1114,7 +1127,7 @@ export default function AdminUsers() {
               <SearchInput
                 className="filter-bar__search employees-toolbar__search"
                 value={search}
-                onChange={(e) => { setSearch(e.target.value); setSelectedStat(null); }}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search employee name, code…"
                 ariaLabel="Search employees"
                 onEnter={() => {
