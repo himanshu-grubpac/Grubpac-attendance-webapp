@@ -55,6 +55,7 @@ export default function SalaryDetailModal({
           </h2>
           <p className="modal__lead muted">
             Month figures plus leave balances for the year — negative balances are LOP-driven minus.
+            {summary?.asOfDate ? ` Figures as of ${summary.asOfDate}.` : ''}
           </p>
         </header>
 
@@ -92,8 +93,8 @@ export default function SalaryDetailModal({
                   <dd>{summary.paidLeaveDays}</dd>
                 </div>
                 <div>
-                  <dt>Payable days</dt>
-                  <dd>{summary.payableDays}</dd>
+                  <dt>Paid days (out of 30)</dt>
+                  <dd>{summary.paidDaysOutOf30 ?? summary.payableDays ?? '—'}</dd>
                 </div>
                 <div>
                   <dt>LOP days</dt>
@@ -124,8 +125,12 @@ export default function SalaryDetailModal({
                   <dd>{formatINRCurrency(summary.lopDeduction)}</dd>
                 </div>
                 <div>
-                  <dt>Net payable (INR)</dt>
-                  <dd>{formatINRCurrency(summary.payableEstimate)}</dd>
+                  <dt>Month-to-date payable (INR)</dt>
+                  <dd>
+                    {summary.payableEstimate != null
+                      ? formatINRCurrency(summary.payableEstimate)
+                      : '—'}
+                  </dd>
                 </div>
               </dl>
 

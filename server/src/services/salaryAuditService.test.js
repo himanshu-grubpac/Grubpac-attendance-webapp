@@ -236,17 +236,19 @@ test('history and audit produce identical rows for same employee/month', () => {
   assert.deepEqual(historyRow, auditRow);
 });
 
-test('export columns include transferStatus', () => {
+test('export columns include transferStatus and paidDaysOutOf30', () => {
   const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month',
+    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month', 'As of date',
     'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Payable Days', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
+    'Paid days (out of 30)', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
     'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
     'Transfer Status', 'Status',
   ];
 
   assert.ok(exportColumns.includes('Transfer Status'));
-  assert.equal(exportColumns.length, 18);
+  assert.ok(exportColumns.includes('Paid days (out of 30)'));
+  assert.ok(exportColumns.includes('As of date'));
+  assert.equal(exportColumns.length, 19);
 });
 
 test('empty audit returns valid structure with zero totals', () => {
@@ -305,6 +307,31 @@ test('employee without salary has hasSalaryConfigured false and monthlySalary nu
   assert.equal(summary.hasSalaryConfigured, false);
   assert.equal(summary.monthlySalary, null);
   assert.equal(summary.grossSalary, 0);
+});
+
+test('audit row without salary has null netSalary and paidDaysOutOf30', () => {
+  const row = {
+    hasSalaryConfigured: false,
+    grossSalary: 0,
+    paidDaysOutOf30: null,
+    payableEstimate: null,
+    netSalary: null,
+  };
+
+  assert.equal(row.netSalary, null);
+  assert.equal(row.paidDaysOutOf30, null);
+  assert.notEqual(row.netSalary, 0);
+});
+
+test('monthly audit response includes asOfDate', () => {
+  const result = {
+    periodKey: '2026-09',
+    asOfDate: '2026-09-16',
+    employees: [],
+    totals: { employees: 0, lopDays: 0, lopDeduction: 0, totalDeductions: 0, totalNetSalary: 0 },
+  };
+
+  assert.equal(result.asOfDate, '2026-09-16');
 });
 
 test('totals exclude inconsistent rows from totalNetSalary', () => {

@@ -66,6 +66,7 @@ async function createOverdrawnFixture() {
     passwordHash: 'test-password-hash',
     role: 'employee',
     isActive: true,
+    joiningDate: START,
     monthlySalary: 30000,
   });
 
@@ -151,7 +152,7 @@ test('salary summary exposes which dates became LOP', async () => {
 
   const { summary } = await getSalarySummaryForUser(
     user,
-    [PERMISSIONS.SALARY_READ],
+    [PERMISSIONS.EMP_PAY_R],
     user._id.toString(),
     PERIOD,
   );
@@ -201,7 +202,7 @@ test('monthly audit reflects settled LOP for the employee', async () => {
 
   const audit = await getMonthlySalaryAudit(
     { _id: user._id },
-    [PERMISSIONS.SALARY_READ],
+    [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.SALARY_TEAM_AUDIT_R],
     PERIOD,
   );
 
