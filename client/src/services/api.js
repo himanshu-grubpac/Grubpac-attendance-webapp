@@ -270,6 +270,9 @@ export const adminApi = {
     return api
       .post('/admin/users/bulk-preview', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        // A stalled upload must fail loudly instead of hanging the review
+        // button in a busy state forever.
+        timeout: 120000,
       })
       .then((r) => r.data);
   },

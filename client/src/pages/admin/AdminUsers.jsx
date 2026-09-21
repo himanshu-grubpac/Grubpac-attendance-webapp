@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { PERMISSIONS } from '@shared/permissions.js';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
 import { formatInrInteger } from '@shared/utils/formatInr.js';
 import { adminApi, getErrorMessage, preferencesApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -14,6 +14,7 @@ import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import DateField from '../../components/DateField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
@@ -25,7 +26,9 @@ const EMPLOYEE_TABLE_KEY = 'employeeList';
 
 const ALL_COLUMNS = [
   { key: 'name', label: 'Name', always: true },
+  { key: 'employeeCode', label: 'Emp code' },
   { key: 'email', label: 'Email' },
+  { key: 'employeeCode', label: 'Employee code' },
   { key: 'mobile', label: 'Mobile' },
   { key: 'department', label: 'Department' },
   { key: 'designation', label: 'Designation' },
@@ -38,11 +41,18 @@ const ALL_COLUMNS = [
   { key: 'managerDepartments', label: 'Manager dept (Team scope)' },
   { key: 'status', label: 'Status' },
   { key: 'lastLogin', label: 'Last login' },
+  { key: 'updatedAt', label: 'Updated at' },
 ];
 
-const DEFAULT_VISIBLE_COLUMNS = ['name', 'email', 'mobile', 'department', 'status', 'lastLogin'];
+const DEFAULT_VISIBLE_COLUMNS = ['name', 'employeeCode', 'email', 'mobile', 'department', 'status', 'updatedAt', 'lastLogin'];
 
 const ALL_COLUMN_KEYS = new Set(ALL_COLUMNS.map((column) => column.key));
+
+function isSystemAdminRow(employee) {
+  return employee?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN;
+}
+
+const SYSTEM_ADMIN_LOCKED_TITLE = 'System admin — managed elsewhere';
 
 function normalizeVisibleColumns(keys) {
   if (!Array.isArray(keys)) return DEFAULT_VISIBLE_COLUMNS;
@@ -88,6 +98,8 @@ function readStoredFilters() {
     if (typeof parsed.newThisMonthFilter === 'boolean') {
       cleaned.newThisMonthFilter = parsed.newThisMonthFilter;
     }
+    if (typeof parsed.joiningFrom === 'string') cleaned.joiningFrom = parsed.joiningFrom;
+    if (typeof parsed.joiningTo === 'string') cleaned.joiningTo = parsed.joiningTo;
     return cleaned;
   } catch {
     // Storage unavailable (private mode) — filters just won't persist.
@@ -206,12 +218,14 @@ function TableSkeleton() {
 
 export default function AdminUsers() {
   const navigate = useNavigate();
-  const { hasPermission, hasAnyPermission } = useAuth();
+  const { hasPermission, hasAnyPermission, user } = useAuth();
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
   const canFilterByDepartment = hasAnyPermission([
     PERMISSIONS.EMPLOYEES_STATS_R,
     PERMISSIONS.EMPLOYEES_RECORD_R,
   ]);
+  const canAddTeamEmployee = user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
+  const canAddEmployee = canWriteUsers || canAddTeamEmployee;
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess } = useToast();
 
@@ -223,13 +237,29 @@ export default function AdminUsers() {
   const [managers, setManagers] = useState([]);
   const [storedFilters] = useState(readStoredFilters);
   const [page, setPage] = useState(1);
+  const [searchParams] = useSearchParams();
+  // Dashboard deep-links (?status= / ?role=) win over the remembered filters
+  // so opening the list from the dashboard always lands on the linked view.
+  const queryStatus = searchParams.get('status');
+  const initialStatus =
+    queryStatus === 'true' || queryStatus === 'false' || queryStatus === ''
+      ? queryStatus
+      : null;
+  const queryRole = searchParams.get('role');
+  const initialRole = queryRole && /^[a-f\d]{24}$/i.test(queryRole) ? queryRole : null;
   const [search, setSearch] = useState(storedFilters.search ?? '');
-  const [statusFilter, setStatusFilter] = useState(storedFilters.statusFilter ?? '');
+  const [statusFilter, setStatusFilter] = useState(initialStatus ?? storedFilters.statusFilter ?? 'true');
+  const [joiningFrom, setJoiningFrom] = useState(storedFilters.joiningFrom ?? '');
+  const [joiningTo, setJoiningTo] = useState(storedFilters.joiningTo ?? '');
   const [departmentFilter, setDepartmentFilter] = useState(storedFilters.departmentFilter ?? '');
-  const [roleFilter, setRoleFilter] = useState(storedFilters.roleFilter ?? '');
+  const [roleFilter, setRoleFilter] = useState(initialRole ?? storedFilters.roleFilter ?? '');
   const [newThisMonthFilter, setNewThisMonthFilter] = useState(
     storedFilters.newThisMonthFilter ?? false,
   );
+  // Which stat card the user last clicked (null = derive from the filter set
+  // below). Needed because Total and Active show the SAME Active-filtered
+  // list — a pure predicate can't tell which card to highlight.
+  const [selectedStat, setSelectedStat] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   // RBAC-filtered column keys for the editor inventory (null = not loaded yet).
   const [allowedColumnKeys, setAllowedColumnKeys] = useState(null);
@@ -245,8 +275,14 @@ export default function AdminUsers() {
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMoreRef = useRef(null);
   const tableWrapRef = useRef(null);
-  const debouncedSearch = useDebouncedValue(search, 350);
+  const debouncedSearch = useDebouncedValue(search, 200);
   const skipDebouncedSearchRef = useRef(true);
+  // Programmatic loads (stat cards / Clear / Enter) already fetch directly:
+  // suppress only that exact debounced value once so it doesn't double-fetch.
+  // Never arm the mount-skip flag here — when search is already '' no
+  // debounced change follows, the flag stays armed and swallows the user's
+  // next keystrokes (search looks "not working").
+  const suppressDebouncedQueryRef = useRef(null);
   const requestKeyRef = useRef('');
   const statusFilterRef = useRef(statusFilter);
   const departmentFilterRef = useRef(departmentFilter);
@@ -254,20 +290,32 @@ export default function AdminUsers() {
   const statsRef = useRef(stats);
   statusFilterRef.current = statusFilter;
   departmentFilterRef.current = departmentFilter;
+  newThisMonthFilterRef.current = newThisMonthFilter;
   const roleFilterRef = useRef(roleFilter);
   roleFilterRef.current = roleFilter;
+  const joiningFromRef = useRef(joiningFrom);
+  joiningFromRef.current = joiningFrom;
+  const joiningToRef = useRef(joiningTo);
+  joiningToRef.current = joiningTo;
   statsRef.current = stats;
   const [listError, setListError] = useState('');
   const [statsError, setStatsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // The Admin option is visible only to viewers who can administer roles —
+  // everyone else gets the assignable/filterable set (register + detail
+  // pages hide it unconditionally).
+  const canSeeAdminRole = user?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN
+    || hasPermission(PERMISSIONS.ROLES_MANAGE);
   const roleOptions = useMemo(
     () => [
       { value: '', label: 'All roles' },
-      ...roles.map((role) => ({ value: role.id, label: role.name })),
+      ...roles
+        .filter((role) => canSeeAdminRole || role.slug !== SYSTEM_ROLE_SLUGS.ADMIN)
+        .map((role) => ({ value: role.id, label: role.name })),
     ],
-    [roles],
+    [roles, canSeeAdminRole],
   );
 
   const departmentOptions = useMemo(
@@ -352,16 +400,21 @@ export default function AdminUsers() {
     nextRole = '',
     nextNewThisMonth = false,
     monthKey = null,
+    nextJoiningFrom = '',
+    nextJoiningTo = '',
     append = false,
+    // Quiet keystroke refreshes keep the current rows on screen and swap in
+    // results when they land — no skeleton flash per keystroke.
+    quiet = false,
   } = {}) => {
     const effectiveMonthKey = monthKey ?? statsRef.current?.monthKey;
     const createdAfter =
       nextNewThisMonth && effectiveMonthKey ? `${effectiveMonthKey}-01` : undefined;
-    const requestKey = `${query ?? ''}|${nextPage}|${nextStatus}|${nextDepartment}|${nextRole}|${createdAfter ?? ''}|${append}`;
+    const requestKey = `${query ?? ''}|${nextPage}|${nextStatus}|${nextDepartment}|${nextRole}|${createdAfter ?? ''}|${nextJoiningFrom}|${nextJoiningTo}|${append}`;
     requestKeyRef.current = requestKey;
     if (append) {
       setLoadingMore(true);
-    } else {
+    } else if (!quiet) {
       setLoading(true);
     }
     try {
@@ -374,6 +427,8 @@ export default function AdminUsers() {
       if (nextDepartment) params.departmentId = nextDepartment;
       if (nextRole) params.roleId = nextRole;
       if (createdAfter) params.createdAfter = createdAfter;
+      if (nextJoiningFrom) params.joiningFrom = nextJoiningFrom;
+      if (nextJoiningTo) params.joiningTo = nextJoiningTo;
 
       const data = await adminApi.listEmployees(params);
       if (requestKeyRef.current !== requestKey) return;
@@ -408,7 +463,7 @@ export default function AdminUsers() {
         setDepartments([]);
       });
     adminApi
-      .listRoles()
+      .listRoles({ includeSystem: true })
       .then((data) => setRoles(data.roles ?? []))
       .catch(() => { });
     adminApi
@@ -428,6 +483,8 @@ export default function AdminUsers() {
         nextRole: roleFilter,
         nextNewThisMonth: newThisMonthFilter,
         monthKey: monthStats?.monthKey ?? null,
+        nextJoiningFrom: joiningFrom,
+        nextJoiningTo: joiningTo,
       });
     })();
     // Intentionally runs once: restores the persisted filter set (if any).
@@ -470,18 +527,26 @@ export default function AdminUsers() {
           departmentFilter,
           roleFilter,
           newThisMonthFilter,
+          joiningFrom,
+          joiningTo,
         }),
       );
     } catch {
       // Storage unavailable — filters just won't persist.
     }
-  }, [search, statusFilter, departmentFilter, roleFilter, newThisMonthFilter]);
+  }, [search, statusFilter, departmentFilter, roleFilter, newThisMonthFilter, joiningFrom, joiningTo]);
 
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {
       skipDebouncedSearchRef.current = false;
       return;
     }
+    // Single-use: drop the debounced echo of a query we already loaded
+    // directly (card click / Clear / Enter). Any other value is a real
+    // keystroke and must still search.
+    const suppressed = suppressDebouncedQueryRef.current;
+    suppressDebouncedQueryRef.current = null;
+    if (suppressed !== null && debouncedSearch === suppressed) return;
     loadEmployees({
       query: debouncedSearch,
       nextPage: 1,
@@ -489,6 +554,9 @@ export default function AdminUsers() {
       nextDepartment: departmentFilterRef.current,
       nextRole: roleFilterRef.current,
       nextNewThisMonth: newThisMonthFilterRef.current,
+      nextJoiningFrom: joiningFromRef.current,
+      nextJoiningTo: joiningToRef.current,
+      quiet: true,
     });
   }, [debouncedSearch, loadEmployees]);
 
@@ -508,6 +576,8 @@ export default function AdminUsers() {
           nextDepartment: departmentFilter,
           nextRole: roleFilter,
           nextNewThisMonth: newThisMonthFilter,
+          nextJoiningFrom: joiningFrom,
+          nextJoiningTo: joiningTo,
           append: true,
         });
       },
@@ -518,6 +588,8 @@ export default function AdminUsers() {
     return () => observer.disconnect();
   }, [
     departmentFilter,
+    joiningFrom,
+    joiningTo,
     loadEmployees,
     loading,
     loadingMore,
@@ -531,23 +603,31 @@ export default function AdminUsers() {
 
   function clearFilters() {
     setSearch('');
-    setStatusFilter('');
+    setStatusFilter('true');
     setDepartmentFilter('');
     setRoleFilter('');
     setNewThisMonthFilter(false);
-    skipDebouncedSearchRef.current = true;
+    setJoiningFrom('');
+    setJoiningTo('');
+    suppressDebouncedQueryRef.current = '';
     loadEmployees({
       query: '',
       nextPage: 1,
-      nextStatus: '',
+      nextStatus: 'true',
       nextDepartment: '',
       nextRole: '',
       nextNewThisMonth: false,
+      nextJoiningFrom: '',
+      nextJoiningTo: '',
     });
+    // Back to the default view → Active card lit (same as fresh load).
+    setSelectedStat('active');
   }
 
   function handleRoleChange(value) {
     setRoleFilter(value);
+    // Hand-tuned view: drop the card highlight, predicate decides below.
+    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
@@ -555,80 +635,192 @@ export default function AdminUsers() {
       nextDepartment: departmentFilter,
       nextRole: value,
       nextNewThisMonth: newThisMonthFilter,
+      nextJoiningFrom: joiningFrom,
+      nextJoiningTo: joiningTo,
     });
   }
 
   function handleStatusChange(value) {
     setStatusFilter(value);
+    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
       nextStatus: value,
       nextDepartment: departmentFilter,
+      nextRole: roleFilter,
       nextNewThisMonth: newThisMonthFilter,
+      nextJoiningFrom: joiningFrom,
+      nextJoiningTo: joiningTo,
     });
   }
 
   function handleDepartmentChange(value) {
     setDepartmentFilter(value);
+    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
       nextStatus: statusFilter,
       nextDepartment: value,
+      nextRole: roleFilter,
       nextNewThisMonth: newThisMonthFilter,
+      nextJoiningFrom: joiningFrom,
+      nextJoiningTo: joiningTo,
     });
   }
 
-  function handleNewThisMonthToggle() {
-    const next = !newThisMonthFilter;
-    setNewThisMonthFilter(next);
+  function handleJoiningFromChange(value) {
+    setJoiningFrom(value);
+    setSelectedStat(null);
     loadEmployees({
       query: search,
       nextPage: 1,
       nextStatus: statusFilter,
       nextDepartment: departmentFilter,
-      nextNewThisMonth: next,
+      nextRole: roleFilter,
+      nextNewThisMonth: newThisMonthFilter,
+      nextJoiningFrom: value,
+      nextJoiningTo: joiningTo,
     });
   }
 
+  function handleJoiningToChange(value) {
+    setJoiningTo(value);
+    setSelectedStat(null);
+    loadEmployees({
+      query: search,
+      nextPage: 1,
+      nextStatus: statusFilter,
+      nextDepartment: departmentFilter,
+      nextRole: roleFilter,
+      nextNewThisMonth: newThisMonthFilter,
+      nextJoiningFrom: joiningFrom,
+      nextJoiningTo: value,
+    });
+  }
 
   function handleStatCardClick(key) {
     switch (key) {
       case 'total':
-        // Clear all employee filters (state AND request): leaving stale
-        // status/department/role/search state behind desyncs the dropdowns
-        // from the rows, and the infinite-scroll observer would then append
-        // with the old status and clobber pagination ("Showing 10 of 5").
+        // Total opens the default Active list but keeps the TOTAL card lit
+        // (status stays Active — never All). Showing inactive rows here
+        // would break the default-view contract.
         setSearch('');
-        setStatusFilter('');
+        setStatusFilter('true');
         setDepartmentFilter('');
         setRoleFilter('');
         setNewThisMonthFilter(false);
-        skipDebouncedSearchRef.current = true;
+        setJoiningFrom('');
+        setJoiningTo('');
+        setSelectedStat('total');
+        suppressDebouncedQueryRef.current = '';
         loadEmployees({
           query: '',
           nextPage: 1,
-          nextStatus: '',
+          nextStatus: 'true',
           nextDepartment: '',
           nextRole: '',
           nextNewThisMonth: false,
+          nextJoiningFrom: '',
+          nextJoiningTo: '',
         });
         break;
 
       case 'active':
-        // active employees
+        // Active employees: own predicate only — stale search/department/
+        // role/date/month state would otherwise intersect and hide rows.
+        setSearch('');
+        setStatusFilter('true');
+        setDepartmentFilter('');
+        setRoleFilter('');
         setNewThisMonthFilter(false);
-        handleStatusChange('true');
+        setJoiningFrom('');
+        setJoiningTo('');
+        setSelectedStat('active');
+        suppressDebouncedQueryRef.current = '';
+        loadEmployees({
+          query: '',
+          nextPage: 1,
+          nextStatus: 'true',
+          nextDepartment: '',
+          nextRole: '',
+          nextNewThisMonth: false,
+          nextJoiningFrom: '',
+          nextJoiningTo: '',
+        });
         break;
 
       case 'inactive':
+        // Inactive employees: own predicate only (same reset rationale).
+        setSearch('');
+        setStatusFilter('false');
+        setDepartmentFilter('');
+        setRoleFilter('');
         setNewThisMonthFilter(false);
-        handleStatusChange('false');
+        setJoiningFrom('');
+        setJoiningTo('');
+        setSelectedStat('inactive');
+        suppressDebouncedQueryRef.current = '';
+        loadEmployees({
+          query: '',
+          nextPage: 1,
+          nextStatus: 'false',
+          nextDepartment: '',
+          nextRole: '',
+          nextNewThisMonth: false,
+          nextJoiningFrom: '',
+          nextJoiningTo: '',
+        });
         break;
 
       case 'newThisMonth':
-        handleNewThisMonthToggle();
+        if (newThisMonthFilter) {
+          // Toggle off → back to the default view.
+          setSearch('');
+          setStatusFilter('true');
+          setDepartmentFilter('');
+          setRoleFilter('');
+          setNewThisMonthFilter(false);
+          setJoiningFrom('');
+          setJoiningTo('');
+          setSelectedStat(null);
+          suppressDebouncedQueryRef.current = '';
+          loadEmployees({
+            query: '',
+            nextPage: 1,
+            nextStatus: 'true',
+            nextDepartment: '',
+            nextRole: '',
+            nextNewThisMonth: false,
+            nextJoiningFrom: '',
+            nextJoiningTo: '',
+          });
+        } else {
+          // New-this-month defaults to Active: carrying over Inactive (or All)
+          // from the previous card hides rows and desyncs the dropdown from
+          // the intended "active new joiners" view. Users can still switch
+          // the Status dropdown to All/Inactive afterwards to combine.
+          setSearch('');
+          setStatusFilter('true');
+          setDepartmentFilter('');
+          setRoleFilter('');
+          setNewThisMonthFilter(true);
+          setJoiningFrom('');
+          setJoiningTo('');
+          setSelectedStat('newThisMonth');
+          suppressDebouncedQueryRef.current = '';
+          loadEmployees({
+            query: '',
+            nextPage: 1,
+            nextStatus: 'true',
+            nextDepartment: '',
+            nextRole: '',
+            nextNewThisMonth: true,
+            nextJoiningFrom: '',
+            nextJoiningTo: '',
+          });
+        }
         break;
 
       default:
@@ -658,7 +850,10 @@ export default function AdminUsers() {
             nextPage: page,
             nextStatus: statusFilter,
             nextDepartment: departmentFilter,
+            nextRole: roleFilter,
             nextNewThisMonth: newThisMonthFilter,
+            nextJoiningFrom: joiningFrom,
+            nextJoiningTo: joiningTo,
           }),
           loadStats(),
         ]);
@@ -672,6 +867,40 @@ export default function AdminUsers() {
   }
 
   function getActionItems(employee) {
+    const isAdmin = employee.roleSlug === 'admin';
+    // System admin rows are visible but locked: every one of these actions
+    // is rejected server-side, so the menu explains instead of failing.
+    if (isSystemAdminRow(employee)) {
+      const locked = (item) => ({ ...item, disabled: true, title: SYSTEM_ADMIN_LOCKED_TITLE });
+      return [
+        locked({
+          key: 'view',
+          label: 'View details',
+          onClick: () => {},
+        }),
+        ...(canWriteUsers
+          ? [
+              locked({
+                key: 'employment',
+                label: 'Edit employment details',
+                onClick: () => {},
+              }),
+              locked({
+                key: 'reset',
+                label: 'Reset password',
+                onClick: () => {},
+              }),
+              locked({
+                key: 'toggle',
+                label: employee.isActive ? 'Deactivate' : 'Activate',
+                variant: employee.isActive ? 'danger' : 'default',
+                onClick: () => {},
+              }),
+            ]
+          : []),
+      ];
+    }
+
     const items = [
       {
         key: 'view',
@@ -694,22 +923,24 @@ export default function AdminUsers() {
         label: 'Reset password',
         onClick: () => navigate(`/admin/users/${employee.id}?edit=reset`),
       },
-      {
+      ...(isAdmin ? [] : [{
         key: 'toggle',
         label: employee.isActive ? 'Deactivate' : 'Activate',
         variant: employee.isActive ? 'danger' : 'default',
         onClick: () => toggleStatus(employee),
-      },
+      }]),
     ];
   }
 
   function handleRowClick(employee, event) {
     if (event.target.closest('button, a, [role="menu"], .employees-table__manage')) return;
+    if (isSystemAdminRow(employee)) return;
     goToEmployee(employee);
   }
 
   function handleRowKeyDown(employee, event) {
     if (event.target !== event.currentTarget) return;
+    if (isSystemAdminRow(employee)) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       goToEmployee(employee);
@@ -760,14 +991,24 @@ export default function AdminUsers() {
     });
   }
 
+  // Active is the default status: only a non-default status counts as filtering.
+  const hasNonDefaultStatus = Boolean(statusFilter && statusFilter !== 'true');
   const hasActiveFilters = Boolean(
-    search || statusFilter || departmentFilter || roleFilter || newThisMonthFilter,
+    search ||
+      hasNonDefaultStatus ||
+      departmentFilter ||
+      roleFilter ||
+      newThisMonthFilter ||
+      joiningFrom ||
+      joiningTo,
   );
   const newThisMonthHint = formatJoinedSinceHint(stats?.monthKey);
   // Filters combine (AND): with e.g. Status=Inactive also active, the table
   // is the intersection — spell that out so the stat count (116) vs the
   // table count (4) never looks like a data bug again.
-  const hasOtherFilters = Boolean(search || statusFilter || departmentFilter || roleFilter);
+  const hasOtherFilters = Boolean(
+    search || hasNonDefaultStatus || departmentFilter || roleFilter || joiningFrom || joiningTo,
+  );
   const pageSize = pagination?.limit ?? EMPLOYEE_PAGE_SIZE;
 
   return (
@@ -787,8 +1028,44 @@ export default function AdminUsers() {
 
               const value = stats?.[card.statKey];
 
-              const isSelected =
-                card.key === 'newThisMonth' && newThisMonthFilter;
+              // Selected = the card the user last clicked. Falls back to the
+              // filter-set predicate when the view was hand-tuned instead
+              // (dropdowns/search/dates, or fresh load with restored filters).
+              // Default landing is the Active view; Total shows that same
+              // Active list but keeps TOTAL lit via the explicit override.
+              const isAllView =
+                !newThisMonthFilter &&
+                statusFilter === '' &&
+                !search &&
+                !departmentFilter &&
+                !roleFilter &&
+                !joiningFrom &&
+                !joiningTo;
+              const predicateSelected =
+                card.key === 'newThisMonth'
+                  ? newThisMonthFilter
+                  : card.key === 'active'
+                    ? !newThisMonthFilter &&
+                      statusFilter === 'true' &&
+                      !search &&
+                      !departmentFilter &&
+                      !roleFilter &&
+                      !joiningFrom &&
+                      !joiningTo
+                    : card.key === 'inactive'
+                      ? !newThisMonthFilter &&
+                        statusFilter === 'false' &&
+                        !search &&
+                        !departmentFilter &&
+                        !roleFilter &&
+                        !joiningFrom &&
+                        !joiningTo
+                      : card.key === 'total'
+                        ? isAllView
+                        : false;
+              const isSelected = selectedStat
+                ? card.key === selectedStat
+                : predicateSelected;
 
               const cardClassName = [
                 'employees-stat card employees-stat--clickable surface--clickable',
@@ -834,81 +1111,109 @@ export default function AdminUsers() {
       <section className="employees-panel card card--table">
         <div className="employees-toolbar card__toolbar">
           <div className="employees-toolbar__filters filter-bar">
-            <SearchInput
-              className="filter-bar__search employees-toolbar__search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search employee name, code…"
-              ariaLabel="Search employees"
-              onEnter={() =>
-                loadEmployees({
-                  query: search,
-                  nextPage: 1,
-                  nextStatus: statusFilter,
-                  nextDepartment: departmentFilter,
-                  nextNewThisMonth: newThisMonthFilter,
-                })
-              }
-            />
+            <div className="employees-toolbar__group employees-toolbar__group--filters">
+              <SearchInput
+                className="filter-bar__search employees-toolbar__search"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setSelectedStat(null); }}
+                placeholder="Search employee name, code…"
+                ariaLabel="Search employees"
+                onEnter={() => {
+                  // Enter fetches immediately; suppress the matching debounced
+                  // echo so it doesn't refetch the same query.
+                  suppressDebouncedQueryRef.current = search;
+                  loadEmployees({
+                    query: search,
+                    nextPage: 1,
+                    nextStatus: statusFilter,
+                    nextDepartment: departmentFilter,
+                    nextRole: roleFilter,
+                    nextNewThisMonth: newThisMonthFilter,
+                    nextJoiningFrom: joiningFrom,
+                    nextJoiningTo: joiningTo,
+                  });
+                }}
+              />
 
-            {canFilterByDepartment && (
+              {canFilterByDepartment ? (
+                <label className="field-inline filter-bar__field employees-toolbar__field">
+                  <span className="label">Department</span>
+                  <SelectField
+                    value={departmentFilter}
+                    onChange={handleDepartmentChange}
+                    options={departmentOptions}
+                    aria-label="Department filter"
+                  />
+                </label>
+              ) : null}
+
               <label className="field-inline filter-bar__field employees-toolbar__field">
-                <span className="label">Department</span>
+                <span className="label">Role</span>
                 <SelectField
-                  value={departmentFilter}
-                  onChange={handleDepartmentChange}
-                  options={departmentOptions}
-                  aria-label="Department filter"
+                  value={roleFilter}
+                  onChange={handleRoleChange}
+                  options={roleOptions}
+                  aria-label="Role filter"
                 />
               </label>
-            )}
 
-            <label className="field-inline filter-bar__field employees-toolbar__field">
-              <span className="label">Role</span>
-              <SelectField
-                value={roleFilter}
-                onChange={handleRoleChange}
-                options={roleOptions}
-                aria-label="Role filter"
-              />
-            </label>
+              <label className="field-inline filter-bar__field employees-toolbar__field">
+                <span className="label">Status</span>
+                <SelectField
+                  value={statusFilter}
+                  onChange={handleStatusChange}
+                  options={STATUS_OPTIONS}
+                  aria-label="Status filter"
+                />
+              </label>
 
-            <label className="field-inline filter-bar__field employees-toolbar__field">
-              <span className="label">Status</span>
-              <SelectField
-                value={statusFilter}
-                onChange={handleStatusChange}
-                options={STATUS_OPTIONS}
-                aria-label="Status filter"
-              />
-            </label>
+              <label className="field-inline filter-bar__field employees-toolbar__field">
+                <span className="label">Joined from</span>
+                <DateField
+                  value={joiningFrom}
+                  onChange={handleJoiningFromChange}
+                  aria-label="Filter by joining date from"
+                />
+              </label>
 
-            {hasActiveFilters ? (
-              <div className="filter-bar__field employees-toolbar__clear">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
-                  Clear filters
-                </button>
-              </div>
-            ) : null}
+              <label className="field-inline filter-bar__field employees-toolbar__field">
+                <span className="label">Joined to</span>
+                <DateField
+                  value={joiningTo}
+                  onChange={handleJoiningToChange}
+                  aria-label="Filter by joining date to"
+                />
+              </label>
+            </div>
 
-            <div className="employees-toolbar__editcol">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={openColumnEditor}
-              >
-                Edit columns
-              </button>
-              {canWriteUsers ? (
-                <Link to="/admin/users/register" className="btn btn-primary btn-sm">
-                  + Add Employee
-                </Link>
+            <div className="employees-toolbar__group employees-toolbar__group--actions">
+              {hasActiveFilters ? (
+                <div className="filter-bar__field employees-toolbar__clear">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={clearFilters}>
+                    Clear filters
+                  </button>
+                </div>
               ) : null}
+
+              <div className="employees-toolbar__editcol">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={openColumnEditor}
+                >
+                  Edit columns
+                </button>
+                {canAddEmployee ? (
+                  <Link to="/admin/users/register" className="btn btn-primary btn-sm">
+                    + Add Employee
+                  </Link>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
 
-        {listError ? <div className="alert alert--error">{listError}</div> : null}
+          {listError ? <div className="alert alert--error">{listError}</div> : null}
         {columnsError ? <div className="alert alert--error">{columnsError}</div> : null}
 
         {newThisMonthFilter ? (
@@ -925,14 +1230,14 @@ export default function AdminUsers() {
           <EmptyState
             icon={EMPTY_ICONS.users}
             title={
-              newThisMonthFilter && !search && !statusFilter && !departmentFilter
+              newThisMonthFilter && !hasOtherFilters
                 ? 'No new employees this month'
                 : hasActiveFilters
                   ? 'No employees match these filters'
                   : 'No employees yet'
             }
             description={
-              newThisMonthFilter && !search && !statusFilter && !departmentFilter
+              newThisMonthFilter && !hasOtherFilters
                 ? `No employees were registered ${newThisMonthHint.toLowerCase()}.`
                 : hasActiveFilters
                   ? 'Try adjusting search or filters, or clear them to browse the full directory.'
@@ -941,11 +1246,11 @@ export default function AdminUsers() {
             action={
               hasActiveFilters ? (
                 <button type="button" className="btn btn-primary btn-sm" onClick={clearFilters}>
-                  {newThisMonthFilter && !search && !statusFilter && !departmentFilter
+                  {newThisMonthFilter && !hasOtherFilters
                     ? 'Show all employees'
                     : 'Clear filters'}
                 </button>
-              ) : !hasActiveFilters && canWriteUsers ? (
+              ) : !hasActiveFilters && canAddEmployee ? (
                 <Link to="/admin/users/register" className="btn btn-primary btn-sm">
                   Register employee
                 </Link>
@@ -961,8 +1266,9 @@ export default function AdminUsers() {
                     <th scope="col" className="employees-table__col-row-num">
                       #
                     </th>
-                    {isColumnVisible('name') && <th>Name</th>}
-                    {isColumnVisible('email') && <th>Email</th>}
+                        {isColumnVisible('name') && <th>Name</th>}
+                        {isColumnVisible('email') && <th>Email</th>}
+                        {isColumnVisible('employeeCode') && <th>Emp code</th>}
                     {isColumnVisible('mobile') && <th>Mobile</th>}
                     {isColumnVisible('department') && <th>Department</th>}
                     {isColumnVisible('designation') && <th>Designation</th>}
@@ -975,6 +1281,7 @@ export default function AdminUsers() {
                     {isColumnVisible('managerDepartments') && <th>Manager dept</th>}
                     {isColumnVisible('status') && <th>Status</th>}
                     {isColumnVisible('lastLogin') && <th>Last login</th>}
+                    {isColumnVisible('updatedAt') && <th>Updated at</th>}
                     <th className="cell-actions-col cell-actions-col--text">Actions</th>
                   </tr>
                 </thead>
@@ -1001,13 +1308,22 @@ export default function AdminUsers() {
                         </td>
                         {isColumnVisible('name') && (
                           <td data-label="Name" className="employees-table__name">
-                            <Link
-                              to={`/admin/users/${employee.id}`}
-                              className="table-link employees-table__name-link"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              {employee.name}
-                            </Link>
+                            {isSystemAdminRow(employee) ? (
+                              <span
+                                className="employees-table__name-link"
+                                title={SYSTEM_ADMIN_LOCKED_TITLE}
+                              >
+                                {employee.name}
+                              </span>
+                            ) : (
+                              <Link
+                                to={`/admin/users/${employee.id}`}
+                                className="table-link employees-table__name-link"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                {employee.name}
+                              </Link>
+                            )}
                           </td>
                         )}
                         {isColumnVisible('email') && (
@@ -1018,6 +1334,9 @@ export default function AdminUsers() {
                           >
                             {employee.email || '—'}
                           </td>
+                        )}
+                        {isColumnVisible('employeeCode') && (
+                          <td data-label="Emp code">{employee.employeeCode || '—'}</td>
                         )}
                         {isColumnVisible('mobile') && (
                           <td data-label="Mobile">{employee.mobile || '—'}</td>
@@ -1057,6 +1376,11 @@ export default function AdminUsers() {
                         {isColumnVisible('lastLogin') && (
                           <td data-label="Last login" className="cell-datetime">
                             {lastLoginLabel(employee.lastLoginAt)}
+                          </td>
+                        )}
+                        {isColumnVisible('updatedAt') && (
+                          <td data-label="Updated at" className="cell-datetime">
+                            {lastLoginLabel(employee.updatedAt)}
                           </td>
                         )}
                         <td

@@ -7,6 +7,7 @@ export default function ProtectedRoute({
   permission,
   anyPermission,
   allPermissions,
+  teamCreator,
   role,
   portal,
 }) {
@@ -63,8 +64,8 @@ export default function ProtectedRoute({
     return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
   }
 
-  if (permission || anyPermission || allPermissions?.length) {
-    if (!canAccessRoute(user, { permission, anyPermission, allPermissions })) {
+  if (permission || anyPermission || allPermissions?.length || teamCreator) {
+    if (!canAccessRoute(user, { permission, anyPermission, allPermissions, teamCreator })) {
       return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
     }
   }

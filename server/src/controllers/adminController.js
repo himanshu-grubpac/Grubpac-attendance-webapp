@@ -61,6 +61,7 @@ import {
   assertDepartmentInAccessibleSet,
   assertManagedDepartmentsAccessible,
   isUserInTeamScope,
+  isUserVisibleToActor,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
 import {
@@ -97,6 +98,7 @@ function assertEmployeeDateRange(joiningDate, endingDate) {
   };
 }
 import { auditActionMatchers, auditAllActionMatchers, auditRequest, auditRequestSync, getRequestAuditContext, resolveAuditDisplayEmail, resolveAuditDisplayRole, resolveAuditModule } from '../utils/auditLog.js';
+import { formatDeviceFullLabel, formatDeviceOwnerLabel, getBrowserFromUserAgent, getDeviceTypeFromUserAgent, getOsFromUserAgent } from '../utils/deviceType.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.js';
 const attendanceQuerySchema = paginationSchema
@@ -130,14 +132,110 @@ const employeeListQuerySchema = paginationSchema.extend({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'createdAfter must be YYYY-MM-DD.')
     .optional(),
+  joiningFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'joiningFrom must be YYYY-MM-DD.')
+    .optional(),
+  joiningTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'joiningTo must be YYYY-MM-DD.')
+    .optional(),
 });
 
-async function buildEmployeeDirectoryQuery() {
+/**
+ * Reporting-manager team creation: Employee role only, always reporting to
+ * the RM themself, department restricted to the RM's managed departments
+ * (enforced again inside createEmployee via departmentScope). Privileged
+ * fields are stripped so a scoped creator can never mint managers, hand out
+ * team scopes, or set delegates/activity flags.
+ */
+async function createScopedTeamEmployee(req, body) {
+  const actorSlug = req.user?.roleId?.slug
+    ?? (await Role.findById(req.user?.roleId)?.select('slug').lean())?.slug;
+  if (actorSlug !== SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
+    const error = new Error('Only reporting managers can add team members without full user access.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const employeeRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.EMPLOYEE }).select('_id').lean();
+  if (!employeeRole) {
+    const error = new Error('Employee role is not configured.');
+    error.statusCode = 500;
+    throw error;
+  }
+  if (body.roleId && String(body.roleId) !== String(employeeRole._id)) {
+    const error = new Error('Reporting managers can only create Employee accounts.');
+    error.statusCode = 403;
+    throw error;
+  }
+  body.roleId = employeeRole._id.toString();
+  const managedIds = await getActorManagedDepartmentIds(req.user);
+  if (managedIds.length === 0) {
+    const error = new Error('No managed departments are assigned to your account. Ask an admin to assign one before adding team members.');
+    error.statusCode = 403;
+    throw error;
+  }
+  // Stringify: the input schema validates ObjectIds in string form (JSON
+  // request bodies always arrive as strings; direct ObjectIds would fail).
+  body.reportingManagerId = req.user._id.toString();
+  body.managedDepartmentIds = [];
+  body.delegateApproverId = null;
+  body.isActive = true;
+  return createEmployee(body, req.user._id, {
+    departmentScope: { all: false, departmentIds: managedIds },
+  });
+}
+
+/**
+ * Admin-role check that works whether roleId is populated or raw: a populated
+ * role document's bare toString() never equals the id, so compare _id first.
+ */
+function isAdminRoleHolder(userDoc, adminRole) {
+  if (!adminRole) return false;
+  const roleId =
+    userDoc?.roleId?._id?.toString() ?? userDoc?.roleId?.toString?.() ?? null;
+  return roleId !== null && roleId === adminRole._id.toString();
+}
+
+/**
+ * Only role administrators may grant the Admin system role (single register
+ * + profile role changes): holders of the Admin role slug or the
+ * roles.manage permission. The register/edit pages show the option to the
+ * same set, and this backstops direct API calls. (A roles.manage holder can
+ * already craft equivalent power via custom roles, so excluding them here
+ * would only produce 403-on-submit dead ends.)
+ */
+async function assertCanAssignRole(actor, roleId, permissions = []) {
+  if (!roleId) return;
+  const role = await Role.findById(roleId).select('slug').lean();
+  if (role?.slug !== SYSTEM_ROLE_SLUGS.ADMIN) return;
+  if (hasPermission(permissions, PERMISSIONS.ROLES_MANAGE)) return;
+  const actorSlug = actor?.roleId?.slug
+    ?? (await Role.findById(actor?.roleId)?.select('slug').lean())?.slug;
+  if (actorSlug !== SYSTEM_ROLE_SLUGS.ADMIN) {
+    const error = new Error('Only admins can assign the Admin role.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
+  if (includeAdmins) return {};
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
 }
 
-async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter }) {
+async function buildEmployeeDirectoryQueryWithRoleFilter(requestedRoleId) {
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
+  const adminRoleId = adminRole?._id?.toString() ?? null;
+  // Admins are listed when the role filter is All — or when the Admin role
+  // itself is selected (previously that combination matched nothing).
+  const includeAdmins = !requestedRoleId || (adminRoleId && String(requestedRoleId) === adminRoleId);
+  if (includeAdmins) return {};
+  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+}
+
+async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo }) {
   if (typeof isActive === 'boolean') {
     query.isActive = isActive;
   }
@@ -157,17 +255,51 @@ async function applyEmployeeListFilters(query, { search, isActive, departmentId,
     }
   }
 
+  if (joiningFrom || joiningTo) {
+    const range = {};
+    if (joiningFrom) {
+      const fromDay = parseDateInputAsISTDay(joiningFrom);
+      if (fromDay) range.$gte = startOfDayIST(fromDay);
+    }
+    if (joiningTo) {
+      const toDay = parseDateInputAsISTDay(joiningTo);
+      if (toDay) range.$lte = endOfDayIST(toDay);
+    }
+    if (Object.keys(range).length > 0) {
+      query.joiningDate = range;
+    }
+  }
+
   if (search) {
-    const regex = new RegExp(escapeRegex(search), 'i');
-    const matchingDepts = await Department.find({ name: regex }).select('_id').lean();
+    const trimmed = search.trim();
+    // Token-AND matching: every whitespace-separated token must match
+    // name/email/mobile/code (partial, case-insensitive), so "Anand Abhishek"
+    // finds "Abhishek Anand" and single keystrokes narrow live.
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    const tokenClauses = tokens.map((token) => {
+      const tokenRegex = new RegExp(escapeRegex(token), 'i');
+      return {
+        $or: [
+          { name: tokenRegex },
+          { firstName: tokenRegex },
+          { lastName: tokenRegex },
+          { email: tokenRegex },
+          { mobile: tokenRegex },
+          { employeeCode: tokenRegex },
+        ],
+      };
+    });
+    const fullRegex = new RegExp(escapeRegex(trimmed), 'i');
+    const matchingDepts = await Department.find({ name: fullRegex }).select('_id').lean();
     const deptIds = matchingDepts.map((d) => d._id);
-    query.$or = [
-      { name: regex },
-      { email: regex },
-      { mobile: regex },
-      { employeeCode: regex },
-      ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
-    ];
+    query.$and = query.$and ?? [];
+    query.$and.push({
+      $or: [
+        // All tokens match (single token behaves exactly like before).
+        ...(tokenClauses.length > 1 ? [{ $and: tokenClauses }] : tokenClauses),
+        ...(deptIds.length > 0 ? [{ departmentId: { $in: deptIds } }] : []),
+      ],
+    });
   }
 
   return query;
@@ -217,10 +349,15 @@ export async function registerEmployee(req, res) {
     return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
   }
 
-  const employee = await createEmployee(body, req.user._id, {
-    actor: req.user,
-    permissions: req.userPermissions,
-  });
+  await assertCanAssignRole(req.user, body.roleId, req.userPermissions);
+
+  const canWriteAll = hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE);
+  const employee = canWriteAll
+    ? await createEmployee(body, req.user._id, {
+        actor: req.user,
+        permissions: req.userPermissions,
+      })
+    : await createScopedTeamEmployee(req, body);
 
   let credentialsEmail = null;
   if (sendCredentialsEmail && tempPassword) {
@@ -248,6 +385,7 @@ export async function registerEmployee(req, res) {
     reportingManagerId: employee.reportingManagerId,
     mustChangePassword: sendCredentialsEmail,
     credentialsEmailSent: credentialsEmail?.sent ?? null,
+    scopedCreation: !canWriteAll,
   });
   res.status(201).json({
     employee: { ...employee, mustChangePassword: sendCredentialsEmail },
@@ -256,7 +394,7 @@ export async function registerEmployee(req, res) {
 }
 
 export async function listEmployees(req, res) {
-  const { page, limit, search, isActive, departmentId, roleId, createdAfter } =
+  const { page, limit, search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo } =
     employeeListQuerySchema.parse(req.query);
 
   if (departmentId) {
@@ -267,13 +405,21 @@ export async function listEmployees(req, res) {
     }
   }
 
+  const now = new Date();
+  await User.updateMany(
+    { endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
+
   const query = await applyTeamScopeToEmployeeQuery(
-    await applyEmployeeListFilters(await buildEmployeeDirectoryQuery(), {
+    await applyEmployeeListFilters(await buildEmployeeDirectoryQueryWithRoleFilter(roleId), {
       search,
       isActive,
       departmentId,
       roleId,
       createdAfter,
+      joiningFrom,
+      joiningTo,
     }),
     req,
   );
@@ -313,6 +459,8 @@ pagination: {
 
 const teamTodayQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
+  departmentId: objectIdSchema.optional(),
+  roleId: objectIdSchema.optional(),
 });
 
 export async function getTeamTodayStatusAdmin(req, res) {
@@ -322,21 +470,59 @@ export async function getTeamTodayStatusAdmin(req, res) {
     page: parsed.page,
     limit: parsed.limit,
     search: parsed.search ?? '',
+    departmentId: parsed.departmentId ?? undefined,
+    roleId: parsed.roleId ?? undefined,
   });
   res.json(result);
 }
 
 export async function getEmployeeStats(req, res) {
-  const baseQuery = await applyTeamScopeToEmployeeQuery(await buildEmployeeDirectoryQuery(), req);
+  const baseQuery = await applyTeamScopeToEmployeeQuery(
+    await buildEmployeeDirectoryQuery({ includeAdmins: true }),
+    req,
+  );
   const monthKey = getISTDateInputValue().slice(0, 7);
   const { start: monthStart } = parseMonthInputAsISTRange(monthKey);
 
-  const [total, active, inactive, newThisMonth] = await Promise.all([
+  const [total, active, inactive, newThisMonth, oldestJoining, roleBreakdown] = await Promise.all([
     User.countDocuments(baseQuery),
     User.countDocuments({ ...baseQuery, isActive: true }),
     User.countDocuments({ ...baseQuery, isActive: false }),
     User.countDocuments({ ...baseQuery, createdAt: { $gte: monthStart } }),
+    User.findOne({ ...baseQuery, joiningDate: { $ne: null } })
+      .sort({ joiningDate: 1 })
+      .select('joiningDate')
+      .lean(),
+    User.aggregate([
+      { $match: baseQuery },
+      { $group: { _id: '$roleId', count: { $sum: 1 } } },
+      {
+        $lookup: {
+          from: 'roles',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'role',
+        },
+      },
+      { $unwind: { path: '$role', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          roleId: { $toString: '$_id' },
+          slug: '$role.slug',
+          name: '$role.name',
+          count: 1,
+        },
+      },
+      { $sort: { count: -1 } },
+    ]),
   ]);
+
+  // Lower bound for every year dropdown (dynamic §8 rule): oldest joining
+  // year in scope, null when no dated employees exist.
+  const oldestJoiningYear = oldestJoining?.joiningDate
+    ? Number(getISTDateInputValue(new Date(oldestJoining.joiningDate)).slice(0, 4))
+    : null;
 
   res.json({
     stats: {
@@ -345,6 +531,8 @@ export async function getEmployeeStats(req, res) {
       inactive,
       newThisMonth,
       monthKey,
+      oldestJoiningYear: Number.isInteger(oldestJoiningYear) ? oldestJoiningYear : null,
+      roleBreakdown: Array.isArray(roleBreakdown) ? roleBreakdown : [],
     },
   });
 }
@@ -355,6 +543,13 @@ export async function getEmployee(req, res) {
     return res.status(400).json({ message: 'Invalid employee identifier.' });
   }
 
+  // Auto-deactivate if ending date has passed.
+  const now = new Date();
+  await User.updateMany(
+    { _id: idResult.data, endingDate: { $lte: now }, isActive: true },
+    { $set: { isActive: false } },
+  );
+
   const employee = await User.findById(idResult.data).populate(USER_POPULATE_FIELDS);
 
   if (!employee) {
@@ -362,7 +557,7 @@ export async function getEmployee(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(404).json({ message: 'Employee not found.' });
   }
 
@@ -440,8 +635,9 @@ export async function listManagers(req, res) {
   }
 
   const managers = await User.find(query)
-    .select('name email roleId employeeCode')
+    .select('name email roleId employeeCode managedDepartmentIds')
     .populate('roleId', 'name slug')
+    .populate('managedDepartmentIds', 'name code')
     .sort({ name: 1 })
     .limit(limit);
 
@@ -452,6 +648,11 @@ export async function listManagers(req, res) {
       email: manager.email,
       employeeCode: manager.employeeCode ?? null,
       roleName: manager.roleId?.name ?? null,
+      managedDepartments: (manager.managedDepartmentIds || []).map((d) => ({
+        id: d._id.toString(),
+        name: d.name,
+        code: d.code,
+      })),
     })),
   });
 }
@@ -505,7 +706,7 @@ export async function updateEmployee(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot modify the system admin account here.' });
   }
 
@@ -564,6 +765,7 @@ export async function updateEmployee(req, res) {
         return res.status(403).json({ message: 'You do not have permission to assign roles to users.' });
       }
     }
+    await assertCanAssignRole(req.user, parsed.roleId, req.userPermissions);
     const role = await resolveRole(parsed.roleId);
     employee.roleId = role._id;
     employee.role = legacyRoleFromSlug(role.slug);
@@ -654,6 +856,14 @@ export async function updateEmployee(req, res) {
     employee.managedDepartmentIds = await resolveManagedDepartments(parsed.managedDepartmentIds);
   }
 
+  // Auto-deactivate if ending date is in the past.
+  const effectiveEndingDate = parsed.endingDate !== undefined
+    ? employee.endingDate
+    : employee.endingDate;
+  if (effectiveEndingDate && new Date(effectiveEndingDate) < new Date()) {
+    employee.isActive = false;
+  }
+
   await employee.save();
   await employee.populate(USER_POPULATE_FIELDS);
 
@@ -706,7 +916,7 @@ export async function resetEmployeePassword(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset password for the system admin here.' });
   }
 
@@ -748,7 +958,7 @@ export async function resetEmployeePin(req, res) {
   }
 
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
-  if (adminRole && employee.roleId?.toString?.() === adminRole._id.toString()) {
+  if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
   }
 
@@ -784,6 +994,62 @@ export async function downloadEmployeeTemplate(req, res) {
   res.end(buffer);
 }
 
+/**
+ * Managed department IDs for an actor, as strings. Local fallback until
+ * teamScopeService exposes this resolver — same contract the bulk scope
+ * check below relies on (empty array = unrestricted).
+ */
+async function getActorManagedDepartmentIds(actor) {
+  if (!actor?._id) return [];
+  const doc = await User.findById(actor._id).select('managedDepartmentIds').lean();
+  return (doc?.managedDepartmentIds ?? []).map((id) => id.toString());
+}
+
+/**
+ * Validate that all departments referenced in the bulk upload rows are within
+ * the actor's department scope. Returns { rejected, message, warnings }.
+ */
+async function validateBulkDepartmentScope(rows, actor, permissions) {
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  if (canReadAll) return { rejected: false, warnings: [] };
+
+  const managedIds = await getActorManagedDepartmentIds(actor);
+  if (managedIds.length === 0) {
+    // No managed departments — allowed for roles without department scope (e.g. plain RM).
+    return { rejected: false, warnings: [] };
+  }
+
+  const managedSet = new Set(managedIds);
+
+  // Collect unique department codes from the file rows.
+  const deptCodes = new Set();
+  for (const row of rows) {
+    const code = String(row.data.departmentCode ?? row.data.department ?? '').trim().toUpperCase();
+    if (code) deptCodes.add(code);
+  }
+  if (deptCodes.size === 0) return { rejected: false, warnings: [] };
+
+  // Look up existing departments.
+  const existing = await Department.find({ code: { $in: [...deptCodes] } }).select('code _id isActive').lean();
+  const deptByCode = new Map(existing.map((d) => [d.code, d]));
+
+  const warnings = [];
+  for (const code of deptCodes) {
+    const dept = deptByCode.get(code);
+    if (!dept) {
+      return { rejected: true, message: `Department "${code}" does not exist. Create it before uploading.` };
+    }
+    if (!managedSet.has(dept._id.toString())) {
+      return { rejected: true, message: `You do not have scope for department "${code}". Only your assigned departments are allowed.` };
+    }
+    if (!dept.isActive) {
+      warnings.push(`Department "${code}" is inactive. Employees will be assigned but may not appear in active views.`);
+    }
+  }
+
+  return { rejected: false, warnings };
+}
+
 export async function bulkUploadEmployees(req, res) {
   if (!req.file) {
     return res.status(400).json({ message: 'Excel file is required.' });
@@ -794,13 +1060,22 @@ export async function bulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
+  // Department scope validation: ensure all departments in the file are within the actor's scope.
+  const scopeCheck = await validateBulkDepartmentScope(rows, req.user, req.userPermissions);
+  if (scopeCheck.rejected) {
+    return res.status(403).json({ message: scopeCheck.message });
+  }
+
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id, {
-    actor: req.user,
-    permissions: req.userPermissions,
+    actorId: req.user._id.toString(),
+    actorPermissions: req.userPermissions ?? [],
   });
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
+  if (scopeCheck.warnings?.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...scopeCheck.warnings];
   }
 
   const changes = result.results
@@ -843,14 +1118,23 @@ export async function previewBulkUploadEmployees(req, res) {
     return res.status(400).json({ message: 'No employee rows found in file.' });
   }
 
+  // Department scope validation.
+  const scopeCheck = await validateBulkDepartmentScope(rows, req.user, req.userPermissions);
+  if (scopeCheck.rejected) {
+    return res.status(403).json({ message: scopeCheck.message });
+  }
+
   const fileWarnings = Array.isArray(rows.warnings) ? rows.warnings : [];
   const result = await importEmployeesFromRowsUpsert(rows, req.user._id, {
     dryRun: true,
-    actor: req.user,
-    permissions: req.userPermissions,
+    actorId: req.user._id.toString(),
+    actorPermissions: req.userPermissions ?? [],
   });
   if (fileWarnings.length > 0) {
     result.warnings = [...(result.warnings ?? []), ...fileWarnings];
+  }
+  if (scopeCheck.warnings?.length > 0) {
+    result.warnings = [...(result.warnings ?? []), ...scopeCheck.warnings];
   }
 
   res.json(result);
@@ -1092,10 +1376,14 @@ export async function resetQuarterWarnings(req, res) {
 
   auditRequest(req, 'quarter_warnings_reset', {
     adminId: req.user._id.toString(),
+    roleId: req.user?.roleId?._id?.toString?.() ?? req.user?.roleId?.toString?.() ?? undefined,
     userIds: result.userIds,
     quarter: result.quarter?.label ?? null,
     clearedWarnings: result.clearedWarnings,
     reclassifiedLv: result.reclassifiedLv,
+    clearedRecordIds: result.clearedRecordIds ?? [],
+    clearedRecordIdsTruncated: result.clearedRecordIdsTruncated ?? false,
+    reason: 'manual_reset',
   });
 
   res.json(result);
@@ -1239,7 +1527,28 @@ export function resolveAuditRecordId(log) {
   return null;
 }
 
-function mapAuditLogResponse(log, conflict) {
+/**
+ * Batch-resolves actor display names for a page of audit logs (one query).
+ * Returns a Map of userId string → name. Unknown/deleted users are absent.
+ */
+async function resolveAuditActorNames(logs) {
+  const ids = [
+    ...new Set(
+      (logs ?? [])
+        .map((log) => log?.userId?.toString?.() ?? null)
+        .filter(Boolean),
+    ),
+  ];
+  if (ids.length === 0) return new Map();
+  const users = await User.find({ _id: { $in: ids } })
+    .select('name')
+    .lean();
+  return new Map(
+    users.map((user) => [user._id.toString(), user.name ?? null]),
+  );
+}
+
+function mapAuditLogResponse(log, conflict, actorName = null) {
   const metadata = log.metadata ?? null;
   return {
     id: log._id.toString(),
@@ -1247,6 +1556,10 @@ function mapAuditLogResponse(log, conflict) {
     userId: log.userId?.toString() ?? null,
     email: log.email ?? null,
     role: log.role ?? null,
+    actorName: actorName ?? null,
+    deviceType: getDeviceTypeFromUserAgent(log.userAgent),
+    browser: getBrowserFromUserAgent(log.userAgent),
+    os: getOsFromUserAgent(log.userAgent),
     ip: log.ip ?? null,
     deviceId: log.deviceId ?? null,
     userAgent: log.userAgent ?? null,
@@ -1427,7 +1740,11 @@ function flattenAuditMetadata(metadata) {
   }
 }
 
-export function auditLogExportRows(logs) {
+export function auditLogExportRows(logs, actorNames = new Map()) {
+  const actorNameFor = (log) => {
+    const id = log?.userId?.toString?.() ?? null;
+    return (id && actorNames.get(id)) || null;
+  };
   return logs.map((log) => ({
     Timestamp: log.timestamp ? new Date(log.timestamp).toISOString() : '',
     Action: log.action ?? '',
@@ -1444,6 +1761,12 @@ export function auditLogExportRows(logs) {
       log.metadata?.next ?? log.metadata?.changes ?? log.metadata?.after,
     ),
     IP: log.ip ?? 'Not recorded',
+    Device:
+      formatDeviceFullLabel(actorNameFor(log), {
+        deviceType: getDeviceTypeFromUserAgent(log.userAgent),
+        browser: getBrowserFromUserAgent(log.userAgent),
+        os: getOsFromUserAgent(log.userAgent),
+      }) ?? 'Not recorded',
     DeviceId: log.deviceId ?? 'Not recorded',
   }));
 }
@@ -1459,7 +1782,8 @@ export async function exportAuditLogs(req, res) {
     const conflictMap = await enrichAuditLogsWithConflicts(logs);
     logs = logs.filter((log) => conflictMap.get(log._id.toString())?.ipConflict);
   }
-  const rows = auditLogExportRows(logs).map((row) =>
+  const actorNames = await resolveAuditActorNames(logs);
+  const rows = auditLogExportRows(logs, actorNames).map((row) =>
     redactAuditExportRow(row, req.userPermissions),
   );
   const stamp = getISTDateInputValue().slice(0, 10);
@@ -1554,6 +1878,7 @@ export async function listAuditLogs(req, res) {
     total = conflictLogs.length;
     logs = conflictLogs.slice(skip, skip + limit);
     const conflictMapForPage = await enrichAuditLogsWithConflicts(logs);
+    const actorNames = await resolveAuditActorNames(logs);
 
     res.json({
       logs: logs.map((log) => {
@@ -1561,7 +1886,10 @@ export async function listAuditLogs(req, res) {
           ipConflict: false,
           conflictWithUsers: [],
         };
-        return redactAuditLogForCaller(mapAuditLogResponse(log, conflict), req.userPermissions);
+        return redactAuditLogForCaller(
+          mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null),
+          req.userPermissions,
+        );
       }),
       pagination: {
         page,
@@ -1580,6 +1908,7 @@ export async function listAuditLogs(req, res) {
   ]);
 
   const conflictMap = await enrichAuditLogsWithConflicts(logs);
+  const actorNames = await resolveAuditActorNames(logs);
 
   res.json({
     logs: logs.map((log) => {
@@ -1587,7 +1916,10 @@ export async function listAuditLogs(req, res) {
         ipConflict: false,
         conflictWithUsers: [],
       };
-      return redactAuditLogForCaller(mapAuditLogResponse(log, conflict), req.userPermissions);
+      return redactAuditLogForCaller(
+        mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null),
+        req.userPermissions,
+      );
     }),
     pagination: {
       page,

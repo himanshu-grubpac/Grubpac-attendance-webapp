@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
@@ -7,18 +7,40 @@ import { getErrorMessage, salaryApi } from '../../services/api.js';
 import {
   formatINRCurrency,
   formatISTDate,
+  getISTMonthInputValue,
 } from '../../utils/datetime.js';
-import {
-  buildSalaryMonthOptions,
-  buildSalaryYearOptions,
-  clampMonthPartForYear,
-  clampMonthValue,
-  clampYearToCurrentIst,
-  getTodayMonthIst,
-} from '../../components/MonthField.jsx';
+import { getTodayMonthIst } from '../../components/MonthField.jsx';
 import { SalaryHistorySection } from '../admin/SalaryAuditSections.jsx';
-import { usePortalSync } from '../../hooks/usePortalSync.js';
-import { PORTAL_TOPICS } from '../../utils/portalSync.js';
+
+function currentIstYear() {
+  return Number(getTodayMonthIst().split('-')[0]);
+}
+
+function getJoinYearFromDate(joiningDate) {
+  if (!joiningDate) return null;
+  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
+  const match = dateStr.match(/^(\d{4})/);
+  return match ? Number(match[1]) : null;
+}
+
+function buildYearOptions(minYear) {
+  const currentYear = currentIstYear();
+  const COMPANY_ESTABLISHED_YEAR = 2024;
+  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
+  const years = [];
+  for (let year = currentYear; year >= floor; year -= 1) {
+    years.push({ value: String(year), label: String(year) });
+  }
+  return years;
+}
+
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
+  value: String(index + 1).padStart(2, '0'),
+  label: new Intl.DateTimeFormat('en-IN', {
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(2020, index, 1))),
+}));
 
 function formatLopDate(entry) {
   if (typeof entry === 'string') return entry;
@@ -69,8 +91,8 @@ function MonthBreakdown({ summary, loading, error }) {
           <table className="kv-table">
             <tbody>
               <tr>
-                <th>Monthly salary (INR)</th>
-                <td data-label="Monthly salary (INR)">{formatINRCurrency(summary.monthlySalary)}</td>
+                <th>Gross salary (INR)</th>
+                <td data-label="Gross salary (INR)">{formatINRCurrency(summary.monthlySalary)}</td>
               </tr>
               {summary.salaryEffectiveFrom && (
                 <tr>
@@ -95,12 +117,8 @@ function MonthBreakdown({ summary, loading, error }) {
                 <td data-label="Payable days">{summary.payableDays}</td>
               </tr>
               <tr>
-                <th>Loss of pay (days)</th>
-                <td data-label="Loss of pay (days)">{summary.lopDays}</td>
-              </tr>
-              <tr>
-                <th>Paid days (out of 30)</th>
-                <td data-label="Paid days (out of 30)">{summary.paidDaysOutOf30 ?? '—'}</td>
+                <th>LOP days</th>
+                <td data-label="LOP days">{summary.lopDays}</td>
               </tr>
               <tr>
                 <th>LOP dates</th>
@@ -119,12 +137,12 @@ function MonthBreakdown({ summary, loading, error }) {
                 </td>
               </tr>
               <tr>
-                <th>Loss of pay till date (INR)</th>
-                <td data-label="Loss of pay till date (INR)">{formatINRCurrency(summary.lopDeduction)}</td>
+                <th>LOP amount (INR)</th>
+                <td data-label="LOP amount (INR)">{formatINRCurrency(summary.lopDeduction)}</td>
               </tr>
               <tr>
-                <th>Month-to-date payable (INR)</th>
-                <td data-label="Month-to-date payable (INR)">{formatINRCurrency(summary.payableEstimate)}</td>
+                <th>Net payable (INR)</th>
+                <td data-label="Net payable (INR)">{formatINRCurrency(summary.payableEstimate)}</td>
               </tr>
             </tbody>
           </table>
@@ -136,83 +154,40 @@ function MonthBreakdown({ summary, loading, error }) {
 
 export default function EmployeePayEstimate() {
   const { user } = useAuth();
-  const employeeBounds = useMemo(
-    () => ({
-      joiningDate: user?.joiningDate ?? null,
-      endingDate: user?.endingDate ?? null,
-    }),
-    [user?.joiningDate, user?.endingDate],
-  );
-  const initialPeriod = useMemo(() => {
-    const [year, month] = getTodayMonthIst().split('-');
-    const clamped = clampMonthValue(`${year}-${month}`, employeeBounds);
-    const [clampedYear, clampedMonth] = clamped.split('-');
-    return {
-      year: clampedYear,
-      month: clampedMonth,
-    };
-  }, [employeeBounds]);
-  const [yearFilter, setYearFilter] = useState(initialPeriod.year);
-  const [monthPartFilter, setMonthPartFilter] = useState(initialPeriod.month);
-  const yearOptions = useMemo(
-    () => buildSalaryYearOptions(employeeBounds),
-    [employeeBounds, yearFilter, monthPartFilter],
-  );
-  const monthOptions = useMemo(
-    () => buildSalaryMonthOptions(yearFilter, employeeBounds),
-    [employeeBounds, yearFilter],
-  );
+  const [yearFilter, setYearFilter] = useState(() => getISTMonthInputValue().split('-')[0]);
+  const [monthPartFilter, setMonthPartFilter] = useState(() => getISTMonthInputValue().split('-')[1]);
   const month = `${yearFilter}-${monthPartFilter}`;
-
-  useEffect(() => {
-    if (!user?.id) return;
-    const clamped = clampMonthValue(`${yearFilter}-${monthPartFilter}`, employeeBounds);
-    const [nextYear, nextMonth] = clamped.split('-');
-    if (nextYear !== yearFilter) {
-      setYearFilter(nextYear);
-    }
-    if (nextMonth !== monthPartFilter) {
-      setMonthPartFilter(nextMonth);
-    }
-  }, [user?.id, employeeBounds, yearFilter, monthPartFilter]);
-
-  const handleYearChange = (value) => {
-    const nextYear = clampYearToCurrentIst(value, employeeBounds);
-    setYearFilter(nextYear);
-    setMonthPartFilter((currentMonth) =>
-      clampMonthPartForYear(nextYear, currentMonth, employeeBounds),
-    );
-  };
 
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const loadSummary = useCallback(async () => {
+  const joinYear = getJoinYearFromDate(user?.joiningDate);
+  const yearOptions = useMemo(() => buildYearOptions(joinYear), [joinYear]);
+
+  useEffect(() => {
+    const yearNum = Number(yearFilter);
+    if (joinYear != null && Number.isFinite(yearNum) && yearNum < joinYear) {
+      setYearFilter(String(joinYear));
+    }
+  }, [joinYear, yearFilter]);
+
+  useEffect(() => {
     if (!user?.id) return;
 
     setLoading(true);
     setError('');
-    try {
-      const data = await salaryApi.getSummary({ month, userId: user.id });
-      setSummary(data.summary ?? null);
-    } catch (err) {
-      setSummary(null);
-      setError(getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [month, user?.id]);
-
-  useEffect(() => {
-    loadSummary();
-  }, [loadSummary]);
-
-  usePortalSync(loadSummary, {
-    topics: [PORTAL_TOPICS.PAYROLL],
-    userId: user?.id,
-    month,
-  });
+    salaryApi
+      .getSummary({ month, userId: user.id })
+      .then((data) => {
+        setSummary(data.summary ?? null);
+      })
+      .catch((err) => {
+        setSummary(null);
+        setError(getErrorMessage(err));
+      })
+      .finally(() => setLoading(false));
+  }, [user?.id, month]);
 
   return (
     <div className="page">
@@ -224,7 +199,7 @@ export default function EmployeePayEstimate() {
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={handleYearChange}
+                  onChange={setYearFilter}
                   options={yearOptions}
                   aria-label="Pay year"
                   disabled={loading}
@@ -232,7 +207,7 @@ export default function EmployeePayEstimate() {
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={monthOptions}
+                  options={MONTH_OPTIONS}
                   aria-label="Pay month"
                   disabled={loading}
                 />

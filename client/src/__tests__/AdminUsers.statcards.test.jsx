@@ -22,9 +22,17 @@ vi.mock('../services/api.js', () => {
   return {
     adminApi: {
       listEmployees: vi.fn((params = {}) => {
-        const filtered = params.isActive === undefined
+        let filtered = params.isActive === undefined
           ? all
           : all.filter((employee) => String(employee.isActive) === params.isActive);
+        if (params.search) {
+          const needle = String(params.search).toLowerCase();
+          filtered = filtered.filter(
+            (employee) =>
+              employee.name.toLowerCase().includes(needle) ||
+              employee.email.toLowerCase().includes(needle),
+          );
+        }
         const page = params.page ?? 1;
         const limit = params.limit ?? 10;
         const start = (page - 1) * limit;
@@ -115,8 +123,16 @@ describe('AdminUsers stat cards', () => {
     const user = userEvent.setup();
     setup();
     await waitFor(() => {
-      expect(footerText()).toMatch(/showing 10 of 15 employees/i);
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
     });
+
+    // Default landing is the Active view: Active card pressed, Total not.
+    expect(
+      screen.getByRole('button', { name: /^active\b/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: /total employees/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
 
     // Inactive card: filtered request + dropdown follow the card.
     await user.click(screen.getByRole('button', { name: /inactive/i }));
@@ -132,43 +148,63 @@ describe('AdminUsers stat cards', () => {
       expect(footerText()).toMatch(/showing 3 of 3 employees/i);
     });
 
-    // Total card after inactive: unfiltered request, dropdown back to All,
-    // and rows/total from the same response (never "10 of 5").
+    // Total card after inactive: back to the default Active list — request
+    // carries isActive 'true', dropdown shows Active, rows/total from the
+    // same response (never "10 of 5") — but the TOTAL card stays lit
+    // instead of Active.
     await user.click(screen.getByRole('button', { name: /total employees/i }));
     await waitFor(() => {
       expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
-        expect.not.objectContaining({ isActive: expect.anything() }),
+        expect.objectContaining({ isActive: 'true', page: 1 }),
       );
     });
     expect(
       screen.getByRole('combobox', { name: /status filter/i }),
-    ).toHaveTextContent('All');
+    ).toHaveTextContent('Active');
+    expect(
+      screen.getByRole('button', { name: /total employees/i }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: /^active\b/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
     await waitFor(() => {
-      expect(footerText()).toMatch(/showing 10 of 15 employees/i);
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
     });
   });
 
-  it('total card also clears search and department state', async () => {
+  it('inactive card clears leftover search so all inactive employees appear', async () => {
     const user = userEvent.setup();
     setup();
     await waitFor(() => {
-      expect(footerText()).toMatch(/showing 10 of 15 employees/i);
+      expect(footerText()).toMatch(/showing 10 of 12 employees/i);
     });
 
-    await user.click(screen.getByRole('button', { name: /inactive/i }));
+    // Leftover search text that matches nothing.
+    await user.type(screen.getByLabelText(/search employees/i), 'zzz-no-match');
     await waitFor(() => {
       expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
-        expect.objectContaining({ isActive: 'false' }),
+        expect.objectContaining({ search: 'zzz-no-match' }),
       );
     });
+    // Zero matches render the empty state instead of the footer.
+    await waitFor(() => {
+      expect(screen.getByText('No employees match these filters')).toBeInTheDocument();
+    });
 
-    await user.click(screen.getByRole('button', { name: /total employees/i }));
+    // Inactive card must drop the search and show every inactive employee.
+    await user.click(screen.getByRole('button', { name: /inactive/i }));
     await waitFor(() => {
       const lastCall =
         adminApi.listEmployees.mock.calls[adminApi.listEmployees.mock.calls.length - 1][0];
-      expect(lastCall.isActive).toBeUndefined();
-      expect(lastCall.departmentId).toBeUndefined();
+      expect(lastCall.isActive).toBe('false');
       expect(lastCall.search).toBeUndefined();
+    });
+    expect(screen.getByLabelText(/search employees/i)).toHaveValue('');
+    expect(
+      screen.getByRole('combobox', { name: /status filter/i }),
+    ).toHaveTextContent('Inactive');
+    await waitFor(() => {
+      expect(footerText()).toMatch(/showing 3 of 3 employees/i);
     });
   });
 });

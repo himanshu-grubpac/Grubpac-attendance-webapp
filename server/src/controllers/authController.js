@@ -71,6 +71,8 @@ export async function loginUser(body, portal, auditContext = {}) {
   const loginAuditContext = {
     ...auditContext,
     ...(parsed.deviceId ? { deviceId: parsed.deviceId } : {}),
+    ...(parsed.userAgent ? { userAgent: parsed.userAgent } : {}),
+    ...(parsed.deviceType ? { deviceType: parsed.deviceType } : {}),
   };
   const found = await User.findOne(buildIdentifierQuery(parsed.identifier));
   if (!found) {
@@ -98,6 +100,11 @@ export async function loginUser(body, portal, auditContext = {}) {
   }
 
   if (user.endingDate && new Date(user.endingDate) < new Date()) {
+    // Auto-deactivate expired employee on login attempt.
+    if (user.isActive) {
+      user.isActive = false;
+      await user.save();
+    }
     auditLog('login_failed', {
       identifier: parsed.identifier,
       reason: 'employment_ended',

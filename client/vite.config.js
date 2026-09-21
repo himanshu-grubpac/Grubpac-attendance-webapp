@@ -14,8 +14,8 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5000',
     },
-    // TEMPORARY dev-only: allow ngrok tunnel hosts for phone testing.
+    // TEMPORARY dev-only: allow tunnel hosts for phone/colleague testing.
     // Revert before any prod-adjacent work (never affects `vite build`).
-    allowedHosts: ['.ngrok-free.dev', '.ngrok.io'],
+    allowedHosts: ['.ngrok-free.dev', '.ngrok.io', '.loca.lt'],
   },
 })

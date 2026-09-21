@@ -1,10 +1,12 @@
 /**
  * Team Attendance Today strip scope (integration, real Mongo).
  *
- * Canonical membership contract lives in rmVisibilityParity.integration.test.js
- * (direct reports + delegate chain, never managed departments); the tests
- * here lock strip-level details on top of it. Full admins (READ_ALL) still
- * see everyone.
+ * Today-present membership for team viewers (READ_TEAM, no READ_ALL) is the
+ * visibility roster: managed departments + direct reports + delegate chain +
+ * self + fellow RMs, all statuses — the same membership as the Employee List
+ * so both totals reconcile. Authority stays narrow elsewhere: leave
+ * approvals/queues use the reports-only resolveTeamScopedUserIds membership
+ * (see rmVisibilityParity). Full admins (READ_ALL) still see everyone.
  */
 process.env.NODE_ENV = 'test';
 
@@ -14,6 +16,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { PERMISSIONS } from '../../../shared/permissions.js';
 import '../models/Department.js';
+import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import { collectReportSubtreeIds, getTeamTodayStatusService } from './attendanceService.js';
@@ -31,7 +34,7 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  await Promise.all([Role.deleteMany({}), User.deleteMany({})]);
+  await Promise.all([Department.deleteMany({}), Role.deleteMany({}), User.deleteMany({})]);
 });
 
 after(async () => {
@@ -44,9 +47,9 @@ async function createRole(slug, permissions) {
   return Role.create({ name: slug, slug: `${slug}-${sequence}`, permissions });
 }
 
-async function createUser(name, { roleId = null, reportingManagerId = null, departmentId = null, delegateApproverId = null, isActive = true } = {}) {
+async function createUser(name, { roleId = null, reportingManagerId = null, departmentId = null, delegateApproverId = null, isActive = true, managedDepartmentIds = null } = {}) {
   sequence += 1;
-  return User.create({
+  const created = await User.create({
     firstName: name,
     lastName: 'Test',
     name: `${name} Test`,
@@ -60,6 +63,11 @@ async function createUser(name, { roleId = null, reportingManagerId = null, depa
     delegateApproverId,
     isActive,
   });
+  if (managedDepartmentIds !== null) {
+    await User.findByIdAndUpdate(created._id, { managedDepartmentIds });
+    return User.findById(created._id);
+  }
+  return created;
 }
 
 //   boss
@@ -83,74 +91,111 @@ async function setupTree() {
 
 const idsOf = (rows) => rows.map((m) => String(m.userId));
 
-test('mid-level RM sees direct reports only, siblings/boss/indirect hidden', async () => {
+test('mid-level RM sees direct reports + self; peers hidden without a department scope', async () => {
   const { mid, boss, emp, subRm, subEmp, sibRm, sibEmp, otherBoss, otherEmp } = await setupTree();
   const rows = await getTeamTodayStatusService(mid, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  for (const u of [emp, subRm]) {
+  for (const u of [emp, subRm, mid]) {
     assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
   }
-  for (const u of [mid, boss, subEmp, sibRm, sibEmp, otherBoss, otherEmp]) {
+  for (const u of [boss, subEmp, sibRm, sibEmp, otherBoss, otherEmp]) {
     assert.ok(!seen.has(String(u._id)), `hidden: ${u.name}`);
   }
 });
 
-test('top boss sees direct reports only, indirect/other branch hidden', async () => {
+test('top boss sees direct reports + self, indirect/other branch hidden', async () => {
   const { boss, mid, emp, subRm, subEmp, sibRm, sibEmp, otherBoss, otherEmp } = await setupTree();
   const rows = await getTeamTodayStatusService(boss, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  for (const u of [mid, sibRm]) {
+  for (const u of [mid, sibRm, boss]) {
     assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
   }
-  for (const u of [boss, emp, subRm, subEmp, sibEmp, otherBoss, otherEmp]) {
+  for (const u of [emp, subRm, subEmp, sibEmp, otherBoss, otherEmp]) {
     assert.ok(!seen.has(String(u._id)), `hidden: ${u.name}`);
   }
 });
 
-test('RM sees all direct reports regardless of department', async () => {
+test('managed scope adds the department on top of the full report roster', async () => {
   const rmRole = await createRole('rmdept', RM_PERMS);
   const empRole = await createRole('empdept', []);
   const deptA = new mongoose.Types.ObjectId();
   const deptB = new mongoose.Types.ObjectId();
-  const mgr = await createUser('DeptMgr', { roleId: rmRole._id, departmentId: deptA });
+  const mgr = await createUser('DeptMgr', {
+    roleId: rmRole._id,
+    departmentId: deptA,
+    managedDepartmentIds: [deptA],
+  });
   const same = await createUser('SameDept', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptA });
   const other = await createUser('OtherDept', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptB });
   const nostaff = await createUser('NoDept', { roleId: empRole._id, reportingManagerId: mgr._id });
   const rows = await getTeamTodayStatusService(mgr, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  assert.ok(seen.has(String(same._id)), 'same department visible');
-  assert.ok(seen.has(String(other._id)), 'cross-department direct report visible');
-  assert.ok(seen.has(String(nostaff._id)), 'null-department direct report visible');
+  assert.ok(seen.has(String(same._id)), 'in-scope direct report visible');
+  assert.ok(seen.has(String(mgr._id)), 'self visible');
+  assert.ok(seen.has(String(other._id)), 'cross-department direct report stays visible');
+  assert.ok(seen.has(String(nostaff._id)), 'null-department direct report stays visible');
 });
 
-test('RM sees delegated reports but not managed-department strangers', async () => {
+test('RM without any department scope keeps all direct reports + self', async () => {
+  const rmRole = await createRole('rmnoscope', RM_PERMS);
+  const empRole = await createRole('empnoscope', []);
+  const deptA = new mongoose.Types.ObjectId();
+  const deptB = new mongoose.Types.ObjectId();
+  const mgr = await createUser('NoScopeMgr', { roleId: rmRole._id });
+  const same = await createUser('NoScopeSame', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptA });
+  const other = await createUser('NoScopeOther', { roleId: empRole._id, reportingManagerId: mgr._id, departmentId: deptB });
+  const rows = await getTeamTodayStatusService(mgr, RM_PERMS);
+  const seen = new Set(idsOf(rows));
+  for (const u of [same, other, mgr]) {
+    assert.ok(seen.has(String(u._id)), `visible: ${u.name}`);
+  }
+});
+
+test('delegated chains cross departments; managed strangers are visible too', async () => {
   const rmRole = await createRole('rmdel', RM_PERMS);
   const empRole = await createRole('empdel', []);
   const dept = new mongoose.Types.ObjectId();
-  const mgr = await createUser('CoverMgr', { roleId: rmRole._id });
-  const direct = await createUser('DirectRep', { roleId: empRole._id, reportingManagerId: mgr._id });
+  const otherDept = new mongoose.Types.ObjectId();
+  const mgr = await createUser('CoverMgr', {
+    roleId: rmRole._id,
+    departmentId: dept,
+    managedDepartmentIds: [dept],
+  });
+  const direct = await createUser('DirectRep', {
+    roleId: empRole._id,
+    reportingManagerId: mgr._id,
+    departmentId: dept,
+  });
   const coveree = await createUser('Coveree', {
     roleId: rmRole._id,
     delegateApproverId: mgr._id,
   });
-  const delegated = await createUser('DelegatedRep', { roleId: empRole._id, reportingManagerId: coveree._id });
+  const delegatedIn = await createUser('DelegatedRep', {
+    roleId: empRole._id,
+    reportingManagerId: coveree._id,
+    departmentId: dept,
+  });
+  const delegatedOut = await createUser('DelegatedOutRep', {
+    roleId: empRole._id,
+    reportingManagerId: coveree._id,
+    departmentId: otherDept,
+  });
   const stranger = await createUser('DeptStranger', {
     roleId: empRole._id,
     departmentId: dept,
     reportingManagerId: null,
   });
-  // Managed departments no longer widen visibility: the stranger shares the
-  // manager's own department yet stays hidden.
-  await User.findByIdAndUpdate(mgr._id, { departmentId: dept, managedDepartmentIds: [dept] });
   const rows = await getTeamTodayStatusService(mgr, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  assert.ok(seen.has(String(direct._id)), 'direct report visible');
-  assert.ok(seen.has(String(delegated._id)), 'delegated report visible');
-  assert.ok(!seen.has(String(stranger._id)), 'managed-department stranger hidden');
+  assert.ok(seen.has(String(direct._id)), 'in-scope direct report visible');
+  assert.ok(seen.has(String(delegatedIn._id)), 'in-scope delegated report visible');
+  assert.ok(seen.has(String(mgr._id)), 'self visible');
+  assert.ok(seen.has(String(delegatedOut._id)), 'delegated chain has no department constraint');
+  assert.ok(seen.has(String(stranger._id)), 'managed-department member visible');
   assert.ok(!seen.has(String(coveree._id)), 'delegating manager is not a report');
 });
 
-test('inactive ex-reports are hidden from RMs', async () => {
+test('inactive ex-reports stay visible with an inactive status (directory parity)', async () => {
   const rmRole = await createRole('rmoff', RM_PERMS);
   const empRole = await createRole('empoff', []);
   const mgr = await createUser('OffMgr', { roleId: rmRole._id });
@@ -161,11 +206,13 @@ test('inactive ex-reports are hidden from RMs', async () => {
     isActive: false,
   });
   const result = await getTeamTodayStatusService(mgr, RM_PERMS, { paginate: true, page: 1, limit: 25 });
-  assert.equal(result.summary.total, 1);
-  assert.equal(result.summary.inactive, 0);
-  const seen = new Set(result.teamStatus.map((m) => String(m.userId)));
-  assert.ok(seen.has(String(active._id)), 'active report visible');
-  assert.ok(!seen.has(String(offboarded._id)), 'inactive ex-report hidden');
+  assert.equal(result.summary.total, 3);
+  assert.equal(result.summary.inactive, 1);
+  const byId = new Map(result.teamStatus.map((m) => [String(m.userId), m]));
+  assert.ok(byId.has(String(active._id)), 'active report visible');
+  assert.ok(byId.has(String(mgr._id)), 'self visible');
+  assert.ok(byId.has(String(offboarded._id)), 'inactive ex-report visible');
+  assert.equal(byId.get(String(offboarded._id)).status, 'inactive');
 });
 
 test('read-all admins still see everyone', async () => {
@@ -175,7 +222,7 @@ test('read-all admins still see everyone', async () => {
   assert.ok(seen.has(String(otherEmp._id)), 'admin sees other branch');
 });
 
-test('sibling RMs with the real reporting-manager slug stay hidden', async () => {
+test('fellow RMs are visible org-wide; unrelated branches stay hidden', async () => {
   const rmRole = await Role.create({ name: 'RM', slug: 'reporting-manager', permissions: RM_PERMS });
   const empRole = await createRole('emp2', []);
   const viewer = await createUser('Viewer', { roleId: rmRole._id });
@@ -184,29 +231,79 @@ test('sibling RMs with the real reporting-manager slug stay hidden', async () =>
   const rows = await getTeamTodayStatusService(viewer, RM_PERMS);
   const seen = new Set(idsOf(rows));
   assert.ok(seen.has(String(report._id)), 'direct report visible');
-  assert.ok(!seen.has(String(sibRm._id)), 'sibling RM hidden');
-  assert.ok(!seen.has(String(viewer._id)), 'self hidden');
+  assert.ok(seen.has(String(viewer._id)), 'self visible');
+  assert.ok(seen.has(String(sibRm._id)), 'fellow RM visible');
 });
 
-test('managed departments do not widen the strip; only direct reports show', async () => {
+test('managed scope shows the full roster: reports + managed members + self + inactives', async () => {
   const rmRole = await createRole('rmm', RM_PERMS);
   const empRole = await createRole('empm', []);
   const dept = new mongoose.Types.ObjectId();
-  const mgr = await createUser('Mgr', { roleId: rmRole._id, departmentId: dept });
-  await User.findByIdAndUpdate(mgr._id, { managedDepartmentIds: [dept] });
+  const otherDept = new mongoose.Types.ObjectId();
+  const mgr = await createUser('Mgr', {
+    roleId: rmRole._id,
+    departmentId: dept,
+    managedDepartmentIds: [dept],
+  });
+  const insiderReport = await createUser('InsiderReport', {
+    roleId: empRole._id,
+    departmentId: dept,
+    reportingManagerId: mgr._id,
+  });
+  const outsiderReport = await createUser('OutsiderReport', {
+    roleId: empRole._id,
+    reportingManagerId: mgr._id,
+  });
+  const peerRm = await createUser('PeerRm', { roleId: rmRole._id, departmentId: dept });
+  const peerRmOther = await createUser('PeerRmOther', { roleId: rmRole._id, departmentId: otherDept });
   const insider = await createUser('Insider', { roleId: empRole._id, departmentId: dept });
   const insiderOff = await createUser('InsiderOff', {
     roleId: empRole._id,
     departmentId: dept,
     isActive: false,
   });
-  const outsider = await createUser('Outsider', { roleId: empRole._id, reportingManagerId: mgr._id });
   const rows = await getTeamTodayStatusService(mgr, RM_PERMS);
   const seen = new Set(idsOf(rows));
-  assert.ok(!seen.has(String(mgr._id)), 'self hidden');
-  assert.ok(!seen.has(String(insider._id)), 'dept non-report hidden');
-  assert.ok(!seen.has(String(insiderOff._id)), 'inactive dept non-report hidden');
-  assert.ok(seen.has(String(outsider._id)), 'direct report visible regardless of department');
+  assert.ok(seen.has(String(mgr._id)), 'self visible');
+  assert.ok(seen.has(String(insiderReport._id)), 'in-scope direct report visible');
+  assert.ok(seen.has(String(peerRm._id)), 'managed same-role peer visible');
+  assert.ok(seen.has(String(outsiderReport._id)), 'cross-department direct report stays visible');
+  assert.ok(!seen.has(String(peerRmOther._id)), 'out-of-scope same-role peer hidden');
+  assert.ok(seen.has(String(insider._id)), 'managed non-report visible');
+  assert.ok(seen.has(String(insiderOff._id)), 'inactive managed member visible');
+});
+
+test('paginated response carries scope facets limited to the membership', async () => {
+  const rmRole = await createRole('rmfac', RM_PERMS);
+  const empRole = await createRole('empfac', []);
+  sequence += 1;
+  const dept = await Department.create({ name: 'Development', code: `DEV${sequence}` });
+  sequence += 1;
+  const otherDept = await Department.create({ name: 'Design', code: `DSN${sequence}` });
+  const mgr = await createUser('FacMgr', {
+    roleId: rmRole._id,
+    departmentId: dept._id,
+    managedDepartmentIds: [dept._id],
+  });
+  await createUser('FacReport', {
+    roleId: empRole._id,
+    reportingManagerId: mgr._id,
+    departmentId: dept._id,
+  });
+  await createUser('FacOutsider', {
+    roleId: empRole._id,
+    reportingManagerId: mgr._id,
+    departmentId: otherDept._id,
+  });
+  const result = await getTeamTodayStatusService(mgr, RM_PERMS, { paginate: true, page: 1, limit: 25 });
+  const facetDeptIds = (result.scopeFacets?.departments ?? []).map((d) => String(d.id));
+  const facetRoleIds = (result.scopeFacets?.roles ?? []).map((r) => String(r.id));
+  // The cross-department report is in the roster, so its department is
+  // offered too — facets describe the whole membership, never the directory.
+  assert.deepEqual(facetDeptIds.sort(), [String(dept._id), String(otherDept._id)].sort(), 'roster departments offered');
+  assert.ok(facetRoleIds.includes(String(rmRole._id)), 'own role offered');
+  assert.ok(facetRoleIds.includes(String(empRole._id)), 'report role offered');
+  assert.equal(facetRoleIds.length, 2, 'no directory-wide roles leak');
 });
 
 test('collectReportSubtreeIds terminates on reporting cycles', async () => {

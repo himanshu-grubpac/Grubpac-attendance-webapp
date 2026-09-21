@@ -2,6 +2,7 @@ import {
   PERMISSIONS,
   canSwitchPortal,
   hasAdminPortalAccess,
+  SYSTEM_ROLE_SLUGS,
   hasAnyPermission,
   hasEmployeePortalAccess,
   hasPermission,
@@ -53,6 +54,7 @@ export const NAV_ITEMS = [
     section: 'Employees',
     portal: 'admin',
     permission: PERMISSIONS.EMPLOYEES_REGISTER_C,
+    teamCreator: true,
   },
   {
     to: '/admin/users/bulk-upload',
@@ -318,6 +320,10 @@ export function getVisibleNavItems(user, loginPortal) {
       return false;
     }
 
+    if (item.teamCreator && user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
+      return true;
+    }
+
     if (item.allPermissions?.length) {
       return hasAllPermissions(permissions, item.allPermissions);
     }
@@ -523,10 +529,15 @@ export function isMoreNavActive(pathname, user, loginPortal) {
   );
 }
 
-export function canAccessRoute(user, { permission, anyPermission, allPermissions, excludeIfAllPermissions } = {}) {
+export function canAccessRoute(user, { permission, anyPermission, allPermissions, excludeIfAllPermissions, teamCreator } = {}) {
   const permissions = user?.permissions ?? [];
   if (excludeIfAllPermissions?.length && hasAllPermissions(permissions, excludeIfAllPermissions)) {
     return false;
+  }
+  // teamCreator marks creation surfaces that reporting managers may also
+  // use (scoped to their managed departments, enforced server-side).
+  if (teamCreator && user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
+    return true;
   }
   if (allPermissions?.length) {
     return allPermissions.every((item) => hasPermission(permissions, item));

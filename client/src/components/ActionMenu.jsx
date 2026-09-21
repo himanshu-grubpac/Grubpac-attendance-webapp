@@ -126,6 +126,7 @@ export default function ActionMenu({ label, items, onOpenChange }) {
                     item.variant === 'danger' ? ' action-menu__item--danger' : ''
                   }`}
                   disabled={item.disabled}
+                  title={item.title || undefined}
                   onPointerDown={stopCardActivation}
                   onMouseDown={stopCardActivation}
                   onClick={(event) => {

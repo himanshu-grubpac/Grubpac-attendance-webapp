@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { SYSTEM_ROLE_SLUGS } from '../../../shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
 import { generatePassword } from '../../../shared/utils/generatePassword.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
@@ -34,38 +34,8 @@ import {
 import { getISTDateInputValue, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { COMPANY_START_DATE } from '../config/company.js';
 import { sendWelcomeEmail } from './emailService.js';
-import {
-  assertDepartmentFilterAllowed,
-  isUserInTeamScope,
-  resolveAccessibleDepartmentIds,
-} from './teamScopeService.js';
 
 export { normalizeMobile };
-
-async function validateBulkImportScope(actor, permissions, { departmentId, targetUserId } = {}) {
-  if (!actor || !permissions) {
-    return null;
-  }
-
-  const accessibleDepts = await resolveAccessibleDepartmentIds(actor, permissions);
-
-  if (departmentId) {
-    try {
-      assertDepartmentFilterAllowed(accessibleDepts, departmentId);
-    } catch (error) {
-      return error.message;
-    }
-  }
-
-  if (targetUserId) {
-    const inScope = await isUserInTeamScope(actor, permissions, targetUserId);
-    if (!inScope) {
-      return 'Employee is outside your team access scope.';
-    }
-  }
-
-  return null;
-}
 
 const ID_COLUMN_FILL = 'FFFFFBF0';
 const BULK_EXPORT_HEADERS = [
@@ -183,7 +153,8 @@ export async function buildEmployeeDirectoryWorkbook() {
     ['• The "email" column is the unique employee identifier. Do NOT edit email values.'],
     ['• Rows whose email matches an existing employee will UPDATE that record.'],
     ['• Rows with a NEW email will CREATE a new employee.'],
-    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE via bulk import. Any change to mobile or employeeCode fails that row with a validation error naming the employee.'],
+    ['• The "email" and "mobile" columns are IMMUTABLE via bulk import. Any change to these fields fails that row with a validation error naming the employee.'],
+    ['• The "employeeCode" column IS updatable. If changed, uniqueness is validated. If taken by another employee, the row fails with a clear error.'],
     ['• Exception: a malformed stored mobile (not a valid 10-digit number) can be healed by entering a valid 10-digit mobile in the file.'],
     ['• To change email or mobile, use the individual employee edit form.'],
     ['• There are NO password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.'],
@@ -493,6 +464,43 @@ export function generateBulkPassword(firstName, employeeCode) {
   throw error;
 }
 
+/**
+ * Bulk-upload department scope (§6.18–6.20): full admins (read-all) may
+ * upload any department; everyone else is confined to their own +
+ * managed departments. Rows outside scope become per-row validation
+ * errors — identically in dry-run preview and sync. Callers that omit
+ * actor info skip enforcement (legacy/test paths).
+ */
+export async function resolveBulkDepartmentScope(actorId, actorPermissions) {
+  if (actorPermissions === undefined) return null;
+  if (hasPermission(actorPermissions, PERMISSIONS.ATTENDANCE_READ_ALL)) {
+    return { all: true, departmentIds: [] };
+  }
+  const actor = actorId
+    ? await User.findById(actorId).select('departmentId managedDepartmentIds').lean()
+    : null;
+  const ids = new Set();
+  if (actor?.departmentId) ids.add(String(actor.departmentId));
+  for (const id of actor?.managedDepartmentIds ?? []) ids.add(String(id));
+  return { all: false, departmentIds: [...ids] };
+}
+
+function isDepartmentInScope(scope, departmentId) {
+  if (!scope || scope.all) return true;
+  if (!departmentId) return false;
+  return scope.departmentIds.includes(String(departmentId));
+}
+
+function buildScopeError(rowNumber, id, email, departmentName) {
+  return {
+    rowNumber,
+    id,
+    email,
+    status: 'validation_error',
+    message: `Department "${departmentName}" is outside your assigned scope.`,
+  };
+}
+
 export async function createEmployee(data, createdBy, options = {}) {
   const isBulkImport = options.bulkImport === true;
   let bulkAutoCode = false;
@@ -542,12 +550,13 @@ export async function createEmployee(data, createdBy, options = {}) {
   // No PIN via bulk import: new employees set it up afterwards.
   const pin4Hash = null;
   const department = await resolveDepartment(parsed);
-  const scopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
-    departmentId: department?._id ?? null,
-  });
-  if (scopeMessage) {
-    const error = new Error(scopeMessage);
-    error.statusCode = 403;
+  if (
+    options.departmentScope &&
+    department &&
+    !isDepartmentInScope(options.departmentScope, department._id)
+  ) {
+    const error = new Error(`Department "${department.name}" is outside your assigned scope.`);
+    error.statusCode = 400;
     throw error;
   }
   const manager = parsed.reportingManagerId
@@ -576,14 +585,9 @@ export async function createEmployee(data, createdBy, options = {}) {
  * The password is returned ONLY here (shown once in upload results) — it is
  * never persisted or logged anywhere.
  */
-export async function createEmployeeAndPassword(data, createdBy, scopeContext = null) {
+export async function createEmployeeAndPassword(data, createdBy, options = {}) {
   const box = { firstName: String(data.firstName ?? ''), current: null };
-  const employee = await createEmployee(data, createdBy, {
-    bulkImport: true,
-    passwordBox: box,
-    actor: scopeContext?.actor ?? null,
-    permissions: scopeContext?.permissions ?? null,
-  });
+  const employee = await createEmployee(data, createdBy, { bulkImport: true, passwordBox: box, ...options });
   return { employee, generatedPassword: box.current };
 }
 
@@ -594,7 +598,7 @@ export async function createEmployeeAndPassword(data, createdBy, scopeContext = 
  * the preview (dry-run) step so the review table matches what sync will do.
  * Returns `{ name, employeeCode }` for the preview row; throws on invalid.
  */
-export async function validateNewEmployeeForPreview(data, scopeContext = null) {
+export async function validateNewEmployeeForPreview(data, options = {}) {
   const input = { ...data };
   const bulkRole = await resolveRoleByNameOrSlug(input.role);
   const role = await resolveRole(bulkRole._id.toString());
@@ -616,12 +620,13 @@ export async function validateNewEmployeeForPreview(data, scopeContext = null) {
   }).parse(stripBulkReferenceFields(prepared));
 
   const department = await resolveDepartment(parsed);
-  const scopeMessage = await validateBulkImportScope(scopeContext?.actor, scopeContext?.permissions, {
-    departmentId: department?._id ?? null,
-  });
-  if (scopeMessage) {
-    const error = new Error(scopeMessage);
-    error.statusCode = 403;
+  if (
+    options.departmentScope &&
+    department &&
+    !isDepartmentInScope(options.departmentScope, department._id)
+  ) {
+    const error = new Error(`Department "${department.name}" is outside your assigned scope.`);
+    error.statusCode = 400;
     throw error;
   }
   if (parsed.reportingManagerId) {
@@ -994,19 +999,6 @@ async function upsertExistingEmployee(row, user, options = {}) {
   // mobile may be healed by supplying a valid 10-digit replacement.
   const rawId = user._id.toString();
 
-  const scopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
-    targetUserId: user._id,
-  });
-  if (scopeMessage) {
-    return {
-      rowNumber: row.rowNumber,
-      id: rawId,
-      email: user.email,
-      status: 'validation_error',
-      message: scopeMessage,
-    };
-  }
-
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const userRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString() ?? '';
   if (adminRole && userRoleId === adminRole._id.toString()) {
@@ -1021,6 +1013,19 @@ async function upsertExistingEmployee(row, user, options = {}) {
 
   const changedFields = [];
   const ignoredFields = [];
+
+  // Email is immutable via bulk upload. If the file row was matched by mobile
+  // or employeeCode but the email column differs, block the change.
+  const newEmail = String(row.data.email ?? '').trim().toLowerCase();
+  if (newEmail && newEmail !== user.email) {
+    return {
+      rowNumber: row.rowNumber,
+      id: rawId,
+      email: user.email,
+      status: 'validation_error',
+      message: `Email cannot be changed via bulk upload for ${user.email} (file has ${newEmail}). Update it from the employee profile instead.`,
+    };
+  }
 
   const newMobile = normalizeMobile(row.data.mobile);
   const storedMobileDigits = normalizeMobile(user.mobile);
@@ -1069,13 +1074,18 @@ async function upsertExistingEmployee(row, user, options = {}) {
 
   const newFileCode = normalizeEmployeeCode(row.data.employeeCode);
   if (newFileCode && newFileCode !== (user.employeeCode || '')) {
-    return {
-      rowNumber: row.rowNumber,
-      id: rawId,
-      email: user.email,
-      status: 'validation_error',
-      message: `Employee ID cannot be changed via bulk upload for ${user.email} (existing ${user.employeeCode || '—'}, file has ${newFileCode}).`,
-    };
+    const codeTaken = await User.exists({ employeeCode: newFileCode, _id: { $ne: user._id } });
+    if (codeTaken) {
+      return {
+        rowNumber: row.rowNumber,
+        id: rawId,
+        email: user.email,
+        status: 'validation_error',
+        message: `Employee code "${newFileCode}" is already used by another employee. Choose a unique code.`,
+      };
+    }
+    changedFields.push({ field: 'employeeCode', from: user.employeeCode || '', to: newFileCode });
+    user.employeeCode = newFileCode;
   }
 
   const rawRole = String(row.data.role ?? '').trim();
@@ -1246,6 +1256,17 @@ async function upsertExistingEmployee(row, user, options = {}) {
   }
 
   const rawDepartment = String(row.data.department ?? '').trim();
+  const departmentScope = options.departmentScope ?? null;
+  if (!rawDepartment) {
+    // No department change: the row still touches this employee, so their
+    // current department must be inside the uploader's scope.
+    const currentDeptId = user.departmentId?._id?.toString() ?? user.departmentId?.toString() ?? null;
+    const currentDeptName =
+      user.departmentId?.name || user.department || 'this department';
+    if (departmentScope && !isDepartmentInScope(departmentScope, currentDeptId)) {
+      return buildScopeError(row.rowNumber, rawId, user.email, currentDeptName);
+    }
+  }
   if (rawDepartment) {
     const dept = await Department.findOne({
       name: { $regex: new RegExp(`^${rawDepartment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
@@ -1257,20 +1278,11 @@ async function upsertExistingEmployee(row, user, options = {}) {
         id: rawId,
         email: user.email,
         status: 'validation_error',
-        message: `Department "${rawDepartment}" not found or inactive.`,
+        message: "Department doesn't exist.",
       };
     }
-    const deptScopeMessage = await validateBulkImportScope(options.actor, options.permissions, {
-      departmentId: dept._id,
-    });
-    if (deptScopeMessage) {
-      return {
-        rowNumber: row.rowNumber,
-        id: rawId,
-        email: user.email,
-        status: 'validation_error',
-        message: deptScopeMessage,
-      };
+    if (departmentScope && !isDepartmentInScope(departmentScope, dept._id)) {
+      return buildScopeError(row.rowNumber, rawId, user.email, dept.name);
     }
     const currentDeptId = user.departmentId?._id?.toString() ?? user.departmentId?.toString() ?? '';
     if (dept._id.toString() !== currentDeptId) {
@@ -1401,15 +1413,13 @@ function handleCreateError(row, error) {
     };
   }
 
-  if (error.statusCode === 400 || error.statusCode === 403) {
+  if (error.statusCode === 400) {
     return {
       rowNumber: row.rowNumber,
       id: '',
       status: 'validation_error',
       email: row.data.email ?? '',
-      message: error.statusCode === 403
-        ? (error.message ?? 'You do not have permission for this row.')
-        : `New employee: ${error.message ?? 'Validation failed.'}`,
+      message: `New employee: ${error.message ?? 'Validation failed.'}`,
     };
   }
 
@@ -1424,40 +1434,51 @@ function handleCreateError(row, error) {
 
 export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {}) {
   const dryRun = options.dryRun === true;
-  const scopeContext = {
-    actor: options.actor ?? null,
-    permissions: options.permissions ?? null,
-  };
+  const departmentScope = await resolveBulkDepartmentScope(
+    options.actorId ?? createdBy,
+    options.actorPermissions,
+  );
+  const scopeOptions = departmentScope ? { departmentScope } : {};
   const { duplicates: fileDuplicates, uniqueRows } = partitionRowsByFileDuplicates(rows);
   const results = [...fileDuplicates];
   const createdEmployees = [];
 
   for (const row of uniqueRows) {
     const email = String(row.data.email ?? '').trim().toLowerCase();
+    const mobile = String(row.data.mobile ?? '').replace(/\D/g, '').slice(0, 10);
+    const employeeCode = normalizeEmployeeCode(row.data.employeeCode);
 
-    if (!email) {
+    if (!email && !mobile && !employeeCode) {
       results.push({
         rowNumber: row.rowNumber,
         id: '',
         status: 'validation_error',
         email: row.data.email ?? '',
-        message: 'Email is required — it identifies the employee. Rows without an email are skipped.',
+        message: 'At least one identifier (Email, Mobile, or Employee Code) is required to match or create an employee.',
       });
       continue;
     }
 
     try {
-      const existing = await User.findOne({ email }).populate([
-        { path: 'roleId', select: 'name slug permissions isSystem' },
-        { path: 'departmentId', select: 'name code isActive' },
-        { path: 'reportingManagerId', select: 'name email employeeCode' },
-      ]);
+      // Match existing employee by email, employee code, or mobile (all permutations).
+      const matchConditions = [];
+      if (email) matchConditions.push({ email });
+      if (mobile) matchConditions.push({ mobile });
+      if (employeeCode) matchConditions.push({ employeeCode });
+
+      const existing = matchConditions.length > 0
+        ? await User.findOne({ $or: matchConditions }).populate([
+            { path: 'roleId', select: 'name slug permissions isSystem' },
+            { path: 'departmentId', select: 'name code isActive' },
+            { path: 'reportingManagerId', select: 'name email employeeCode' },
+          ])
+        : null;
 
       if (existing) {
-        const result = await upsertExistingEmployee(row, existing, { dryRun, ...scopeContext });
+        const result = await upsertExistingEmployee(row, existing, { dryRun, ...scopeOptions });
         results.push(result);
       } else if (dryRun) {
-        const preview = await validateNewEmployeeForPreview(row.data, scopeContext);
+        const preview = await validateNewEmployeeForPreview(row.data, scopeOptions);
         results.push({
           rowNumber: row.rowNumber,
           id: '',
@@ -1472,7 +1493,7 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
             'Will create this employee on sync. Login credentials will be emailed and the temporary password must be changed on first sign-in.',
         });
       } else {
-        const created = await createEmployeeAndPassword(row.data, createdBy, scopeContext);
+        const created = await createEmployeeAndPassword(row.data, createdBy, scopeOptions);
         results.push({
           rowNumber: row.rowNumber,
           id: created.employee.id,
@@ -1598,8 +1619,9 @@ export function buildEmployeeTemplateWorkbook() {
     [''],
     ['IMPORTANT RULES:'],
     ['• Each row will CREATE a new employee.'],
-    ['• The "email", "mobile", and "employeeCode" columns are IMMUTABLE. Any changes will be rejected.'],
-    ['• To change email, mobile, or employeeCode later, use the individual employee edit form.'],
+    ['• The "email" and "mobile" columns are IMMUTABLE. Any changes will be rejected.'],
+    ['• The "employeeCode" column IS updatable. Uniqueness is validated.'],
+    ['• To change email or mobile, use the individual employee edit form.'],
     ['• A temporary password will be automatically generated and emailed to the new employee.'],
     ['• Required fields: firstName, email, mobile, designation, joiningDate, department, reportingManagerEmail.'],
     ['• "employeeCode" format: 2–5 letters followed by 3–6 digits (e.g. EMP001, TL001). Leave blank to auto-generate.'],

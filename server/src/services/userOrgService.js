@@ -71,7 +71,7 @@ export async function prepareEmployeeReferences(data, context = {}) {
       isActive: true,
     });
     if (!department) {
-      const error = new Error(`Department "${prepared.department}" not found.`);
+      const error = new Error("Department doesn't exist.");
       error.statusCode = 400;
       throw error;
     }

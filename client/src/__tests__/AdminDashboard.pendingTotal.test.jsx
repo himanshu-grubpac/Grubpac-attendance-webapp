@@ -19,6 +19,36 @@ vi.mock('../services/api.js', () => ({
         },
       }),
     ),
+    getTeamTodayStatus: vi.fn(() =>
+      Promise.resolve({
+        teamStatus: [],
+        pagination: { page: 1, limit: 10, total: 0, totalPages: 1 },
+      }),
+    ),
+    getEmployeeStats: vi.fn(() =>
+      Promise.resolve({
+        stats: {
+          total: 10,
+          active: 9,
+          inactive: 1,
+          newThisMonth: 2,
+          monthKey: '2026-09',
+          oldestJoiningYear: 2021,
+          roleBreakdown: [
+            { roleId: 'aaaabbbbccccddddeeeeffff', slug: 'reporting-manager', name: 'RM', count: 3 },
+            { roleId: 'aaaabbbbccccddddeeee0000', slug: 'admin', name: 'Admin', count: 1 },
+          ],
+        },
+      }),
+    ),
+    listDepartments: vi.fn(() =>
+      Promise.resolve({
+        departments: [
+          { id: 'd1', name: 'Development', isActive: true },
+          { id: 'd2', name: 'Design', isActive: false },
+        ],
+      }),
+    ),
   },
   leaveApi: {
     getApprovalsPendingCounts: vi.fn(() =>
@@ -53,6 +83,25 @@ function setup() {
 describe('AdminDashboard pending total', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('links the Active Employees card with a forced active status preset', async () => {
+    setup();
+    await waitFor(() => {
+      expect(screen.getByText('Total Active Employees')).toBeInTheDocument();
+    });
+    const card = screen.getByText('Total Active Employees').closest('a');
+    expect(card.getAttribute('href')).toBe('/admin/users?status=true');
+  });
+
+  it('does not show the removed workforce cards', async () => {
+    setup();
+    await waitFor(() => {
+      expect(screen.getByText('Total Active Employees')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Reporting Managers')).not.toBeInTheDocument();
+    expect(screen.queryByText('Admins')).not.toBeInTheDocument();
+    expect(screen.queryByText('Departments')).not.toBeInTheDocument();
   });
 
   it('shows the counts total so it always equals its own breakdown', async () => {

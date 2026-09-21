@@ -41,6 +41,9 @@ export const roleListQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value !== 'false'),
+  // Team creators (reporting managers without catalog access) resolve only
+  // the roles they may assign — currently just Employee.
+  scope: z.enum(['creatable']).optional(),
 });
 
 export const assignUserOrgSchema = z.object({

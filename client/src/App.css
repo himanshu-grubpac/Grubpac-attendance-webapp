@@ -3190,6 +3190,9 @@ a.user-chip:hover {
   gap: 0.25rem;
   align-content: start;
   overflow-y: auto;
+  /* overflow-x would compute to auto (and let nav items shift sideways);
+     clip keeps vertical scrolling while pinning content horizontally. */
+  overflow-x: clip;
   min-height: 0;
 }
 
@@ -7999,6 +8002,12 @@ body::-webkit-scrollbar-thumb {
   box-shadow: 0 1.1rem 3.5rem color-mix(in srgb, var(--text-h) 28%, transparent);
 }
 
+/* Bulk review popup: the 6-column review table needs more room than
+   .modal--wide; still full-width on small screens via min(100%, …). */
+.bulk-upload__review-modal {
+  width: min(100%, 64rem);
+}
+
 .modal__header {
   padding: 1.1rem 1.25rem 0;
   min-width: 0;
@@ -11378,6 +11387,24 @@ body::-webkit-scrollbar-thumb {
   min-width: 8.5rem;
 }
 
+/* Toolbar sub-section groups: filters stretch, actions hug the right edge.
+   Base (all viewports) keeps wrapping so tablet/mobile stacking is unchanged. */
+.employees-toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  min-width: 0;
+}
+
+.employees-toolbar__group--filters {
+  flex: 1 1 100%;
+}
+
+.employees-toolbar__group--actions {
+  flex: 0 0 auto;
+}
+
 .employees-toolbar__actions {
   /* Content-sized row 2, left-aligned (never shrink-to-overflow): at any
      viewport the buttons stack inside the card instead of spilling past
@@ -11619,12 +11646,108 @@ body::-webkit-scrollbar-thumb {
 }
 
 @media (min-width: 961px) {
-  .employees-toolbar__filters {
+  .employees-toolbar__filters > .employees-toolbar__group--actions {
+    flex: 0 0 auto;
     flex-wrap: nowrap;
+    margin-left: auto;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--actions .filter-bar__field {
+    flex: 0 0 auto;
+    min-width: 0;
   }
 
   .employees-toolbar__search {
     flex: 1 1 18rem;
+  }
+}
+
+/*
+ * Mid widths: two-line toolbar. Flattening the filters group lets its fields
+ * flow as direct siblings of the actions group, so the date fields land on
+ * line 2 with Clear / Edit columns / Add Employee pushed right beside them
+ * (aligned with the calendar inputs) instead of spilling onto a third line.
+ */
+@media (min-width: 961px) and (max-width: 1439px) {
+  .employees-toolbar__filters > .employees-toolbar__group--filters {
+    display: contents;
+  }
+
+  /* Two tidy lines: search + selects on line 1, both date fields on line 2
+     with the actions pushed right beside them. NOTE: the filters group is
+     display:contents, so the labels stay DOM children of that group — the
+     date selector must be a descendant selector, not a child selector.
+     The full-width ::before break (order 5) sits after every non-date item
+     (order 0) and before the dates (order 6) + actions (order 7), so
+     Joined-from never strands on line 1 while Joined-to wraps alone. */
+  .employees-toolbar__filters::before {
+    content: "";
+    flex-basis: 100%;
+    height: 0;
+    order: 5;
+  }
+
+  .employees-toolbar__filters .employees-toolbar__field:has(.date-field) {
+    order: 6;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--actions {
+    align-self: flex-end;
+    order: 7;
+  }
+}
+
+/*
+ * Wide-desktop single-line filter row: every filter shares shrink and the
+ * controls ellipsis gracefully (select/date value spans already clip with
+ * ellipsis), so search, department, role, status and both dates fit one
+ * line with no scrolling and no overlap. Action buttons keep natural size.
+ * Below 1440px the wrapping behaviour above takes over (two tidy rows).
+ */
+@media (min-width: 1440px) {
+  .employees-toolbar__filters {
+    flex-wrap: nowrap;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--filters {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    gap: 0.5rem;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--filters .employees-toolbar__search {
+    flex: 1.2 1 0;
+    width: auto;
+    max-width: none;
+    min-width: 5rem;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--filters .employees-toolbar__field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* Date readouts ("Select date", "2026-09-18") are wider than select
+     labels — give both date fields extra share so they rarely clip. */
+  .employees-toolbar__filters > .employees-toolbar__group--filters .employees-toolbar__field:has(.date-field) {
+    flex-grow: 1.3;
+  }
+
+  /* Labels must shrink with their field: as grid items they default to a
+     min-content floor, so at tight widths the text spilled into the
+     neighbouring field ("DEPARTMENTROLE"). Single-line ellipsis instead. */
+  .employees-toolbar__filters .field-inline > .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .employees-toolbar__filters > .employees-toolbar__group--filters .employees-toolbar__field .select-field,
+  .employees-toolbar__filters > .employees-toolbar__group--filters .employees-toolbar__field .date-field {
+    min-width: 0;
+    width: 100%;
   }
 }
 
@@ -11754,7 +11877,13 @@ body::-webkit-scrollbar-thumb {
   }
 
   /* Mobile keeps the old stacked rhythm: full-width Edit columns on its own
-     line, then the full-width Add Employee button. */
+     line, then the full-width Add Employee button. The actions group must
+     also go full width — otherwise it shrink-wraps and the 100% widths
+     inside resolve against content size (small buttons). */
+  .employees-toolbar__filters > .employees-toolbar__group--actions {
+    flex: 1 1 100%;
+  }
+
   .employees-toolbar__editcol {
     flex: 1 1 100%;
     display: flex;
@@ -14018,6 +14147,7 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
@@ -15911,6 +16041,34 @@ body::-webkit-scrollbar-thumb {
   flex: 1 1 min(100%, 16rem);
   min-width: 0;
   max-width: min(100%, 20rem);
+}
+
+/* Search + department/role dropdowns share one line: the select triggers
+   are width:100% by default, so they get a bounded flex basis here. Mobile
+   keeps wrapping; desktop locks to a single line. */
+.today-present-toolbar__row > .select-field {
+  flex: 1 1 9rem;
+  width: auto;
+  min-width: 0;
+  max-width: 13rem;
+}
+
+@media (min-width: 1024px) {
+  .today-present-toolbar__row {
+    flex-wrap: nowrap;
+  }
+
+  .today-present-toolbar__row .btn {
+    flex-shrink: 0;
+  }
+}
+
+/* Dashboard roster preview: the search row sits directly in the card body
+   (no toolbar wrapper), so it takes the toolbar's own padding to clear the
+   section header and card borders on every viewport. Scoped to the new
+   dashboard section only — finalized pages are untouched. */
+.admin-home__roster > .today-present-toolbar__row {
+  padding: 0.85rem 1.15rem;
 }
 
 /* W3 ΓÇö Forms, toolbars, pickers */

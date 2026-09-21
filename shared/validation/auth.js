@@ -52,11 +52,15 @@ export const loginSchema = z
     email: z.string().trim().max(254).optional(),
     password: z.string().min(1, 'Password is required.').max(128),
     deviceId: deviceIdSchema,
+    userAgent: z.string().trim().max(500).optional(),
+    deviceType: z.enum(['mobile', 'laptop', 'desktop', 'other']).optional(),
   })
-  .transform(({ identifier, email, password, deviceId }) => ({
+  .transform(({ identifier, email, password, deviceId, userAgent, deviceType }) => ({
     identifier: (identifier || email || '').trim(),
     password,
     deviceId,
+    userAgent: userAgent || null,
+    deviceType: deviceType || null,
   }))
   .refine((data) => data.identifier.length > 0, {
     message: 'Email, mobile number, or employee ID is required.',

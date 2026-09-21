@@ -1,10 +1,12 @@
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MAX_BULK_UPLOAD_ROWS } from '@shared/validation/common.js';
 import { EMPLOYEE_CODE_FORMAT_HINT } from '@shared/validation/employee.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock.js';
+import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { useToast } from '../../context/ToastContext.jsx';
-import { broadcastEmployeeSync } from '../../utils/portalSync.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['.xlsx', '.xls'];
@@ -16,7 +18,7 @@ const BULK_REGULATIONS = [
   'The "email" column is the employee identifier. Do NOT edit email values.',
   '"email", "mobile", and "employeeCode" are IMMUTABLE via bulk import. Changing mobile or employeeCode fails that row with a validation error naming the employee — except a malformed stored mobile, which is healed when the file carries a valid 10-digit replacement.',
   'To change email or mobile, use the individual employee edit page instead.',
-  'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in. Passwords remain visible in the sync results for any email that fails delivery.',
+  'There are no password or PIN columns. New employees get an auto-generated password (Firstname@EmpCode, e.g. Kenny@EMP108), are emailed their login credentials individually, and must change the temporary password on first sign-in.',
   'New employees REQUIRE: firstName, lastName, email, mobile, joiningDate, designation, role, department, and reportingManagerEmail. Pick the role from the dropdown list in the role column.',
   '"role" changes apply to existing employees too (admin accounts are never touched by bulk import). New reporting managers automatically manage their own department; assign further managed departments from the user edit page for wider team visibility.',
   'Leave "employeeCode" BLANK to auto-generate it (EMP001, EMP002, …). A filled-in code is kept when valid and unused.',
@@ -294,15 +296,136 @@ function ResultsTable({ result, expandedRow, onToggleRow, copiedRow, onCopyPassw
   );
 }
 
+/**
+ * Review popup: shows the dry-run table after "Upload & review" and carries
+ * the sync action. Closing it (X/Escape/backdrop/Discard) discards the file
+ * and preview — same as Discard — so there is never a stranded review with
+ * no way back except re-uploading.
+ */
+function BulkReviewPopup({
+  open,
+  fileName,
+  preview,
+  syncError,
+  loading,
+  expandedRow,
+  onToggleRow,
+  copiedRow,
+  onCopyPassword,
+  onDiscard,
+  onSync,
+  onClose,
+}) {
+  const titleId = useId();
+  const dialogRef = useRef(null);
+
+  useEscapeKey(open && !loading, onClose);
+
+  // Shared reference-counted scroll lock: the confirm dialog stacks above
+  // this popup during sync, so a naive save/restore here leaks
+  // `body { overflow: hidden }` after sync (order-dependent cleanups) and
+  // that leaked overflow breaks the sticky app sidebar.
+  useBodyScrollLock(open);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const previouslyFocused = document.activeElement;
+    dialogRef.current?.focus();
+    return () => {
+      if (previouslyFocused instanceof HTMLElement) {
+        previouslyFocused.focus();
+      }
+    };
+  }, [open]);
+
+  if (!open || !preview) return null;
+
+  return createPortal(
+    <div
+      className="modal__backdrop"
+      role="presentation"
+      onClick={loading ? undefined : onClose}
+    >
+      <div
+        ref={dialogRef}
+        className="modal modal--wide bulk-upload__review-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="modal__header">
+          <h2 id={titleId} className="modal__title">
+            Review changes — nothing applied yet
+          </h2>
+          <p className="modal__lead muted">
+            This is a dry run of “{fileName}”. No employee records were changed
+            and no emails were sent. Review every row, then Confirm &amp; Sync
+            to apply.
+          </p>
+        </header>
+        <div className="modal__body">
+          <FileWarnings warnings={preview.warnings} />
+          <SummaryPills summary={preview.summary} />
+          <ResultsTable
+            result={preview}
+            expandedRow={expandedRow}
+            onToggleRow={onToggleRow}
+            copiedRow={copiedRow}
+            onCopyPassword={onCopyPassword}
+          />
+          {syncError ? (
+            <div className="alert alert--error" role="alert">
+              {syncError}
+            </div>
+          ) : null}
+        </div>
+        <footer className="modal__footer">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onDiscard}
+            disabled={loading}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onSync}
+            disabled={loading || !fileName}
+          >
+            {loading ? (
+              <>
+                <span className="spinner spinner--sm" aria-hidden="true" />
+                Syncing…
+              </>
+            ) : (
+              'Confirm & Sync'
+            )}
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function AdminBulkUpload() {
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess } = useToast();
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [previewing, setPreviewing] = useState(false);
+  // Upload pipeline phase (null when idle): uploading → preparing review.
+  // Descriptive labels replace the old bare "Reviewing" state.
+  const [previewPhase, setPreviewPhase] = useState(null);
+  const previewing = previewPhase !== null;
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [syncError, setSyncError] = useState('');
   const [loading, setLoading] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -378,27 +501,51 @@ export default function AdminBulkUpload() {
     }
   }
 
-  async function handlePreview(event) {
-    event.preventDefault();
+  async function handlePreview() {
     if (!file) {
       setError('Please choose an Excel file before uploading.');
       return;
     }
 
     // Step 1 — dry run: review every change before anything is applied.
-    setPreviewing(true);
+    setPreviewPhase('uploading');
     setError('');
+    setSyncError('');
     setPreview(null);
     setResult(null);
     setExpandedRow(null);
     try {
       const data = await adminApi.bulkPreview(file);
+      setPreviewPhase('preparing');
       setPreview(data);
+      setReviewOpen(true);
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (err?.code === 'ECONNABORTED') {
+        setError('Upload timed out. Check your connection and try again with a smaller file.');
+      } else {
+        setError(getErrorMessage(err));
+      }
     } finally {
-      setPreviewing(false);
+      setPreviewPhase(null);
     }
+  }
+
+  function handleBrowseClick() {
+    if (previewing || loading) return;
+    if (file) {
+      handlePreview();
+    } else {
+      fileInputRef.current?.click();
+    }
+  }
+
+  // Closing the popup without syncing discards everything — same as Discard —
+  // so a closed popup never strands a review with no way back.
+  function closeReviewPopup() {
+    if (loading) return;
+    clearFileSelection();
+    setSyncError('');
+    setReviewOpen(false);
   }
 
   async function handleConfirmSync() {
@@ -416,23 +563,25 @@ export default function AdminBulkUpload() {
       variant: 'danger',
       onConfirm: async () => {
         setLoading(true);
-        setError('');
+        setSyncError('');
         setExpandedRow(null);
         try {
           const data = await adminApi.bulkUpload(file);
           setResult(data);
           setPreview(null);
+          setReviewOpen(false);
           clearFileSelection();
-          const summary = data?.summary ?? {};
-          const errorCount = (summary.validation_error || 0) + (summary.error || 0);
-          broadcastEmployeeSync();
+          const synced = data?.summary ?? {};
+          const syncedErrors = (synced.validation_error || 0) + (synced.error || 0);
           showSuccess(
-            `Sync complete — ${summary.created || 0} created, ${summary.updated || 0} updated` +
-              (errorCount > 0 ? `, ${errorCount} row(s) skipped with errors` : '') +
+            `Sync complete — ${synced.created || 0} created, ${synced.updated || 0} updated` +
+              (syncedErrors > 0 ? `, ${syncedErrors} row(s) skipped with errors` : '') +
               '.',
           );
         } catch (err) {
-          setError(getErrorMessage(err));
+          // Page-level alert sits behind the popup backdrop — surface sync
+          // failures inside the popup instead.
+          setSyncError(getErrorMessage(err));
         } finally {
           setLoading(false);
         }
@@ -460,8 +609,6 @@ export default function AdminBulkUpload() {
       setCopiedRow((current) => (current === rowNumber ? null : current));
     }, 2000);
   }
-
-  const canUpload = Boolean(file) && !loading && !previewing;
 
   return (
     <div className="page page--bulk-upload">
@@ -586,11 +733,24 @@ export default function AdminBulkUpload() {
 
           <button
             type="button"
-            className="btn bulk-upload__browse-btn"
-            onClick={() => fileInputRef.current?.click()}
+            className="btn btn-primary bulk-upload__browse-btn"
+            onClick={handleBrowseClick}
+            disabled={previewing || loading}
           >
-            Browse Files
+            {(previewing || loading) && file ? (
+              <>
+                <span className="spinner spinner--sm" aria-hidden="true" />
+                {previewPhase === 'preparing'
+                  ? 'Preparing review…'
+                  : previewing
+                    ? 'Uploading…'
+                    : 'Upload & review'}
+              </>
+            ) : (
+              file ? 'Upload & review' : 'Browse Files'
+            )}
           </button>
+
         </section>
       </div>
 
@@ -608,113 +768,36 @@ export default function AdminBulkUpload() {
         </ul>
       </section>
 
-      {preview ? (
-        <section className="bulk-upload__results card" aria-labelledby="bulk-preview-title">
-          <h2 id="bulk-preview-title" className="bulk-upload__results-title">
-            Review changes — nothing applied yet
-          </h2>
-          <p className="alert alert--warning small" role="note">
-            This is a dry run of “{file?.name ?? 'the uploaded file'}”. No employee records
-            were changed and no emails were sent. Review every row, then Confirm &amp; Sync to
-            apply.
-          </p>
-          <FileWarnings warnings={preview.warnings} />
-          <SummaryPills summary={preview.summary} />
-          <ResultsTable
-            result={preview}
-            expandedRow={expandedRow}
-            onToggleRow={toggleRowExpand}
-            copiedRow={copiedRow}
-            onCopyPassword={copyGeneratedPassword}
-          />
-          <div className="form-actions" style={{ marginTop: '1rem' }}>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={clearFileSelection}
-              disabled={loading}
-            >
-              Discard
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleConfirmSync}
-              disabled={loading || !file}
-            >
-              {loading ? 'Syncing…' : 'Confirm & Sync'}
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {result ? (
-        <section className="bulk-upload__results card" aria-labelledby="bulk-results-title">
-          <h2 id="bulk-results-title" className="bulk-upload__results-title">
-            Sync results
-          </h2>
-          {result.summary.created > 0 ? (
-            <p className="alert alert--warning small" role="note">
-              {result.summary.created} new account{result.summary.created === 1 ? '' : 's'} created.
-              Generated passwords are shown only here — copy each one and share it with its
-              employee securely.
-            </p>
-          ) : null}
-          <FileWarnings warnings={result.warnings} />
-          <SummaryPills summary={result.summary} />
-          <ResultsTable
-            result={result}
-            expandedRow={expandedRow}
-            onToggleRow={toggleRowExpand}
-            copiedRow={copiedRow}
-            onCopyPassword={copyGeneratedPassword}
-          />
-        </section>
-      ) : null}
+      <BulkReviewPopup
+        open={reviewOpen}
+        fileName={file?.name ?? ''}
+        preview={preview}
+        syncError={syncError}
+        loading={loading}
+        expandedRow={expandedRow}
+        onToggleRow={toggleRowExpand}
+        copiedRow={copiedRow}
+        onCopyPassword={copyGeneratedPassword}
+        onDiscard={closeReviewPopup}
+        onSync={handleConfirmSync}
+        onClose={closeReviewPopup}
+      />
 
       <footer className="bulk-upload__footer">
         {result && !file && !loading ? (
-          <>
-            <p className="bulk-upload__footer-note muted small" role="status">
-              Sync complete — {result.summary.updated} updated, {result.summary.created} created,{' '}
-              {result.summary.unchanged} unchanged
-              {(result.summary.validation_error || 0) + (result.summary.error || 0) > 0
-                ? `, ${(result.summary.validation_error || 0) + (result.summary.error || 0)} with errors`
-                : ''}
-              . Changes are live.
-            </p>
-            <button
-              type="button"
-              className="btn btn-outline-primary bulk-upload__submit"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Upload another file
-            </button>
-          </>
-        ) : preview ? (
           <p className="bulk-upload__footer-note muted small" role="status">
-            Review the changes above, then Confirm &amp; Sync to apply them — or Discard to
-            start over.
+            Sync complete — {result.summary.updated} updated, {result.summary.created} created,{' '}
+            {result.summary.unchanged} unchanged
+            {(result.summary.validation_error || 0) + (result.summary.error || 0) > 0
+              ? `, ${(result.summary.validation_error || 0) + (result.summary.error || 0)} with errors`
+              : ''}
+            . Changes are live.
           </p>
         ) : (
-          <>
-            <p className="bulk-upload__footer-note muted small">
-              Download the employee directory, make changes, and upload to review. Existing
-              employees are matched by email. New emails create new accounts after you confirm.
-            </p>
-            <form onSubmit={handlePreview}>
-              <button type="submit" className="btn btn-primary bulk-upload__submit" disabled={!canUpload}>
-                {previewing ? (
-                  <>
-                    <span className="spinner spinner--sm" aria-hidden="true" />
-                    Reviewing…
-                  </>
-                ) : (
-                  'Upload & Review'
-                )}
-              </button>
-            </form>
-          </>
+          <p className="bulk-upload__footer-note muted small">
+            Download the employee directory, make changes, and upload to review. Existing
+            employees are matched by email. New emails create new accounts after you confirm.
+          </p>
         )}
       </footer>
 

@@ -1,11 +1,7 @@
 import mongoose from 'mongoose';
-import {
-  PERMISSIONS,
-  SYSTEM_ROLE_SLUGS,
-  hasCompanyWideScope,
-  hasPermission,
-} from '../../../shared/permissions.js';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
+import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { UndoAction } from '../models/UndoAction.js';
 
@@ -22,6 +18,7 @@ import {
 import { getHolidayMapForYear, adminApplyLeaveForEmployeeDay } from './leaveService.js';
 import {
   isUserInTeamScope,
+  resolveTeamRosterIds,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import {
@@ -374,6 +371,10 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const limit =
     Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
   const searchNeedle = String(options.search ?? '').trim().toLowerCase();
+  // Department/role narrowing (same team-scope membership as the Employee
+  // List: filters only ever narrow the scoped roster, never widen it).
+  const departmentFilter = options.departmentId ? String(options.departmentId) : '';
+  const roleFilter = options.roleId ? String(options.roleId) : '';
 
   const emptySummary = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
@@ -382,44 +383,28 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const todayKey = getISTDateInputValue();
   const istToday = todayKey;
 
-  const canReadAll = hasCompanyWideScope(permissions);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   let userIds = [];
   if (canReadAll) {
-    // Directory parity: the Employee List directory counts non-admin
-    // accounts of all statuses, so the board shows the same roster (inactive
-    // members render as inactive rows, never as absent) and both totals
-    // reconcile.
-    const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
-    const rosterQuery = adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
-    const roster = await User.find(rosterQuery).select('_id').lean();
+    // Directory parity with the Employee List (All includes admins): the
+    // roster carries every scoped account of all statuses, so admins are
+    // searchable and the totals reconcile with the directory stats.
+    // Inactive members render as inactive rows, never as absent.
+    // Explicit department/role narrowing still applies below.
+    const roster = await User.find({}).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
-    // Canonical team scope: ACTIVE direct reports + delegate chain only.
-    // Inactive ex-reports are hidden (unlike the admin board, which keeps
-    // inactive rows). Managed departments do NOT widen visibility: an RM sees
-    // precisely the active people under them, matching every other team view.
-    const directReports = await User.find({ reportingManagerId: actor._id, isActive: true }).select('_id').lean();
-    const delegatedManagers = await User.find({ delegateApproverId: actor._id, isActive: true }).select('_id').lean();
-    const delegatedReports =
-      delegatedManagers.length > 0
-        ? await User.find({
-            reportingManagerId: { $in: delegatedManagers.map((manager) => manager._id) },
-            isActive: true,
-          })
-            .select('_id')
-            .lean()
-        : [];
-    const seen = new Set();
-    userIds = [...directReports, ...delegatedReports]
-      .map((member) => member._id)
-      .filter((id) => {
-        const key = String(id);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+    // Visibility roster (managed departments + reports + delegates + self +
+    // fellow RMs, all statuses): same membership as the Employee List so both
+    // totals reconcile. Inactive members render as inactive rows below.
+    userIds = await resolveTeamRosterIds(
+      actor,
+      permissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    ) ?? [];
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
@@ -525,12 +510,59 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   // Alphabetical by name so team tables render A–Z (UI shows no manual sort).
   // Inactive roster members are included (directory parity) and mapped to an
   // explicit inactive status further below — never counted absent.
-  const users = await User.find({ _id: { $in: userIds } })
+  const allUsers = await User.find({ _id: { $in: userIds } })
     .select('firstName lastName name email employeeCode departmentId roleId isActive')
     .populate('departmentId', 'name code')
     .populate('roleId', 'name slug')
     .sort({ name: 1, _id: 1 })
     .lean();
+
+  const users = allUsers.filter((user) => {
+    if (departmentFilter) {
+      const deptId = user.departmentId?._id?.toString?.() ?? user.departmentId?.toString?.() ?? '';
+      if (deptId !== departmentFilter) return false;
+    }
+    if (roleFilter) {
+      const rId = user.roleId?._id?.toString?.() ?? user.roleId?.toString?.() ?? '';
+      if (rId !== roleFilter) return false;
+    }
+    return true;
+  });
+
+  // Distinct departments/roles across the whole scoped membership (before
+  // search/pagination/narrowing) so scoped viewers get department/role
+  // filter options limited to the people under them — never the full
+  // directory. Full readers ignore these and keep the directory lists.
+  // IDs come from the raw membership query (populate yields null for
+  // dangling references) and names resolve via the directory collections.
+  const facetMembers = await User.find({ _id: { $in: userIds } })
+    .select('departmentId roleId')
+    .lean();
+  const facetDeptIds = [
+    ...new Set(
+      (facetMembers ?? [])
+        .map((member) => member.departmentId?.toString?.() ?? '')
+        .filter(Boolean),
+    ),
+  ];
+  const facetRoleIds = [
+    ...new Set(
+      (facetMembers ?? []).map((member) => member.roleId?.toString?.() ?? '').filter(Boolean),
+    ),
+  ];
+  const [facetDeptDocs, facetRoleDocs] = await Promise.all([
+    facetDeptIds.length > 0 ? Department.find({ _id: { $in: facetDeptIds } }).select('name').lean() : [],
+    facetRoleIds.length > 0 ? Role.find({ _id: { $in: facetRoleIds } }).select('name slug').lean() : [],
+  ]);
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+  const scopeFacets = {
+    departments: (facetDeptDocs ?? [])
+      .map((dept) => ({ id: dept._id.toString(), name: dept.name }))
+      .sort(byName),
+    roles: (facetRoleDocs ?? [])
+      .map((role) => ({ id: role._id.toString(), name: role.name, slug: role.slug ?? null }))
+      .sort(byName),
+  };
 
   const teamStatus = users.map((user) => {
     const userIdStr = user._id.toString();
@@ -642,6 +674,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     teamStatus: rows,
     pagination: { page: safePage, limit, total, totalPages },
     summary,
+    scopeFacets,
   };
 }
 
@@ -850,10 +883,10 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
         enforceOfficeRadius,
       });
 
-  const businessReasons = [];
+      const businessReasons = [];
       if (type === 'check_in') {
         if (today.checkIn) {
-    businessReasons.push('You have already checked in today.');
+          businessReasons.push('You have already checked in today.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
         } else {
@@ -862,14 +895,14 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           const compOffGateError = await compOffCheckInGateError(userId, office, istToday, session);
           if (compOffGateError) businessReasons.push(compOffGateError);
         }
-  }
-  if (type === 'check_out' && !today.canCheckOut) {
-    if (!today.checkIn) {
-      businessReasons.push('Check-in is required before check-out.');
-    } else {
-      businessReasons.push('You have already checked out today.');
-    }
-  }
+      }
+      if (type === 'check_out' && !today.canCheckOut) {
+        if (!today.checkIn) {
+          businessReasons.push('Check-in is required before check-out.');
+        } else {
+          businessReasons.push('You have already checked out today.');
+        }
+      }
       if (type === 'check_out' && today.checkIn && !today.checkOut) {
         const dayStart = startOfDayIST();
         const dayEnd = endOfDayIST();
@@ -881,12 +914,12 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
           timestamp: { $gte: today.checkIn.timestamp, $lte: dayEnd },
         }).session(session);
         if (duplicateCheckOut) {
-      businessReasons.push('You have already checked out today.');
-    }
-  }
+          businessReasons.push('You have already checked out today.');
+        }
+      }
 
-  const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
-  const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
+      const rejectionReasons = [...geo.rejectionReasons, ...businessReasons];
+      const status = rejectionReasons.length === 0 ? 'allowed' : 'rejected';
 
       let policyFields = {};
       if (type === 'check_in' && status === 'allowed') {
@@ -896,19 +929,19 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       const [record] = await AttendanceRecord.create(
         [
           {
-    userId,
-    type,
+            userId,
+            type,
             attendanceMode,
-    timestamp: new Date(),
-    latitude: payload.latitude,
-    longitude: payload.longitude,
-    accuracyMeters: payload.accuracyMeters,
-    distanceMeters: geo.distanceMeters,
-    officeLatitude: office.latitude,
-    officeLongitude: office.longitude,
-    radiusMeters: office.radiusMeters,
-    status,
-    rejectionReasons,
+            timestamp: new Date(),
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            accuracyMeters: payload.accuracyMeters,
+            distanceMeters: geo.distanceMeters,
+            officeLatitude: office.latitude,
+            officeLongitude: office.longitude,
+            radiusMeters: office.radiusMeters,
+            status,
+            rejectionReasons,
             lateNote: type === 'check_in' && status === 'allowed' ? payload.lateNote ?? null : null,
             leaveStatus:
               type === 'check_in' && (wfhPendingToday || wfhApprovalPendingToday)
@@ -1058,11 +1091,16 @@ export async function getAdminAttendance({
     searchUserIds = matched.map((user) => user._id);
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && canReadTeam && actor?._id) {
-    const scopedIds = await resolveTeamScopedUserIds(actor, permissions);
+    const scopedIds = await resolveTeamScopedUserIds(
+      actor,
+      permissions,
+      PERMISSIONS.ATTENDANCE_READ_ALL,
+      PERMISSIONS.ATTENDANCE_READ_TEAM,
+    );
 
     if (userId) {
       const allowed = scopedIds === null || scopedIds.some((id) => id.toString() === userId.toString());
@@ -1366,8 +1404,8 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
     return actor._id;
   }
 
-  const canReadAll = hasCompanyWideScope(permissions);
-  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_RECORD_R);
+  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && !canReadTeam) {
     throwError('You do not have permission to view this employee\'s attendance.', 403);

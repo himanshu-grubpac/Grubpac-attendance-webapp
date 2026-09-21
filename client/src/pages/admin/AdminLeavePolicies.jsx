@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { createLeavePolicySchema, createLeaveTypeSchema, updateLeavePolicySchema, updateLeaveTypeSchema } from '@shared/validation/leave.js';
 import { PERMISSIONS } from '@shared/permissions.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import { getISTYear } from '../../utils/datetime.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
@@ -19,6 +22,12 @@ import LeaveCarryBulkModal from './LeaveCarryBulkModal.jsx';
 import EmployeeLeaveAdjustment from './EmployeeLeaveAdjustment.jsx';
 
 const currentCalendarYear = getISTYear();
+
+const LEAVE_POLICY_TABS = [
+  { id: 'types', label: 'Leave types' },
+  { id: 'policies', label: 'Policies' },
+  { id: 'adjustments', label: 'Adjustments' },
+];
 
 const emptyTypeForm = {
   code: '',
@@ -41,15 +50,7 @@ const emptyPolicyForm = {
   isActive: true,
 };
 
-function buildYearOptions() {
-  const years = [];
-  for (let year = currentCalendarYear - 2; year <= currentCalendarYear + 1; year += 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
 
-const balanceYearOptions = buildYearOptions();
 
 function TableSkeleton() {
   return (
@@ -121,6 +122,12 @@ export default function AdminLeavePolicies() {
 
   const [policies, setPolicies] = useState([]);
   const [policyYear, setPolicyYear] = useState(String(currentCalendarYear));
+  // Next-year planning stays possible (§8 exception for policy years).
+  const oldestPolicyYear = useOldestJoiningYear();
+  const balanceYearOptions = useMemo(
+    () => buildDynamicYearOptions(oldestPolicyYear, currentCalendarYear, { includeNextYear: true }),
+    [oldestPolicyYear],
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -530,9 +537,44 @@ export default function AdminLeavePolicies() {
 
   useEscapeKey(Boolean(historyPolicy), () => setHistoryPolicy(null));
 
+  // Tab views mirror the salary module (?tab=, deep-linkable). Tabs hide
+  // sections the caller cannot use; policies is always available. Landing
+  // defaults to Leave types (falling back to Policies without manage
+  // rights), so opening the page shows types first.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const visibleTabs = LEAVE_POLICY_TABS.filter((tab) => {
+    if (tab.id === 'types') return canManagePolicies;
+    if (tab.id === 'adjustments') return canAdjustBalances;
+    return true;
+  });
+  const defaultTab = visibleTabs.some((tab) => tab.id === 'types') ? 'types' : 'policies';
+  const activeTab = visibleTabs.some((tab) => tab.id === searchParams.get('tab'))
+    ? searchParams.get('tab')
+    : defaultTab;
+  const setActiveTab = useCallback(
+    (tabId) => {
+      setSearchParams(tabId === defaultTab ? {} : { tab: tabId }, { replace: true });
+    },
+    [setSearchParams, defaultTab],
+  );
+
   return (
     <div className="page page--leave-policies">
-      {canManagePolicies ? (
+      <nav className="salary-tabs" aria-label="Leave policy sections">
+        {visibleTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`salary-tabs__tab${activeTab === tab.id ? ' salary-tabs__tab--active' : ''}`}
+            aria-current={activeTab === tab.id ? 'page' : undefined}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {canManagePolicies && activeTab === 'types' ? (
         <section className="card card--table leave-types-panel" aria-label="Leave types">
           <div className="card__toolbar">
             <h2 className="card__title">Leave types</h2>
@@ -601,6 +643,7 @@ export default function AdminLeavePolicies() {
         </section>
       ) : null}
 
+      {activeTab === 'policies' ? (
       <section className="leave-policies-panel card card--table" aria-label="Leave policies">
         <div className="leave-policies-toolbar card__toolbar">
           <div className="leave-policies-toolbar__filters filter-bar">
@@ -705,8 +748,9 @@ export default function AdminLeavePolicies() {
           </div>
         )}
       </section>
+      ) : null}
 
-      {canAdjustBalances ? (
+      {canAdjustBalances && activeTab === 'adjustments' ? (
         <EmployeeLeaveAdjustment
           policyYear={policyYear}
           onOpenAuditReport={() => setAuditModalOpen(true)}

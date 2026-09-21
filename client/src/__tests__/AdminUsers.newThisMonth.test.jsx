@@ -126,7 +126,7 @@ describe('AdminUsers new-this-month filter', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows the plain notice when no other filter is active', async () => {
+  it('combines the month filter with the default Active status', async () => {
     sessionStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({ newThisMonthFilter: true }));
     setup();
 
@@ -134,11 +134,10 @@ describe('AdminUsers new-this-month filter', () => {
 
     await waitFor(() => {
       expect(adminApi.listEmployees).toHaveBeenLastCalledWith(
-        expect.objectContaining({ createdAfter: '2026-09-01' }),
+        expect.objectContaining({ createdAfter: '2026-09-01', isActive: 'true' }),
       );
     });
-    const params = adminApi.listEmployees.mock.calls.at(-1)[0];
-    expect(params).not.toHaveProperty('isActive');
+    // Default Active is not an "other" filter, so the plain notice shows.
     expect(
       screen.getByText('Showing employees registered since sept 1st.'),
     ).toBeInTheDocument();

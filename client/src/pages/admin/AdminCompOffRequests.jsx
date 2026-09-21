@@ -8,6 +8,8 @@ import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
+import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import { showFormError } from '../../utils/formErrors.js';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
@@ -112,14 +114,7 @@ function queueFromParam(value) {
   return 'pending';
 }
 
-function buildYearOptions() {
-  const currentYear = Number(getISTDateInputValue().slice(0, 4));
-  const years = [{ value: '', label: 'All years' }];
-  for (let year = currentYear; year >= currentYear - 4; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
+const ALL_YEARS_OPTION = { value: '', label: 'All years' };
 
 const MONTH_PART_OPTIONS = [
   { value: '', label: 'All months' },
@@ -232,8 +227,13 @@ export default function AdminCompOffRequests() {
   const monthPartFilterRef = useRef(monthPartFilter);
   monthPartFilterRef.current = monthPartFilter;
 
-  const yearOptions = useMemo(() => buildYearOptions(), []);
   const currentYear = useMemo(() => getISTDateInputValue().slice(0, 4), []);
+  const oldestYear = useOldestJoiningYear();
+  const yearOptions = useMemo(
+    () =>
+      buildDynamicYearOptions(oldestYear, Number(currentYear), { leading: ALL_YEARS_OPTION }),
+    [oldestYear, currentYear],
+  );
 
   // Employee filter options derive from the loaded (already scope-filtered)
   // queue rows — never from the directory. A reporting manager therefore only
