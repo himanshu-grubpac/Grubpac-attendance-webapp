@@ -107,6 +107,7 @@ export default function DateField({
   onChange,
   placeholder = 'Select date',
   disabled = false,
+  clearable = false,
   id: idProp,
   min,
   max,
@@ -297,6 +298,18 @@ export default function DateField({
     }
   }
 
+  function handleClear() {
+    if (disabled || !selected) return;
+
+    ignoreTriggerClickRef.current = true;
+    window.setTimeout(() => {
+      ignoreTriggerClickRef.current = false;
+    }, 100);
+
+    onChangeRef.current('');
+    setOpen(false);
+  }
+
   return (
     <>
       <button
@@ -444,6 +457,16 @@ export default function DateField({
               </div>
 
               <div className="date-field__footer">
+                {clearable && selected ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={handleClear}
+                  >
+                    Clear
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"

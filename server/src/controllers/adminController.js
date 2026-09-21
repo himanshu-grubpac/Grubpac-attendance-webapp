@@ -843,6 +843,10 @@ export async function updateEmployee(req, res) {
   }
   if (parsed.endingDate !== undefined) {
     employee.endingDate = parsed.endingDate;
+    // Clearing a planned end date resumes employment.
+    if (parsed.endingDate === null && previous.endingDate) {
+      employee.isActive = true;
+    }
   }
 
   if (parsed.managedDepartmentIds !== undefined) {
@@ -856,6 +860,12 @@ export async function updateEmployee(req, res) {
       return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
     }
     employee.managedDepartmentIds = await resolveManagedDepartments(parsed.managedDepartmentIds);
+  }
+
+  // Explicit reactivation cancels a past end date so the auto-deactivate
+  // guard below does not immediately revert isActive on status-only PATCHes.
+  if (parsed.isActive === true && employee.endingDate && new Date(employee.endingDate) < new Date()) {
+    employee.endingDate = null;
   }
 
   // Auto-deactivate if ending date is in the past.

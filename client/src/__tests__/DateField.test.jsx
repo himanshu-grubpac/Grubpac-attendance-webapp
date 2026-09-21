@@ -55,6 +55,25 @@ describe('DateField isDateAllowed gate', () => {
     expect(onChange).toHaveBeenCalledWith(TUESDAY);
   });
 
+  it('clearable optional dates can be cleared from the picker footer', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <DateField
+        value={TUESDAY}
+        onChange={onChange}
+        clearable
+        aria-label="Ending date"
+      />,
+    );
+
+    await user.click(openPicker('Ending date'));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('');
+  });
+
   it('ANDs the gate with min/max range checks', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

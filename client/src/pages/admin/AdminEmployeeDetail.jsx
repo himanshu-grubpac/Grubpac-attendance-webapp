@@ -228,6 +228,7 @@ function EmploymentEditFields({
           value={orgForm.endingDate}
           onChange={(value) => updateField('endingDate', value)}
           min={orgForm.joiningDate || undefined}
+          clearable
           aria-label="Ending date"
         />
         <FieldError message={fieldErrors.endingDate} />

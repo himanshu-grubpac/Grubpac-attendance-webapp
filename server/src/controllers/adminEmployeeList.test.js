@@ -6,6 +6,7 @@ import { User } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { getEmployee, getEmployeeStats, listEmployees, updateEmployee } from './adminController.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
+import { parseDateInputAsISTDay } from '../utils/istDate.js';
 
 let memServer;
 
@@ -345,6 +346,83 @@ test('search matches partial tokens in any order', async () => {
   assert.deepEqual(await searchIds('Abhi'), [user._id.toString()]);
   // Middle substring.
   assert.deepEqual(await searchIds('hek Ana'), [user._id.toString()]);
+});
+
+const employeeAdminPermissions = [
+  PERMISSIONS.EMPLOYEES_RECORD_R,
+  PERMISSIONS.EMPLOYEES_ACCOUNT_R,
+  PERMISSIONS.EMPLOYEES_STATUS_U,
+  PERMISSIONS.EMPLOYEES_STATUS_X1,
+  PERMISSIONS.EMPLOYEES_EMPLOYMENT_U,
+];
+
+test('reactivating an employee clears a past ending date', async () => {
+  const { admin, adminRole, employee } = await seedAdminAndEmployee();
+  const pastEndingDate = parseDateInputAsISTDay('2020-01-01');
+
+  await User.findByIdAndUpdate(employee._id, {
+    isActive: false,
+    endingDate: pastEndingDate,
+    designation: 'Engineer',
+    joiningDate: parseDateInputAsISTDay('2020-06-01'),
+    reportingManagerId: admin._id,
+  });
+
+  const updated = captureRes();
+  await updateEmployee(
+    {
+      params: { id: employee._id.toString() },
+      body: { isActive: true },
+      user: { _id: admin._id, roleId: adminRole },
+      userPermissions: employeeAdminPermissions,
+    },
+    updated.res,
+  );
+
+  assert.equal(updated.res.statusCode, 200);
+  const stored = await User.findById(employee._id).lean();
+  assert.equal(stored.isActive, true);
+  assert.equal(stored.endingDate, null);
+});
+
+test('clearing ending date reactivates an inactive employee', async () => {
+  const { admin, adminRole, empRole, employee } = await seedAdminAndEmployee();
+  const pastEndingDate = parseDateInputAsISTDay('2020-01-01');
+
+  await User.findByIdAndUpdate(employee._id, {
+    isActive: false,
+    endingDate: pastEndingDate,
+    designation: 'Engineer',
+    joiningDate: parseDateInputAsISTDay('2020-06-01'),
+    reportingManagerId: admin._id,
+  });
+
+  const updated = captureRes();
+  await updateEmployee(
+    {
+      params: { id: employee._id.toString() },
+      body: {
+        firstName: employee.firstName,
+        lastName: employee.lastName ?? '',
+        email: employee.email,
+        mobile: employee.mobile,
+        designation: 'Engineer',
+        joiningDate: '2020-06-01',
+        dateOfBirth: null,
+        endingDate: null,
+        roleId: empRole._id.toString(),
+        reportingManagerId: admin._id.toString(),
+      },
+      user: { _id: admin._id, roleId: adminRole },
+      userPermissions: employeeAdminPermissions,
+    },
+    updated.res,
+  );
+
+  assert.equal(updated.res.statusCode, 200);
+  const stored = await User.findById(employee._id).lean();
+  assert.equal(stored.isActive, true);
+  assert.equal(stored.endingDate, null);
 });
 
 test('admin detail fetch stays masked and admin update stays blocked', async () => {
