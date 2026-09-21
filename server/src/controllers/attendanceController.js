@@ -62,9 +62,16 @@ export async function checkOut(req, res) {
   res.status(result.status === 'allowed' ? 201 : 400).json(result);
 }
 
+const historyQuerySchema = paginationSchema.extend({
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  status: z.enum(['allowed', 'rejected']).optional(),
+  type: z.enum(['check_in', 'check_out']).optional(),
+});
+
 export async function getHistory(req, res) {
-  const { page, limit } = paginationSchema.parse(req.query);
-  const result = await getEmployeeHistory(req.user._id, { page, limit });
+  const { page, limit, dateFrom, dateTo, status, type } = historyQuerySchema.parse(req.query);
+  const result = await getEmployeeHistory(req.user._id, { page, limit, dateFrom, dateTo, status, type });
   res.json(result);
 }
 

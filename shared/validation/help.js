@@ -43,6 +43,11 @@ export const createHelpCommentSchema = z.object({
 export const helpTicketQuerySchema = paginationSchema.extend({
   scope: z.enum(['mine', 'team', 'all']).default('mine'),
   status: z.enum(HELP_STATUSES).optional(),
+  category: z.enum(HELP_CATEGORIES).optional(),
+  priority: z.enum(HELP_PRIORITIES).optional(),
+  search: z.string().trim().max(100).optional(),
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const HELP_ATTACHMENT_MAX_BYTES = 5_242_880;

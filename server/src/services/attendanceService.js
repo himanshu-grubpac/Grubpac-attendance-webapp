@@ -1030,15 +1030,24 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
   }
 }
 
-export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) {
+export async function getEmployeeHistory(userId, { page = 1, limit = 20, dateFrom, dateTo, status, type } = {}) {
   const skip = (page - 1) * limit;
+  const filter = { userId };
+  if (dateFrom || dateTo) {
+    filter.timestamp = {};
+    if (dateFrom) filter.timestamp.$gte = new Date(dateFrom + 'T00:00:00.000Z');
+    if (dateTo) filter.timestamp.$lte = new Date(dateTo + 'T23:59:59.999Z');
+  }
+  if (status) filter.status = status;
+  if (type) filter.type = type;
+
   const [allRecords, total] = await Promise.all([
-    AttendanceRecord.find({ userId })
+    AttendanceRecord.find(filter)
       // _id tiebreaker keeps offset pagination stable when timestamps tie.
       .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
       .limit(limit * 2),
-    AttendanceRecord.countDocuments({ userId }),
+    AttendanceRecord.countDocuments(filter),
   ]);
 
   const records = filterOrphanCheckOuts(allRecords).slice(0, limit);
@@ -1056,8 +1065,11 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
 
 export async function getAdminAttendance({
   userId,
+  departmentId,
   date,
   weekStart,
+  dateFrom,
+  dateTo,
   search,
   type,
   status,
@@ -1077,8 +1089,12 @@ export async function getAdminAttendance({
     query.status = status;
   }
 
-  // Name / employee-code search: resolve matching users first, then filter
-  // records to them (intersected with team scope below when applicable).
+  if (dateFrom || dateTo) {
+    query.timestamp = {};
+    if (dateFrom) query.timestamp.$gte = new Date(dateFrom + 'T00:00:00.000Z');
+    if (dateTo) query.timestamp.$lte = new Date(dateTo + 'T23:59:59.999Z');
+  }
+
   let searchUserIds = null;
   const needle = String(search ?? '').trim();
   if (needle) {
@@ -1089,6 +1105,18 @@ export async function getAdminAttendance({
       .select('_id')
       .lean();
     searchUserIds = matched.map((user) => user._id);
+  }
+
+  if (departmentId) {
+    const deptUsers = await User.find({ departmentId, isActive: true })
+      .select('_id')
+      .lean();
+    const deptUserIds = deptUsers.map((u) => u._id);
+    if (searchUserIds) {
+      searchUserIds = searchUserIds.filter((id) => deptUserIds.some((du) => du.toString() === id.toString()));
+    } else {
+      searchUserIds = deptUserIds;
+    }
   }
 
   const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
