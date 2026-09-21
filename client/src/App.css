@@ -4408,6 +4408,18 @@ body::-webkit-scrollbar-thumb {
   color: var(--danger, #c0392b);
 }
 
+.download-progress-modal__status {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.download-progress-modal__status .help-attachment-upload__progress-summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
 .help-ticket-hero {
   display: grid;
   gap: var(--space-3);
@@ -6687,6 +6699,25 @@ body::-webkit-scrollbar-thumb {
   color: #0891b2;
 }
 
+.month-calendar__cell--comp_off_pending {
+  background: color-mix(in srgb, #a855f7 12%, var(--surface));
+  border-color: color-mix(in srgb, #a855f7 35%, var(--border));
+  border-style: dashed;
+  color: #7e22ce;
+}
+
+.month-calendar__cell--comp_off_approved {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--surface));
+  border-color: color-mix(in srgb, #8b5cf6 38%, var(--border));
+  color: #6d28d9;
+}
+
+.month-calendar__cell--comp_off_worked {
+  background: color-mix(in srgb, #7c3aed 18%, var(--surface));
+  border-color: color-mix(in srgb, #7c3aed 42%, var(--border));
+  color: #5b21b6;
+}
+
 .month-calendar__cell--holiday {
   background: rgba(255, 95, 46, 0.12);
   border-color: rgba(255, 95, 46, 0.28);
@@ -6769,6 +6800,22 @@ body::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, #06b6d4 8%, var(--surface));
   border-style: dashed;
   border-color: color-mix(in srgb, #06b6d4 40%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_pending {
+  background: color-mix(in srgb, #a855f7 12%, var(--surface));
+  border-style: dashed;
+  border-color: color-mix(in srgb, #a855f7 35%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_approved {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--surface));
+  border-color: color-mix(in srgb, #8b5cf6 38%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_worked {
+  background: color-mix(in srgb, #7c3aed 18%, var(--surface));
+  border-color: color-mix(in srgb, #7c3aed 42%, var(--border));
 }
 
 .month-calendar__swatch--holiday {
@@ -8249,6 +8296,7 @@ body::-webkit-scrollbar-thumb {
 .page--departments,
 .page--faq-demo,
 .page--roles,
+.page--role-manage,
 .page--leave-policies,
 .page--salary,
 .page--calendar-management,
@@ -13118,6 +13166,94 @@ body::-webkit-scrollbar-thumb {
   max-width: 72rem;
 }
 
+.page--role-manage {
+  gap: var(--space-3);
+  max-width: 72rem;
+}
+
+.page--role-manage .back-link {
+  margin-bottom: 0;
+}
+
+.role-manage-form {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.role-manage-section__body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.role-manage-field {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.role-manage-empty {
+  padding: var(--space-4);
+}
+
+.role-manage__fields-row {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.role-manage__key-caption {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.role-manage__key-caption code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82em;
+  letter-spacing: 0.03em;
+}
+
+.role-manage-permissions .role-manage-section__body {
+  gap: 0.75rem;
+}
+
+/* Full-page role manage — drop modal-era nested scroll box on permission grid */
+.page--role-manage .rbac-grid__table-wrap {
+  max-height: none;
+}
+
+.page--role-manage .rbac-grid__table-wrap.roles-permissions {
+  max-height: none;
+  overflow: visible;
+  overscroll-behavior: auto;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-gutter: auto;
+}
+
+.role-manage-form--view .rbac-grid__crud-check input,
+.role-manage-form--view .rbac-grid__action-chip {
+  cursor: default;
+}
+
+.roles-table__name-link {
+  display: inline;
+  color: inherit;
+  text-decoration: none;
+}
+
+.roles-table__name-link:hover .roles-table__name-text,
+.roles-table__name-link:focus-visible .roles-table__name-text {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
 .roles-panel {
   padding: 0;
   overflow: hidden;
@@ -13540,6 +13676,372 @@ body::-webkit-scrollbar-thumb {
   cursor: default;
 }
 
+.roles-modal__key-caption {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.roles-modal__key-caption code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.82em;
+  letter-spacing: 0.03em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── RBAC permission grid (roles modal) ─────────────────────────── */
+
+.rbac-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.rbac-grid__toolbar {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.rbac-grid__search {
+  width: 100%;
+}
+
+.rbac-grid__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+}
+
+.rbac-grid__clear:not(:disabled) {
+  color: var(--danger, #b91c1c);
+}
+
+.rbac-grid__progress {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.rbac-grid__progress-label {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.rbac-grid__progress-bar {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 70%, var(--surface-2));
+  overflow: hidden;
+}
+
+.rbac-grid__progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 78%, var(--text-h));
+  transition: width var(--interaction);
+}
+
+.rbac-grid__table-wrap {
+  padding: 0;
+  max-height: min(32rem, 55vh);
+}
+
+.rbac-grid__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.rbac-grid__table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--surface-2) 92%, var(--surface));
+}
+
+.rbac-grid__table th {
+  padding: 0.55rem 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+  color: color-mix(in srgb, var(--primary) 68%, var(--text-h));
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 12%, var(--border));
+  white-space: nowrap;
+}
+
+.rbac-grid__col-resource {
+  text-align: left !important;
+  min-width: 11rem;
+}
+
+.rbac-grid__col-scope {
+  min-width: 4.5rem;
+}
+
+.rbac-grid__col-crud {
+  width: 2.4rem;
+}
+
+.rbac-grid__col-extras {
+  text-align: left !important;
+  min-width: 9rem;
+}
+
+.rbac-grid__module-row td,
+.rbac-grid__section-row td,
+.rbac-grid__row td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  vertical-align: middle;
+}
+
+.rbac-grid__module-row td {
+  padding: 0;
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+
+.rbac-grid__module-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.rbac-grid__module-collapse {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-height: 0;
+  font: inherit;
+  color: var(--text-h);
+  cursor: pointer;
+  text-align: left;
+}
+
+.rbac-grid__module-collapse:hover,
+.rbac-grid__module-collapse:focus-visible {
+  color: var(--primary);
+}
+
+.rbac-grid__chevron {
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.rbac-grid__module-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.rbac-grid__module-count {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rbac-grid__module-slug {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  padding: 0.08rem 0.35rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-2));
+  color: var(--muted);
+}
+
+.rbac-grid__module-toggle {
+  min-height: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.checkbox-row--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.rbac-grid__section-row td {
+  padding: 0.45rem 0.75rem 0.25rem;
+  background: var(--surface);
+}
+
+.rbac-grid__section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.rbac-grid__row td {
+  padding: 0.5rem 0.5rem;
+}
+
+.rbac-grid__resource-cell {
+  min-width: 11rem;
+  padding-left: 0.75rem !important;
+}
+
+.rbac-grid__resource-label {
+  display: block;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.rbac-grid__resource-slug {
+  display: block;
+  margin-top: 0.12rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+}
+
+.rbac-grid__scope-cell {
+  text-align: center;
+}
+
+.rbac-grid__scope-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.12rem 0.45rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.rbac-grid__scope-badge--own {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+
+.rbac-grid__scope-badge--team {
+  color: #0891b2;
+  background: color-mix(in srgb, #06b6d4 12%, var(--surface));
+}
+
+.rbac-grid__scope-badge--company {
+  color: var(--text-h);
+  background: color-mix(in srgb, var(--text-muted) 14%, var(--surface));
+}
+
+.rbac-grid__crud-cell {
+  text-align: center;
+}
+
+.rbac-grid__crud-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  cursor: pointer;
+}
+
+.rbac-grid__crud-check input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.rbac-grid__na {
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-size: 0.85rem;
+}
+
+.rbac-grid__extras-cell {
+  padding-right: 0.75rem !important;
+}
+
+.rbac-grid__action-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.rbac-grid__action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background var(--interaction),
+    border-color var(--interaction);
+}
+
+.rbac-grid__action-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.rbac-grid__action-chip--checked {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface-2));
+  color: var(--text-h);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .rbac-grid__action-chip:hover:not(:has(input:disabled)) {
+    border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  }
+}
+
+.rbac-grid__empty {
+  padding: 1.25rem 0.75rem !important;
+  text-align: center;
+}
+
+.roles-modal--view .rbac-grid__crud-check input,
+.roles-modal--view .rbac-grid__action-chip {
+  cursor: default;
+}
+
+@media (max-width: 900px) {
+  .rbac-grid__table-wrap {
+    overflow-x: auto;
+  }
+
+  .rbac-grid__table {
+    min-width: 42rem;
+  }
+
+  .rbac-grid__module-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 @media (min-width: 961px) {
   .roles-toolbar__filters {
     flex-wrap: nowrap;
@@ -13564,7 +14066,8 @@ body::-webkit-scrollbar-thumb {
     justify-content: center;
   }
 
-  .roles-modal__fields-row {
+  .roles-modal__fields-row,
+  .role-manage__fields-row {
     grid-template-columns: 1fr;
   }
 }
@@ -14815,21 +15318,83 @@ body::-webkit-scrollbar-thumb {
   margin: 0;
 }
 
+/* LOP / salary detail dialog — neutral chrome (no primary border glow) */
+.modal.salary-detail-modal {
+  width: min(100%, 52rem);
+  max-height: min(calc(100vh - 2.5rem), calc(100dvh - 2.5rem), 44rem);
+  border-color: var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal__backdrop:has(> .salary-detail-modal) {
+  animation: salary-detail-modal-backdrop-in 0.18s ease;
+}
+
+@keyframes salary-detail-modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .salary-detail-modal__body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
 }
 
-/*
- * The balances table wrap is a scroll container (overflow-x) inside a grid
- * (.modal__body). Scroll containers compute to minimum size 0, so without a
- * floor the wrap absorbs all shrinkage and collapses — hiding the table on
- * desktop and mobile alike. This guarantees a usable viewport; the modal
- * body keeps scrolling vertically, the wrap horizontally.
- */
-.salary-detail-modal__body > .table-wrap {
-  min-height: 12rem;
+.salary-detail-modal .salary-detail__grid {
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.65rem 1rem;
+}
+
+.salary-detail-modal__body > .label {
+  margin: 0.15rem 0 0;
+}
+
+.salary-detail-modal__table-wrap {
+  min-height: 0;
+  overflow-x: hidden;
+}
+
+.salary-detail-modal .salary-table--modal {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.salary-detail-modal .salary-table--modal th,
+.salary-detail-modal .salary-table--modal td {
+  padding-inline: 0.45rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.salary-detail-modal .salary-table--modal th {
+  font-size: 0.65rem;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.salary-detail-modal .salary-table--modal td:first-child {
+  font-weight: 600;
+}
+
+.salary-detail-modal .salary-table--modal th:first-child,
+.salary-detail-modal .salary-table--modal td:first-child {
+  width: 22%;
+}
+
+.salary-detail-modal .salary-table--modal th.salary-table__num,
+.salary-detail-modal .salary-table--modal td.salary-table__num {
+  width: 13%;
 }
 
 .salary-detail__lop-dates {

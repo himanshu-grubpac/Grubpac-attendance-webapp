@@ -5,6 +5,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { notificationsApi } from '../services/api.js';
 import { formatISTDateTime } from '../utils/datetime.js';
+import { usePortalSync } from '../hooks/usePortalSync.js';
+import { PORTAL_TOPICS } from '../utils/portalSync.js';
 
 function BellIcon() {
   return (
@@ -58,6 +60,10 @@ export default function NotificationBell() {
     const interval = setInterval(refreshUnreadCount, 60_000);
     return () => clearInterval(interval);
   }, [refreshUnreadCount]);
+
+  usePortalSync(() => {
+    void refreshUnreadCount();
+  }, { topics: [PORTAL_TOPICS.LEAVE, PORTAL_TOPICS.HELP] });
 
   useEffect(() => {
     if (!open) return undefined;

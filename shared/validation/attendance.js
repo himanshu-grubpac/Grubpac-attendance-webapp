@@ -84,4 +84,5 @@ export const resetQuarterWarningsSchema = z.object({
     .array(objectIdSchema)
     .min(1, 'Select at least one employee.')
     .max(MAX_QUARTER_WARNING_RESET_USERS, `At most ${MAX_QUARTER_WARNING_RESET_USERS} employees per reset.`),
+  reason: z.string().trim().max(500).optional(),
 });

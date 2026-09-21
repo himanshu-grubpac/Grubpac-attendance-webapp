@@ -74,7 +74,10 @@ export function canViewTicket(actor, ticket, permissions) {
 }
 
 export function canManageTicket(actor, ticket, permissions) {
-  if (!hasPermission(permissions, PERMISSIONS.HELP_MANAGE)) {
+  if (
+    !hasPermission(permissions, PERMISSIONS.HELP_MANAGE) &&
+    !hasPermission(permissions, PERMISSIONS.HELP_SET_PRIORITY)
+  ) {
     return false;
   }
 
@@ -95,7 +98,9 @@ export function canManageTicket(actor, ticket, permissions) {
 }
 
 export async function createHelpTicket(actor, payload, permissions = [], auditContext = {}) {
-  const canSetPriority = hasPermission(permissions, PERMISSIONS.HELP_MANAGE);
+  const canSetPriority =
+    hasPermission(permissions, PERMISSIONS.HELP_MANAGE) ||
+    hasPermission(permissions, PERMISSIONS.HELP_SET_PRIORITY);
   const ticket = await HelpTicket.create({
     title: payload.title,
     category: payload.category,
@@ -201,6 +206,25 @@ export async function listHelpTickets(actor, permissions, query) {
   if (query.status) {
     filter.status = query.status;
   }
+  if (query.category) {
+    filter.category = query.category;
+  }
+  if (query.priority) {
+    filter.priority = query.priority;
+  }
+  if (query.search) {
+    const regex = new RegExp(query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    filter.$or = [{ title: regex }, { description: regex }];
+  }
+  if (query.dateFrom || query.dateTo) {
+    filter.createdAt = {};
+    if (query.dateFrom) {
+      filter.createdAt.$gte = new Date(query.dateFrom + 'T00:00:00.000Z');
+    }
+    if (query.dateTo) {
+      filter.createdAt.$lte = new Date(query.dateTo + 'T23:59:59.999Z');
+    }
+  }
 
   const skip = (query.page - 1) * query.limit;
   const [tickets, total] = await Promise.all([
@@ -278,11 +302,23 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
   const previousStatus = ticket.status;
   const previousPriority = ticket.priority;
 
-  if (payload.status !== undefined) {
+  if (payload.status !== undefined && payload.status !== previousStatus) {
+    if (
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_X1) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_TICKET_U)
+    ) {
+      throwError('You do not have permission to change ticket status.', 403);
+    }
     ticket.status = payload.status;
   }
 
-  if (payload.priority !== undefined) {
+  if (payload.priority !== undefined && payload.priority !== previousPriority) {
+    if (
+      !hasPermission(permissions, PERMISSIONS.HELP_SET_PRIORITY) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)
+    ) {
+      throwError('You do not have permission to change ticket priority.', 403);
+    }
     ticket.priority = payload.priority;
   }
 

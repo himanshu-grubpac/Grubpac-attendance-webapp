@@ -5,6 +5,10 @@ import {
   salaryExportQuerySchema,
   salaryHistoryParamsSchema,
   salaryHistoryQuerySchema,
+  lopDetailParamsSchema,
+  lopDetailQuerySchema,
+  lopExportQuerySchema,
+  lopListQuerySchema,
   salaryStructureQuerySchema,
   salarySummaryQuerySchema,
   salaryTransferListQuerySchema,
@@ -13,23 +17,34 @@ import {
   updateSalarySettingsSchema,
   updateUserSalarySchema,
 } from '../../../shared/validation/salary.js';
-import { parseDateInputAsISTDay } from '../utils/istDate.js';
+import { clampMonthInputToCurrentIst, parseDateInputAsISTDay } from '../utils/istDate.js';
 import { auditRequest } from '../utils/auditLog.js';
 import {
+  buildLopBulkExportWorkbook,
+  buildLopDetailedExportRows,
+  buildLopExportWorkbook,
+  buildLopOverviewExportRows,
   buildSalaryExportWorkbook,
   buildSalaryMonthMeta,
+  computeMonthlySalarySummary,
   generatePendingSalaryTransfers,
+  getLopDetailForUser,
   getSalarySettingsPayload,
   getSalarySummaryForUser,
+  listAllLopSummariesForMonth,
+  listLopSummaries,
   listRecentSettlements,
   listSalaryStructure,
   listSalarySummariesForMonth,
+  resolveSalaryAsOfDate,
   listSalaryTransfers,
   loadSalarySubject,
+  lopDeductionRowsToExportRows,
   settleMonthPayroll,
   updateSalarySettings,
   updateSalaryTransferStatus,
   updateUserSalary,
+  canViewSalarySummary,
 } from '../services/salaryService.js';
 import {
   getEmployeeSalaryHistory,
@@ -98,7 +113,8 @@ export async function getSalarySummaryHandler(req, res) {
 
 export async function listSalarySummariesHandler(req, res) {
   const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const meta = await buildSalaryMonthMeta(month, summaries);
   res.json({ month, summaries, meta });
 }
@@ -131,13 +147,18 @@ export async function updateSalarySettingsHandler(req, res) {
 
 export async function listSalaryStructureHandler(req, res) {
   const parsed = salaryStructureQuerySchema.parse(req.query);
-  const result = await listSalaryStructure(parsed);
+  const result = await listSalaryStructure({
+    ...parsed,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   res.json(result);
 }
 
 export async function exportSalaryHandler(req, res) {
   const { month } = salaryExportQuerySchema.parse(req.query);
-  const summaries = await listSalarySummariesForMonth(month);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const buffer = buildSalaryExportWorkbook(summaries, month);
 
   res.setHeader(
@@ -176,13 +197,23 @@ export async function getUserSalaryHandler(req, res) {
 
 export async function listSalaryTransfersHandler(req, res) {
   const parsed = salaryTransferListQuerySchema.parse(req.query);
-  const result = await listSalaryTransfers(parsed);
+  const result = await listSalaryTransfers({
+    ...parsed,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
   res.json(result);
 }
 
 export async function generateSalaryTransfersHandler(req, res) {
   const parsed = generateSalaryTransfersSchema.parse(req.body);
-  const result = await generatePendingSalaryTransfers(parsed.month, req.user._id);
+  const scopeContext = { actor: req.user, permissions: req.userPermissions };
+  const result = await generatePendingSalaryTransfers(
+    parsed.month,
+    req.user._id,
+    null,
+    scopeContext,
+  );
 
   auditRequest(req, 'salary_transfers_generated', {
     adminId: req.user._id.toString(),
@@ -195,6 +226,8 @@ export async function generateSalaryTransfersHandler(req, res) {
     month: parsed.month,
     page: 1,
     limit: 20,
+    actor: req.user,
+    permissions: req.userPermissions,
   });
 
   res.status(result.created > 0 ? 201 : 200).json({
@@ -208,6 +241,21 @@ export async function generateSalaryTransfersHandler(req, res) {
 
 export async function updateSalaryTransferHandler(req, res) {
   const parsed = updateSalaryTransferStatusSchema.parse(req.body);
+  const status = parsed.status;
+  if (status === 'paid' && !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_X1)) {
+    return res.status(403).json({ message: 'You do not have permission to mark transfers as paid.' });
+  }
+  if (status === 'failed' && !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_X2)) {
+    return res.status(403).json({ message: 'You do not have permission to mark transfers as failed.' });
+  }
+  if (
+    status !== 'paid' &&
+    status !== 'failed' &&
+    !hasPermission(req.userPermissions, PERMISSIONS.SALARY_TRANSFER_U)
+  ) {
+    return res.status(403).json({ message: 'You do not have permission to update salary transfers.' });
+  }
+
   const transfer = await updateSalaryTransferStatus(req.params.id, parsed, req.user._id);
 
   auditRequest(req, 'salary_transfer_updated', {
@@ -222,6 +270,9 @@ export async function updateSalaryTransferHandler(req, res) {
 }
 
 export async function settleMonthHandler(req, res) {
+  if (!hasPermission(req.userPermissions, PERMISSIONS.SALARY_SETTLEMENT_X0)) {
+    return res.status(403).json({ message: 'Month-end settlement is restricted to authorized admins.' });
+  }
   const parsed = generateSalaryTransfersSchema.parse(req.body);
   const result = await settleMonthPayroll(parsed.month, req.user._id);
   auditRequest(req, 'month_settled', {
@@ -291,6 +342,96 @@ export async function exportSalaryAuditHandler(req, res) {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   );
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}
+
+export async function listLopSummariesHandler(req, res) {
+  const parsed = lopListQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(parsed.month);
+  const result = await listLopSummaries({
+    ...parsed,
+    month,
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
+  res.json(result);
+}
+
+export async function getLopDetailHandler(req, res) {
+  const { userId } = lopDetailParamsSchema.parse(req.params);
+  const { month: rawMonth, asOf } = lopDetailQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
+  const result = await getLopDetailForUser(req.user, req.userPermissions, userId, month, asOf);
+  res.json(result);
+}
+
+export async function exportLopSingleHandler(req, res) {
+  const { userId } = lopDetailParamsSchema.parse(req.params);
+  const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
+
+  const subject = await loadSalarySubject(userId);
+  if (!(await canViewSalarySummary(req.user, subject, req.userPermissions))) {
+    return res.status(403).json({ message: 'You do not have permission to export this LOP log.' });
+  }
+
+  const summary = await computeMonthlySalarySummary(subject, month, { asOfDate: asOf });
+  const exportRows = lopDeductionRowsToExportRows(summary);
+  const codeSuffix = summary.employeeCode ? ` (${summary.employeeCode})` : '';
+  const buffer = await buildLopExportWorkbook(exportRows, {
+    sheetName: 'LOP Deductions',
+    subtitle: `LOP Deduction Log — ${summary.userName}${codeSuffix} — ${summary.month} as of ${summary.asOfDate}`,
+  });
+
+  auditRequest(req, 'lop_exported', {
+    adminId: req.user._id.toString(),
+    employeeId: userId,
+    month,
+    asOfDate: summary.asOfDate,
+  });
+
+  const safeName = (subject.name ?? 'employee').replace(/[^\w.-]+/g, '_');
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="lop-${safeName}-${month}.xlsx"`,
+  );
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}
+
+export async function exportLopBulkHandler(req, res) {
+  const { month: rawMonth, asOf } = lopExportQuerySchema.parse(req.query);
+  const month = clampMonthInputToCurrentIst(rawMonth);
+  const summaries = await listAllLopSummariesForMonth(month, asOf, {
+    actor: req.user,
+    permissions: req.userPermissions,
+  });
+  const resolved = resolveSalaryAsOfDate(month, asOf);
+  const asOfLabel = resolved?.asOfDateKey ?? summaries[0]?.asOfDate ?? month;
+  const overviewRows = buildLopOverviewExportRows(summaries);
+  const detailedRows = buildLopDetailedExportRows(summaries);
+  const buffer = await buildLopBulkExportWorkbook(overviewRows, detailedRows, {
+    month,
+    asOfDate: asOfLabel,
+    employeeCount: summaries.length,
+  });
+
+  auditRequest(req, 'lop_bulk_exported', {
+    adminId: req.user._id.toString(),
+    month,
+    employeeCount: summaries.length,
+  });
+
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="lop-bulk-${month}.xlsx"`);
   res.setHeader('Content-Length', buffer.length);
   res.end(buffer);
 }

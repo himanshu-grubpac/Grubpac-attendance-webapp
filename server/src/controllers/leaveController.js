@@ -55,7 +55,7 @@ import {
   recordEncashment,
   recalculateAllBalancesForPolicy,
 } from '../services/leaveBalanceService.js';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, hasCompanyWideScope, hasPermission } from '../../../shared/permissions.js';
 import { isUserInTeamScope, resolveLeaveTeamUserIds } from '../services/teamScopeService.js';
 import {
   cancelLeaveRequest,
@@ -259,6 +259,31 @@ export async function createLeavePolicy(req, res) {
   res.status(201).json({ policy: policy.toSafeJSON() });
 }
 
+export async function deleteLeavePolicy(req, res) {
+  const policy = await LeavePolicy.findById(req.params.id);
+  if (!policy) {
+    return res.status(404).json({ message: 'Leave policy not found.' });
+  }
+
+  const hasBalances = await LeaveBalance.exists({ leaveTypeId: policy.leaveTypeId, year: policy.year });
+  if (hasBalances) {
+    return res.status(409).json({
+      message: 'Cannot delete leave policy with existing employee balances for this year. Deactivate it instead.',
+    });
+  }
+
+  await policy.deleteOne();
+
+  auditRequest(req, 'leave_policy_deleted', {
+    adminId: req.user._id.toString(),
+    policyId: policy._id.toString(),
+    leaveTypeId: policy.leaveTypeId?.toString?.() ?? null,
+    year: policy.year ?? null,
+  });
+
+  res.json({ message: 'Leave policy deleted.' });
+}
+
 export async function updateLeavePolicy(req, res) {
   const parsed = updateLeavePolicySchema.parse(req.body);
   const policy = await LeavePolicy.findById(req.params.id);
@@ -435,14 +460,14 @@ export async function getLeaveRequestHandler(req, res) {
   const request = await loadLeaveRequest(req.params.id);
   const requesterId = request.userId?._id?.toString() ?? request.userId?.toString();
   const isOwner = requesterId === req.user._id.toString();
-  const canViewAll = req.userPermissions.includes('leave.read_all');
-  const canViewTeam = req.userPermissions.includes('leave.read_team');
+  const canViewAll = hasCompanyWideScope(req.userPermissions);
+  const canViewTeam = hasPermission(req.userPermissions, PERMISSIONS.LEAVE_REQUEST_R);
 
   if (isOwner || canViewAll) {
     return res.json({ request: request.toSafeJSON() });
   }
 
-  if (canViewTeam || req.userPermissions.includes('leave.approve')) {
+  if (canViewTeam || hasPermission(req.userPermissions, PERMISSIONS.LEAVE_APPROVE)) {
     const requester = await User.findById(requesterId);
     if (requester?.reportingManagerId?.toString() === req.user._id.toString()) {
       return res.json({ request: request.toSafeJSON() });

@@ -16,6 +16,7 @@ import ActionMenu from '../../components/ActionMenu.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
+import { broadcastPolicyPayrollSync } from '../../utils/portalSync.js';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import LeaveCarryBulkModal from './LeaveCarryBulkModal.jsx';
 import EmployeeLeaveAdjustment from './EmployeeLeaveAdjustment.jsx';
@@ -245,6 +246,7 @@ export default function AdminLeavePolicies() {
     if (!confirmed) return;
     try {
       await leaveApi.updateType(type.id, { isActive: nextActive });
+      broadcastPolicyPayrollSync();
       showSuccess(`Leave type ${type.code} ${nextActive ? 'reactivated' : 'deactivated'}.`);
       await loadLeaveTypes();
     } catch (err) {
@@ -269,6 +271,7 @@ export default function AdminLeavePolicies() {
     if (!confirmed) return;
     try {
       await leaveApi.deleteType(type.id);
+      broadcastPolicyPayrollSync();
       await loadLeaveTypes();
       await loadPolicies();
       showSuccess(`Leave type ${snapshot.code} deleted.`, {
@@ -370,6 +373,7 @@ export default function AdminLeavePolicies() {
 
       try {
         await leaveApi.updateType(typeEditingId, validation.data);
+        broadcastPolicyPayrollSync();
         showSuccess(`Leave type ${typeEditing?.code ?? ''} updated.`);
         closeTypeModal();
         await loadLeaveTypes();
@@ -400,6 +404,7 @@ export default function AdminLeavePolicies() {
 
     try {
       await leaveApi.createType(validation.data);
+      broadcastPolicyPayrollSync();
       showSuccess(`Leave type ${validation.data.code} created.`);
       closeTypeModal();
       await loadLeaveTypes();
@@ -433,6 +438,7 @@ export default function AdminLeavePolicies() {
     try {
       await leaveApi.createPolicy(validation.data);
       const typeLabel = leaveTypes.find((item) => item.id === validation.data.leaveTypeId);
+      broadcastPolicyPayrollSync();
       showSuccess(
         `Policy for ${typeLabel?.code ?? 'leave type'} (${validation.data.year}) created.`,
       );
@@ -477,6 +483,7 @@ export default function AdminLeavePolicies() {
             (recompute.skippedLocked > 0 ? `, ${recompute.skippedLocked} locked skipped` : '') +
             '.'
           : '';
+      broadcastPolicyPayrollSync();
       showSuccess(`Policy for ${modalPolicy.leaveTypeCode} (${policyYear}) updated.${recomputeNote}`);
       closeModal();
       await loadPolicies();

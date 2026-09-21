@@ -74,6 +74,8 @@ const userSchema = new mongoose.Schema(
     /** Incremented to invalidate outstanding JWT sessions (logout / password change). */
     tokenVersion: { type: Number, default: 0, min: 0 },
     lastLoginAt: { type: Date, default: null },
+    lastBulkImportAt: { type: Date, default: null },
+    lastBulkImportBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true },
@@ -162,7 +164,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON({ canViewSalary = false } = 
 export const User = mongoose.model('User', userSchema);
 
 export const USER_POPULATE_FIELDS = [
-  { path: 'roleId', select: 'name slug permissions isSystem' },
+  { path: 'roleId', select: 'name slug permissions isSystem permissionsVersion' },
   { path: 'departmentId', select: 'name code isActive' },
   { path: 'reportingManagerId', select: 'name email delegateApproverId' },
   { path: 'delegateApproverId', select: 'name email' },

@@ -1,16 +1,20 @@
 import { Router } from 'express';
 import { PERMISSIONS } from '../../../shared/permissions.js';
-import { authenticate, requireAllPermissions, requirePermission } from '../middleware/auth.js';
+import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
+  exportLopBulkHandler,
+  exportLopSingleHandler,
   exportSalaryAuditHandler,
   exportSalaryHandler,
   generateSalaryTransfersHandler,
+  getLopDetailHandler,
   getSalaryAuditHandler,
   getSalaryHistoryHandler,
   getSalarySettingsHandler,
   getSalarySummaryHandler,
   getUserSalaryHandler,
+  listLopSummariesHandler,
   listSalaryStructureHandler,
   listSalarySummariesHandler,
   listSalaryTransfersHandler,
@@ -27,109 +31,126 @@ router.use(authenticate);
 
 router.patch(
   '/users/:id',
-  requirePermission(PERMISSIONS.SALARY_WRITE),
+  requirePermission(PERMISSIONS.EMPLOYEES_SALARY_U, PERMISSIONS.SALARY_STRUCTURE_U),
   asyncHandler(updateUserSalaryHandler),
 );
 
 router.get(
   '/users/:id',
-  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_WRITE),
+  requirePermission(PERMISSIONS.EMPLOYEES_SALARY_R, PERMISSIONS.SALARY_STRUCTURE_R),
   asyncHandler(getUserSalaryHandler),
 );
 
 router.get(
   '/summary',
-  requirePermission(
-    PERMISSIONS.SALARY_READ,
-    PERMISSIONS.SALARY_READ_TEAM,
-  ),
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_DETAIL_R, PERMISSIONS.SALARY_TEAM_AUDIT_R, PERMISSIONS.EMP_PAY_R),
   asyncHandler(getSalarySummaryHandler),
 );
 
-// Company-wide month summaries — same admin bar as export (SALARY_READ + USERS_READ).
 router.get(
   '/summaries',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_R),
   asyncHandler(listSalarySummariesHandler),
 );
 
 router.get(
   '/settings',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_SCHEDULE_R),
   asyncHandler(getSalarySettingsHandler),
 );
 
 router.patch(
   '/settings',
-  requirePermission(PERMISSIONS.SALARY_WRITE),
+  requirePermission(PERMISSIONS.SALARY_SCHEDULE_U),
   asyncHandler(updateSalarySettingsHandler),
 );
 
 router.get(
   '/structure',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_STRUCTURE_R),
   asyncHandler(listSalaryStructureHandler),
 );
 
-// Company-wide payroll export — must match the "view others" admin bar used by
-// canViewSalarySummary (SALARY_READ + USERS_READ). SALARY_READ alone is also held
-// by the Employee role for self-service pay estimates and must not unlock this.
 router.get(
   '/export',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_X0),
   asyncHandler(exportSalaryHandler),
 );
 
 router.get(
   '/transfers',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_TRANSFER_R),
   asyncHandler(listSalaryTransfersHandler),
 );
 
 router.post(
   '/transfers/generate',
-  requirePermission(PERMISSIONS.SALARY_WRITE),
+  requirePermission(PERMISSIONS.SALARY_TRANSFER_C, PERMISSIONS.SALARY_TRANSFER_X0),
   asyncHandler(generateSalaryTransfersHandler),
 );
 
 router.post(
   '/settle',
-  requireAllPermissions(PERMISSIONS.SALARY_WRITE, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_SETTLEMENT_X0),
   asyncHandler(settleMonthHandler),
 );
 
-// Recent month settlements (last run month + time) — same admin bar as summaries.
 router.get(
   '/settlements',
-  requireAllPermissions(PERMISSIONS.SALARY_READ, PERMISSIONS.USERS_READ),
+  requirePermission(PERMISSIONS.SALARY_SETTLEMENT_R),
   asyncHandler(listSettlementsHandler),
 );
 
 router.patch(
   '/transfers/:id',
-  requirePermission(PERMISSIONS.SALARY_WRITE),
+  requirePermission(
+    PERMISSIONS.SALARY_TRANSFER_X1,
+    PERMISSIONS.SALARY_TRANSFER_X2,
+    PERMISSIONS.SALARY_TRANSFER_U,
+  ),
   asyncHandler(updateSalaryTransferHandler),
 );
 
-// Employee salary history — scoped by RBAC (RM sees team, Admin sees all)
 router.get(
   '/history/:userId',
-  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  requirePermission(PERMISSIONS.SALARY_HISTORY_R, PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R),
   asyncHandler(getSalaryHistoryHandler),
 );
 
-// Monthly salary audit for RM/Admin — scoped by RBAC
 router.get(
   '/audit',
-  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  requirePermission(PERMISSIONS.SALARY_AUDIT_R, PERMISSIONS.SALARY_TEAM_AUDIT_R),
   asyncHandler(getSalaryAuditHandler),
 );
 
-// Audit export — same permissions as audit
 router.get(
   '/audit/export',
-  requirePermission(PERMISSIONS.SALARY_READ, PERMISSIONS.SALARY_READ_TEAM),
+  requirePermission(PERMISSIONS.SALARY_AUDIT_X0, PERMISSIONS.SALARY_TEAM_AUDIT_X0),
   asyncHandler(exportSalaryAuditHandler),
+);
+
+router.get(
+  '/lop/summaries',
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_R),
+  asyncHandler(listLopSummariesHandler),
+);
+
+router.get(
+  '/lop/export',
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_X0),
+  asyncHandler(exportLopBulkHandler),
+);
+
+router.get(
+  '/lop/:userId/export',
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_X0, PERMISSIONS.SALARY_TEAM_AUDIT_R),
+  asyncHandler(exportLopSingleHandler),
+);
+
+router.get(
+  '/lop/:userId',
+  requirePermission(PERMISSIONS.SALARY_PAYROLL_DETAIL_R, PERMISSIONS.SALARY_TEAM_AUDIT_R),
+  asyncHandler(getLopDetailHandler),
 );
 
 export default router;

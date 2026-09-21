@@ -24,6 +24,8 @@ import {
   buildTodayAttendanceModeLabel,
 } from '../../utils/leaveStatusCopy.js';
 import { evaluateOfficeGeoPreview } from '../../utils/geoPreview.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastAttendancePayrollSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 function nextISTMonthInput(monthInput) {
   const [year, month] = monthInput.split('-').map(Number);
@@ -214,6 +216,15 @@ export default function EmployeeDashboard() {
     };
   }, [loadCalendar]);
 
+  usePortalSync(
+    () => {
+      void refreshToday();
+      void loadTeamStatus();
+      void loadCalendar(calendarMonthRef.current);
+    },
+    { topics: [PORTAL_TOPICS.ATTENDANCE, PORTAL_TOPICS.LEAVE] },
+  );
+
   useEffect(() => {
     getPosition({ fresh: false }).catch(() => {});
   }, [getPosition]);
@@ -275,6 +286,10 @@ export default function EmployeeDashboard() {
       await refreshToday();
       await loadQuarterWarnings();
       await loadCalendar(calendarMonth);
+      broadcastAttendancePayrollSync({
+        userId: user?.id,
+        dayKey: getISTDateInputValue(),
+      });
       setLateNoteOpen(false);
       setLateNoteText('');
       if (data.undoToken) {
@@ -314,6 +329,10 @@ export default function EmployeeDashboard() {
       await attendanceApi.undo(token);
       await refreshToday();
       await loadCalendar(calendarMonth);
+      broadcastAttendancePayrollSync({
+        userId: user?.id,
+        dayKey: getISTDateInputValue(),
+      });
       showSuccess('Action undone.');
     } catch (err) {
       const message = getErrorMessage(err);

@@ -73,21 +73,6 @@ export function ToastProvider({ children }) {
 }
 
 function ToastCard({ toast, onDismiss }) {
-  const [remaining, setRemaining] = useState(toast.durationMs);
-
-  useEffect(() => {
-    if (toast.durationMs <= 0) return undefined;
-    const startedAt = Date.now();
-    const intervalId = window.setInterval(() => {
-      const left = Math.max(0, toast.durationMs - (Date.now() - startedAt));
-      setRemaining(left);
-      if (left <= 0) window.clearInterval(intervalId);
-    }, 100);
-    return () => window.clearInterval(intervalId);
-  }, [toast.durationMs]);
-
-  const progress = toast.durationMs > 0 ? (remaining / toast.durationMs) * 100 : 0;
-
   return (
     <div
       className={`toast toast--${toast.variant}`}
@@ -114,11 +99,6 @@ function ToastCard({ toast, onDismiss }) {
       >
         ×
       </button>
-      {toast.durationMs > 0 ? (
-        <div className="toast__progress" aria-hidden="true">
-          <span className="toast__progress-bar" style={{ width: `${progress}%` }} />
-        </div>
-      ) : null}
     </div>
   );
 }

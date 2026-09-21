@@ -11,7 +11,9 @@ import {
 } from '../utils/istDate.js';
 import {
   buildPaidLeaveDayMap,
-  computeDailyCappedPayableDays,
+  buildUnpaidLeaveDayMap,
+  computeMtdSalaryMetrics,
+  resolveSalaryAsOfDate,
   salaryAppliesForMonth,
 } from './salaryService.js';
 import { getPaidLeaveQuota } from './leaveBalanceService.js';
@@ -41,22 +43,32 @@ function makeBulkData(overrides = {}) {
     attendanceByUser: overrides.attendanceByUser ?? new Map(),
     balancesByUser: overrides.balancesByUser ?? new Map(),
     requestsByUser: overrides.requestsByUser ?? new Map(),
+    leaveTypeCodeById: overrides.leaveTypeCodeById ?? new Map([
+      ['lt_cl', 'CL'],
+      ['lt_el', 'EL'],
+    ]),
   };
 }
 
 /**
- * Replicates computeMonthlySalarySummaryInMemory logic using the same
- * underlying IST/salary utilities the production code uses.
- * This is the "old calculation" reference — identical computation, different data source.
+ * Reference implementation mirroring computeMonthlySalarySummaryInMemory (Phase 1 engine).
  */
-function computeExpectedSummary(user, monthInput, bulkData) {
-  const range = parseMonthInputAsISTRange(monthInput);
-  const { year, monthKey, start, end } = range;
-  const { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser } = bulkData;
+const FULL_MONTH_OPTS = { asOfDate: null };
+
+function computeExpectedSummary(user, monthInput, bulkData, options = FULL_MONTH_OPTS) {
+  const resolved = resolveSalaryAsOfDate(monthInput, options.asOfDate);
+  const { monthKey, start, end, asOfDateKey } = resolved;
+  const {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById = new Map(),
+  } = bulkData;
 
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
-  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
   const userId = user._id.toString();
   const userAttendance = attendanceByUser.get(userId) ?? new Map();
@@ -70,36 +82,37 @@ function computeExpectedSummary(user, monthInput, bulkData) {
     ]),
   );
 
-  const presentDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (userAttendance.get(day) ?? 0), 0),
-  );
   const paidLeaveByDay = buildPaidLeaveDayMap(
     userRequests, start, end, holidayDates, paidTypeIds, paidQuotaByTypeId,
   );
-  const paidLeaveDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  const unpaidLeaveByDay = buildUnpaidLeaveDayMap(
+    userRequests, start, end, holidayDates, paidTypeIds, paidQuotaByTypeId, leaveTypeCodeById,
   );
-  const payableDays = computeDailyCappedPayableDays(workingDayList, userAttendance, paidLeaveByDay);
-  const lopDays = Math.max(0, workingDaysInMonth - payableDays);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
-  let perDaySalary = null;
-  let payableEstimate = null;
-  let lopDeduction = null;
-  if (monthlySalary != null && workingDaysInMonth > 0) {
-    perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
-    payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
-    lopDeduction = roundMoney(lopDays * perDaySalary);
-  }
+  const mtdMetrics = computeMtdSalaryMetrics({
+    monthlySalary,
+    workingDayList,
+    attendanceCreditByDay: userAttendance,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    asOfDateKey,
+  });
 
   return {
     month: monthKey, currency: 'INR', userId, userName: user.name,
     employeeCode: user.employeeCode ?? null, monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
-    workingDaysInMonth, presentDays, paidLeaveDays, payableDays,
-    lopDays, lopDeduction, perDaySalary, payableEstimate,
+    workingDaysInMonth,
+    presentDays: mtdMetrics.presentDays,
+    paidLeaveDays: mtdMetrics.paidLeaveDays,
+    payableDays: mtdMetrics.payableDays,
+    lopDays: mtdMetrics.lopDays,
+    lopDeduction: mtdMetrics.lopDeduction,
+    perDaySalary: mtdMetrics.perDaySalary,
+    payableEstimate: mtdMetrics.payableEstimate,
     hasSalaryConfigured: monthlySalary != null,
   };
 }
@@ -161,17 +174,18 @@ test('claim1: in-memory summary matches reference computation — no leave, full
   const user = makeUser({ monthlySalary: 60000 });
   const attendanceMap = new Map([['emp001', new Map([['2026-09-01', 1], ['2026-09-02', 1], ['2026-09-03', 1]])]]);
   const bulkData = makeBulkData({ attendanceByUser: attendanceMap });
+  const monthOpts = { asOfDate: '2026-09-30' };
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, monthOpts);
 
-  // Same computation path — both call identical IST/salary utilities
   assert.equal(expected.monthlySalary, 60000);
   assert.equal(expected.hasSalaryConfigured, true);
   assert.ok(expected.workingDaysInMonth > 0);
   assert.equal(expected.presentDays, 3);
   assert.equal(expected.paidLeaveDays, 0);
   assert.equal(expected.lopDays, expected.workingDaysInMonth - 3);
-  assert.ok(expected.perDaySalary > 0);
+  assert.equal(expected.perDaySalary, 2000);
+  assert.equal(expected.payableEstimate, 60000 - expected.lopDeduction);
 });
 
 test('claim1: in-memory summary matches reference — with paid leave consuming quota', () => {
@@ -191,7 +205,7 @@ test('claim1: in-memory summary matches reference — with paid leave consuming 
   const balancesByUser = new Map([['emp001', balances]]);
   const bulkData = makeBulkData({ requestsByUser, balancesByUser });
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, { asOfDate: '2026-09-30' });
 
   assert.equal(expected.paidLeaveDays, 1);
   assert.equal(expected.lopDays, expected.workingDaysInMonth - 1 - expected.presentDays);
@@ -215,11 +229,11 @@ test('claim1: in-memory summary matches reference — overdrawn leave becomes LO
   const balancesByUser = new Map([['emp001', balances]]);
   const bulkData = makeBulkData({ requestsByUser, balancesByUser });
 
-  const expected = computeExpectedSummary(user, '2026-09', bulkData);
+  const expected = computeExpectedSummary(user, '2026-09', bulkData, { asOfDate: '2026-09-30' });
 
   assert.equal(expected.paidLeaveDays, 0);
   assert.equal(expected.lopDays, expected.workingDaysInMonth);
-  assert.ok(expected.lopDeduction > 0);
+  assert.equal(expected.lopDeduction, roundMoney(expected.workingDaysInMonth * 2000));
 });
 
 test('claim1: in-memory summary matches reference — half-day leave', () => {
@@ -474,7 +488,7 @@ test('claim4: attendance bulk fetch produces Map<userId, Map<dayKey, credit>>', 
     if (!outerMap.has(uid)) outerMap.set(uid, new Map());
     const dayMap = outerMap.get(uid);
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = record.attendanceTag === 'HD' || record.attendanceTag === 'LV' ? 0.5 : 1;
     dayMap.set(dayKey, Math.max(dayMap.get(dayKey) ?? 0, credit));
   }
 
@@ -615,17 +629,17 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
     'Employee Name': auditRow.employeeName,
     'Department': auditRow.departmentName ?? '',
     'Month': auditRow.periodKey,
-    'Gross Salary (INR)': auditRow.grossSalary,
+    'Monthly salary': auditRow.grossSalary,
     'Working Days': auditRow.workingDays,
     'Present Days': auditRow.presentDays,
     'Paid Leave Days': auditRow.paidLeaveDays,
     'Payable Days': auditRow.payableDays,
-    'LOP Days': auditRow.lopDays,
-    'LOP Deduction (INR)': auditRow.lopDeduction,
-    'Per Day Salary (INR)': auditRow.perDaySalary ?? '',
+    'Loss of pay (days)': auditRow.lopDays,
+    'Loss of pay till date': auditRow.lopDeduction,
+    'Per day salary': auditRow.perDaySalary ?? '',
     'Other Deductions (INR)': auditRow.otherDeductions,
     'Total Deductions (INR)': auditRow.totalDeductions,
-    'Net Salary (INR)': auditRow.netSalary ?? '',
+    'Month-to-date payable': auditRow.netSalary ?? '',
     'Transfer Status': auditRow.transferStatus ?? '',
     'Status': auditRow.status,
   };
@@ -635,17 +649,17 @@ test('claim6: export columns are a strict subset of audit row fields', () => {
   assert.equal(exportRow['Employee Name'], auditRow.employeeName);
   assert.equal(exportRow['Department'], auditRow.departmentName);
   assert.equal(exportRow['Month'], auditRow.periodKey);
-  assert.equal(exportRow['Gross Salary (INR)'], auditRow.grossSalary);
+  assert.equal(exportRow['Monthly salary'], auditRow.grossSalary);
   assert.equal(exportRow['Working Days'], auditRow.workingDays);
   assert.equal(exportRow['Present Days'], auditRow.presentDays);
   assert.equal(exportRow['Paid Leave Days'], auditRow.paidLeaveDays);
   assert.equal(exportRow['Payable Days'], auditRow.payableDays);
-  assert.equal(exportRow['LOP Days'], auditRow.lopDays);
-  assert.equal(exportRow['LOP Deduction (INR)'], auditRow.lopDeduction);
-  assert.equal(exportRow['Per Day Salary (INR)'], auditRow.perDaySalary);
+  assert.equal(exportRow['Loss of pay (days)'], auditRow.lopDays);
+  assert.equal(exportRow['Loss of pay till date'], auditRow.lopDeduction);
+  assert.equal(exportRow['Per day salary'], auditRow.perDaySalary);
   assert.equal(exportRow['Other Deductions (INR)'], auditRow.otherDeductions);
   assert.equal(exportRow['Total Deductions (INR)'], auditRow.totalDeductions);
-  assert.equal(exportRow['Net Salary (INR)'], auditRow.netSalary);
+  assert.equal(exportRow['Month-to-date payable'], auditRow.netSalary);
   assert.equal(exportRow['Transfer Status'], auditRow.transferStatus);
   assert.equal(exportRow['Status'], auditRow.status);
 });
@@ -666,24 +680,24 @@ test('claim6: export handles inconsistent rows — netSalary shows empty string'
   };
 
   const exportRow = {
-    'Net Salary (INR)': auditRow.netSalary ?? '',
+    'Month-to-date payable': auditRow.netSalary ?? '',
     'Status': auditRow.status,
   };
 
-  assert.equal(exportRow['Net Salary (INR)'], ''); // null → empty string
+  assert.equal(exportRow['Month-to-date payable'], ''); // null → empty string
   assert.equal(exportRow['Status'], 'inconsistent');
 });
 
 test('claim6: export column count matches audit row field count', () => {
   // Export has exactly 17 columns
   const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Month',
-    'Gross Salary (INR)', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Payable Days', 'LOP Days', 'LOP Deduction (INR)', 'Per Day Salary (INR)',
-    'Other Deductions (INR)', 'Total Deductions (INR)', 'Net Salary (INR)',
+    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month',
+    'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
+    'Payable Days', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
+    'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
     'Transfer Status', 'Status',
   ];
-  assert.equal(exportColumns.length, 17);
+  assert.equal(exportColumns.length, 18);
 
   // Audit row has 20 fields (3 extra: employeeId, department, departmentName, hasSalaryConfigured)
   // Export drops employeeId and raw department, keeps departmentName

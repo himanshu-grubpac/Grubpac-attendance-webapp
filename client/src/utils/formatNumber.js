@@ -1,33 +1,13 @@
-const inrGrouped = new Intl.NumberFormat('en-IN', {
-  maximumFractionDigits: 2,
-});
-
-const inrCurrency = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR',
-  maximumFractionDigits: 2,
-});
+export {
+  formatInr,
+  formatInrCurrency,
+  formatInrInteger,
+  formatInrNumber,
+} from '@shared/utils/formatInr.js';
 
 const inrInteger = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 0,
 });
-
-/**
- * Display a number with Indian grouping (e.g. 1,00,000).
- * Returns an em dash for null/empty/invalid values.
- */
-export function formatInr(value) {
-  if (value == null || value === '' || Number.isNaN(Number(value))) return '—';
-  return inrGrouped.format(Number(value));
-}
-
-/**
- * Display INR currency with Indian grouping (e.g. ₹1,00,000.00).
- */
-export function formatInrCurrency(value) {
-  if (value == null || value === '' || Number.isNaN(Number(value))) return '—';
-  return inrCurrency.format(Number(value));
-}
 
 /**
  * Format a value for a controlled money input (commas while typing).

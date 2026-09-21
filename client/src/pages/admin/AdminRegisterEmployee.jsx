@@ -7,6 +7,7 @@ import { adminApi, getErrorMessage, getFieldErrors, salaryApi } from '../../serv
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { validateForm } from '../../utils/validation.js';
+import { broadcastEmployeeSync, broadcastSalaryPayrollSync } from '../../utils/portalSync.js';
 import { parseInrInput } from '../../utils/formatNumber.js';
 import DateField, { getTodayIstValue } from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
@@ -286,6 +287,11 @@ export default function AdminRegisterEmployee() {
 
         try {
           await salaryApi.updateUserSalary(employee.id, salaryPayload);
+          broadcastSalaryPayrollSync({
+            userId: employee.id,
+            salaryEffectiveFrom: salaryPayload.salaryEffectiveFrom,
+          });
+          broadcastEmployeeSync({ userId: employee.id });
           showSuccess('Employee registered successfully.');
         } catch (salaryErr) {
           showError(
@@ -293,6 +299,7 @@ export default function AdminRegisterEmployee() {
           );
         }
       } else {
+        broadcastEmployeeSync({ userId: employee.id });
         showSuccess('Employee registered successfully.');
       }
 

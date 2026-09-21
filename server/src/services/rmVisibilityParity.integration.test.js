@@ -1,15 +1,13 @@
 /**
- * RM visibility parity (integration, real Mongo).
+ * RM team scope vs leave-approval scope (integration, real Mongo).
  *
- * Every reports-scoped page (dashboard stats, employee list, attendance
- * history) must resolve the SAME membership for a reporting manager:
- * direct reports + delegate chain, never managed departments. Regression
- * test for the dashboard-38 vs list-20 split: a manager with 38 reports and
- * a 20-person managed department sees the same 38 people everywhere.
+ * Team-scoped admin surfaces (employee list, salary, attendance) use
+ * resolveTeamScopedUserIds → direct reports + delegate chain + managed
+ * departments + dept lead/deputy.
  *
- * Today Present is the deliberate exception: its dashboard roster and page
- * are managed-department scoped (in-scope reports + self + in-scope
- * same-role peers) — see teamTodayScope.integration.test.js.
+ * Leave approval queues stay on resolveLeaveApprovalUserIds (reports +
+ * delegate only). Managed-department members appear in team scope but not
+ * in the approval queue unless they report to the manager.
  */
 process.env.NODE_ENV = 'test';
 
@@ -68,7 +66,7 @@ async function createUser(name, fields = {}) {
   });
 }
 
-test('authority scope equals leave-approval scope even with a managed department', async () => {
+test('team scope includes managed departments; leave approval does not', async () => {
   const role = await createRole();
   const dept = new mongoose.Types.ObjectId();
   const mgr = await createUser('Mgr', {
@@ -76,40 +74,37 @@ test('authority scope equals leave-approval scope even with a managed department
     departmentId: dept,
     managedDepartmentIds: [dept],
   });
-  // Direct report in another department.
   const direct = await createUser('Direct', {
     roleId: role._id,
     reportingManagerId: mgr._id,
     departmentId: new mongoose.Types.ObjectId(),
   });
-  // Managed-department stranger who reports elsewhere.
   const stranger = await createUser('Stranger', {
     roleId: role._id,
     reportingManagerId: new mongoose.Types.ObjectId(),
     departmentId: dept,
   });
-  // Delegated chain.
   const coveree = await createUser('Coveree', { roleId: role._id, delegateApproverId: mgr._id });
   const delegated = await createUser('Delegated', { roleId: role._id, reportingManagerId: coveree._id });
 
-  const teamIds = await resolveTeamScopedUserIds(
-    mgr,
-    RM_PERMS,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const teamIds = await resolveTeamScopedUserIds(mgr, RM_PERMS);
   const approvalIds = await resolveLeaveApprovalUserIds(mgr);
 
   const sortIds = (ids) => ids.map(String).sort();
-  assert.deepEqual(sortIds(teamIds), sortIds(approvalIds), 'team scope matches approval scope');
-  assert.ok(sortIds(teamIds).includes(String(direct._id)), 'direct report visible');
-  assert.ok(sortIds(teamIds).includes(String(delegated._id)), 'delegated report visible');
-  assert.ok(!sortIds(teamIds).includes(String(stranger._id)), 'managed-department stranger hidden');
-  assert.ok(!sortIds(teamIds).includes(String(coveree._id)), 'delegating manager is not a report');
+  assert.notDeepEqual(sortIds(teamIds), sortIds(approvalIds), 'team scope is wider than approval scope');
+
+  assert.ok(sortIds(teamIds).includes(String(direct._id)), 'direct report in team scope');
+  assert.ok(sortIds(teamIds).includes(String(delegated._id)), 'delegated report in team scope');
+  assert.ok(sortIds(teamIds).includes(String(stranger._id)), 'managed-dept member in team scope');
+  assert.ok(!sortIds(teamIds).includes(String(coveree._id)), 'delegating manager not in team scope');
   assert.ok(!sortIds(teamIds).includes(String(mgr._id)), 'manager does not see self');
+
+  assert.ok(sortIds(approvalIds).includes(String(direct._id)), 'direct report in approval scope');
+  assert.ok(sortIds(approvalIds).includes(String(delegated._id)), 'delegated report in approval scope');
+  assert.ok(!sortIds(approvalIds).includes(String(stranger._id)), 'managed-dept stranger not in approval scope');
 });
 
-test('employee-directory query shows the visibility roster (managed + self + RMs)', async () => {
+test('employee-directory query uses full team scope including managed department', async () => {
   const role = await createRole();
   const dept = new mongoose.Types.ObjectId();
   const mgr = await createUser('MgrTwo', {
@@ -123,29 +118,10 @@ test('employee-directory query shows the visibility roster (managed + self + RMs
     reportingManagerId: new mongoose.Types.ObjectId(),
     departmentId: dept,
   });
-  // Fellow RM with the real reporting-manager slug (test roles use suffixed
-  // slugs, which the fellow-RM lookup deliberately ignores).
-  const rmRole = await Role.create({ name: 'RM', slug: 'reporting-manager', permissions: RM_PERMS });
-  const sibRm = await createUser('SibRmTwo', { roleId: rmRole._id });
 
-  const query = await applyTeamScopeToEmployeeQuery(
-    {},
-    mgr,
-    RM_PERMS,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const query = await applyTeamScopeToEmployeeQuery({}, mgr, RM_PERMS);
   const found = await User.find(query).select('_id').lean();
   const ids = found.map((u) => String(u._id)).sort();
-  assert.ok(ids.includes(String(direct._id)), 'direct report visible');
-  assert.ok(ids.includes(String(stranger._id)), 'managed-department member visible');
-  assert.ok(ids.includes(String(mgr._id)), 'manager sees self');
-  assert.ok(ids.includes(String(sibRm._id)), 'fellow RM visible');
 
-  // Authority stays narrow: approvals never include managed strangers, self,
-  // or fellow RMs — visibility never grants acting.
-  const approvalIds = (await resolveLeaveApprovalUserIds(mgr)).map(String);
-  assert.ok(!approvalIds.includes(String(stranger._id)), 'approvals exclude managed stranger');
-  assert.ok(!approvalIds.includes(String(mgr._id)), 'approvals exclude self');
-  assert.ok(!approvalIds.includes(String(sibRm._id)), 'approvals exclude fellow RM');
+  assert.deepEqual(ids, [String(direct._id), String(stranger._id)].sort());
 });

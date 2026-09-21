@@ -41,9 +41,11 @@ import {
   PERMISSIONS,
   SYSTEM_ROLES,
   SYSTEM_ROLE_SLUGS,
+  enforceAdminLockPermissions,
   legacyRoleFromSlug,
   hasAdminPortalAccess,
   hasPermission,
+  migrateLegacyPermissions,
 } from '../../shared/permissions.js';
 import { User } from './models/User.js';
 import { Role } from './models/Role.js';
@@ -157,28 +159,57 @@ async function syncAllIndexes() {
   return results;
 }
 
-async function upsertSystemRoles() {
+async function upsertSystemRoles({ syncCatalogPermissions = false } = {}) {
   const roleMap = new Map();
   const changes = [];
 
   for (const seedRole of SYSTEM_ROLES) {
     let role = await Role.findOne({ slug: seedRole.slug });
     if (!role) {
-      role = await Role.create(seedRole);
-      changes.push(`Created role: ${seedRole.slug}`);
+      const permissions =
+        seedRole.slug === SYSTEM_ROLE_SLUGS.ADMIN
+          ? enforceAdminLockPermissions(seedRole.permissions)
+          : seedRole.permissions;
+      role = await Role.create({ ...seedRole, permissions });
+      changes.push(`Created role: ${seedRole.slug} (${permissions.length} permissions)`);
     } else {
-      // Roles are dynamically editable via Roles & Permissions: never
-      // overwrite an existing role's permissions here — seed defaults apply
-      // to freshly created roles only.
       role.name = seedRole.name;
       role.description = seedRole.description;
       role.isSystem = true;
+      if (syncCatalogPermissions) {
+        const nextPerms =
+          seedRole.slug === SYSTEM_ROLE_SLUGS.ADMIN
+            ? enforceAdminLockPermissions(seedRole.permissions)
+            : seedRole.permissions;
+        role.permissions = nextPerms;
+        changes.push(`Synced catalog permissions: ${seedRole.slug} (${nextPerms.length} slugs)`);
+      }
       await role.save();
     }
     roleMap.set(seedRole.slug, role);
   }
 
   return { roleMap, changes };
+}
+
+/** Migrate all Role documents from legacy slugs to catalog slugs. */
+async function migrateAllRolePermissions() {
+  const roles = await Role.find({});
+  const changes = [];
+  for (const role of roles) {
+    const migrated = migrateLegacyPermissions(role.permissions ?? []);
+    const before = [...(role.permissions ?? [])].sort().join(',');
+    const after = migrated.join(',');
+    if (before !== after) {
+      role.permissions =
+        role.slug === SYSTEM_ROLE_SLUGS.ADMIN
+          ? enforceAdminLockPermissions(migrated)
+          : migrated;
+      await role.save();
+      changes.push(`${role.slug}: migrated ${role.permissions.length} catalog slugs`);
+    }
+  }
+  return changes;
 }
 
 async function syncUserLegacyRoles(roleMap) {
@@ -227,7 +258,7 @@ async function auditKeyUsers() {
       legacyRole: user.role,
       roleSlug: user.roleId?.slug ?? null,
       canAdminPortal: hasAdminPortalAccess(permissions),
-      canEmployeePortal: hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_OWN),
+      canEmployeePortal: hasPermission(permissions, PERMISSIONS.PORTAL_EMPLOYEE),
     };
   });
 }
@@ -335,6 +366,7 @@ async function migrateRecentFeatures() {
 
   const skipLeaveSeed = resolveSkipFlag('MIGRATE_SKIP_LEAVE_SEED', prodSafe, true);
   const skipRoleSync = resolveSkipFlag('MIGRATE_SKIP_ROLE_SYNC', prodSafe, true);
+  const syncRbacCatalog = envFlag('MIGRATE_RBAC_CATALOG') || (!skipRoleSync && !prodSafe);
   const skipLegacyPendingUndo = resolveSkipFlag(
     'MIGRATE_SKIP_LEGACY_PENDING_UNDO',
     prodSafe,
@@ -376,20 +408,30 @@ async function migrateRecentFeatures() {
   }
 
   let roleMap;
-  console.log('\n=== Dual-portal role sync ===');
-  if (skipRoleSync) {
+  console.log('\n=== RBAC catalog / role sync ===');
+  if (skipRoleSync && !syncRbacCatalog) {
     console.log(
       'Skipped permission overwrite — using existing roles (prod-safe or MIGRATE_SKIP_ROLE_SYNC).',
     );
     roleMap = await loadExistingRoleMap();
   } else {
-    const { roleMap: synced, changes: roleChanges } = await upsertSystemRoles();
+    const { roleMap: synced, changes: roleChanges } = await upsertSystemRoles({
+      syncCatalogPermissions: syncRbacCatalog,
+    });
     roleMap = synced;
     if (roleChanges.length === 0) {
       console.log('No role permission changes needed.');
     } else {
       roleChanges.forEach((line) => console.log(line));
     }
+  }
+
+  console.log('\n=== Legacy permission slug migration ===');
+  const permMigrations = await migrateAllRolePermissions();
+  if (permMigrations.length === 0) {
+    console.log('All roles already on catalog slugs.');
+  } else {
+    permMigrations.forEach((line) => console.log(line));
   }
 
   const userFixes = await syncUserLegacyRoles(roleMap);

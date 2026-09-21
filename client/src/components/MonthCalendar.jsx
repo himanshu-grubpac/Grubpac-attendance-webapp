@@ -10,6 +10,9 @@ const STATUS_LABELS = {
   wfh_pending: 'WFH pending approval',
   wfh: 'WFH',
   wfh_future: 'Approved WFH (upcoming)',
+  comp_off_pending: 'Comp off pending approval',
+  comp_off_approved: 'Approved comp off',
+  comp_off_worked: 'Comp off worked',
   holiday: 'Holiday',
   absent: 'Absent / LOP',
   weekend: 'Weekend',
@@ -22,6 +25,9 @@ const STATUS_CELL_TAGS = {
   wfh_pending: 'WFH',
   wfh: 'WFH',
   wfh_future: 'WFH',
+  comp_off_pending: 'CO',
+  comp_off_approved: 'CO',
+  comp_off_worked: 'CO',
 };
 
 function getMonthMatrix(year, monthKey) {
@@ -183,7 +189,7 @@ export default function MonthCalendar({
       )}
 
       <div className="month-calendar__legend" aria-label="Calendar legend">
-        {['present', 'half_day', 'leave', 'leave_future', 'wfh_pending', 'wfh', 'wfh_future', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
+        {['present', 'half_day', 'leave', 'leave_future', 'wfh_pending', 'wfh', 'wfh_future', 'comp_off_pending', 'comp_off_approved', 'comp_off_worked', 'holiday', 'absent', 'weekend', 'none'].map((status) => (
           <span key={status} className="month-calendar__legend-item">
             <span className={`month-calendar__swatch month-calendar__swatch--${status}`} aria-hidden="true" />
             {STATUS_LABELS[status]}

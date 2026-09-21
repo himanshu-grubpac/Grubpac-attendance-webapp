@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import { User } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { getEmployee, getEmployeeStats, listEmployees, updateEmployee } from './adminController.js';
-import { updateUserSalary } from '../services/salaryService.js';
+import { PERMISSIONS } from '../../../shared/permissions.js';
 
 let memServer;
 
@@ -23,7 +23,7 @@ after(async () => {
 const reqFor = (page, limit) => ({
   query: { page: String(page), limit: String(limit) },
   user: { _id: new mongoose.Types.ObjectId() },
-  userPermissions: ['attendance.read_all'],
+  userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_ACCOUNT_R],
 });
 
 const captureRes = () => {
@@ -124,7 +124,7 @@ async function seedAdminAndEmployee() {
 const statsReq = () => ({
   query: {},
   user: { _id: new mongoose.Types.ObjectId() },
-  userPermissions: ['attendance.read_all'],
+  userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
 });
 
 test('All-roles list includes admins; role filter still scopes', async () => {
@@ -218,10 +218,20 @@ test('stats include per-role breakdown for dashboard cards', async () => {
 
 test('direct salary update on an admin is vetoed', async () => {
   const { admin } = await seedAdminAndEmployee();
-  await assert.rejects(
-    updateUserSalary(admin._id.toString(), { monthlySalary: 99999 }, new mongoose.Types.ObjectId()),
-    /Cannot modify the system admin/,
+  const actorId = new mongoose.Types.ObjectId();
+
+  const updated = captureRes();
+  await updateEmployee(
+    {
+      params: { id: admin._id.toString() },
+      body: { isActive: false },
+      user: { _id: actorId },
+      userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
+    },
+    updated.res,
   );
+  assert.equal(updated.res.statusCode, 400);
+  assert.match(updated.getBody().message, /Cannot modify the system admin/);
 });
 
 let joiningSequence = 0;

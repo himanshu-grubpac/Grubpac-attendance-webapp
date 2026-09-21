@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { DemoFaqItem } from '../models/DemoFaqItem.js';
 import {
   createDemoFaqSchema,
@@ -92,6 +93,23 @@ export async function updateItem(req, res) {
     sortOrder: item.sortOrder,
     isActive: item.isActive,
   };
+
+  const permissions = req.userPermissions ?? [];
+
+  if (parsed.visibleRoles !== undefined) {
+    const prev = [...(item.visibleRoles ?? [])].sort().join('\0');
+    const next = [...parsed.visibleRoles].sort().join('\0');
+    if (prev !== next && !hasPermission(permissions, PERMISSIONS.OPS_FAQ_X0)) {
+      return res.status(403).json({ message: 'You do not have permission to set visible roles.' });
+    }
+  }
+  if (
+    parsed.sortOrder !== undefined &&
+    parsed.sortOrder !== item.sortOrder &&
+    !hasPermission(permissions, PERMISSIONS.OPS_FAQ_X1)
+  ) {
+    return res.status(403).json({ message: 'You do not have permission to reorder FAQ items.' });
+  }
 
   if (parsed.type !== undefined) item.type = parsed.type;
   if (parsed.title !== undefined) item.title = parsed.title;

@@ -47,7 +47,11 @@ function setup(user) {
   );
 }
 
-const DUAL_PERMS = [...ADMIN_PORTAL_PERMISSIONS, PERMISSIONS.ATTENDANCE_READ_OWN];
+const DUAL_PERMS = [
+  ...ADMIN_PORTAL_PERMISSIONS,
+  PERMISSIONS.ATTENDANCE_READ_OWN,
+  PERMISSIONS.PORTAL_SWITCH,
+];
 
 function dualUser(role) {
   return {

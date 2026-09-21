@@ -32,6 +32,28 @@ function getInitials(name) {
     .toUpperCase();
 }
 
+function formatRoleSlug(slug) {
+  if (!slug || typeof slug !== 'string') return null;
+  const trimmed = slug.trim();
+  if (!trimmed) return null;
+  return trimmed
+    .replace(/[_-]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function resolveSidebarRoleLabel(user, isAdminPortal) {
+  const portalFallback = isAdminPortal ? 'Admin' : 'Employee';
+  if (!user) return portalFallback;
+  const roleName = user.roleName?.trim();
+  if (roleName) return roleName;
+  const fromSlug = formatRoleSlug(user.roleSlug ?? user.role);
+  if (fromSlug) return fromSlug;
+  return portalFallback;
+}
+
 function readCollapsedPreference() {
   try {
     return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1';
@@ -386,6 +408,10 @@ function AppLayoutShell() {
   const moreNavItems = useMemo(() => getMoreNavItems(user, loginPortal), [user, loginPortal]);
   const isAdminPortal = loginPortal === 'admin';
   const profilePath = isAdminPortal ? '/admin/profile' : '/employee/profile';
+  const sidebarRoleLabel = useMemo(
+    () => resolveSidebarRoleLabel(user, isAdminPortal),
+    [user, isAdminPortal],
+  );
 
   const sections = useMemo(() => {
     const grouped = new Map();
@@ -479,8 +505,8 @@ function AppLayoutShell() {
         <div className="app-sidebar__brand">
           <CompanyLogo size={32} showText={!collapsed} />
           {!collapsed && (
-            <span className="app-sidebar__portal-label">
-              {isAdminPortal ? 'Admin' : 'Employee'}
+            <span className="app-sidebar__portal-label" title={sidebarRoleLabel}>
+              {sidebarRoleLabel}
             </span>
           )}
         </div>

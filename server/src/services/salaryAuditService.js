@@ -7,6 +7,7 @@ import { SalaryTransfer } from '../models/SalaryTransfer.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
+import { LeaveType } from '../models/LeaveType.js';
 import { Department } from '../models/Department.js';
 import {
   getISTYear,
@@ -20,15 +21,21 @@ import {
 import {
   loadPaidLeaveTypeIds,
   buildPaidLeaveDayMap,
-  computeDailyCappedPayableDays,
+  buildUnpaidLeaveDayMap,
+  computeMtdSalaryMetrics,
+  resolveSalaryAsOfDate,
   salaryAppliesForMonth,
+  attendanceCreditForTag,
 } from './salaryService.js';
 import { getHolidayDateSet } from './leaveService.js';
 import { getPaidLeaveQuota } from './leaveBalanceService.js';
 import {
+  assertDepartmentInAccessibleSet,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import { PERMISSIONS } from '../../../shared/permissions.js';
+import { formatInrNumber } from '../../../shared/utils/formatInr.js';
+import { parseSalaryPeriodKey } from './salaryService.js';
 
 function throwError(message, statusCode = 400) {
   const error = new Error(message);
@@ -45,12 +52,7 @@ function roundMoney(value) {
  * Returns null for unscoped (admin read-all), [] for no access, or array of ObjectIds.
  */
 async function getAuditScope(actor, permissions) {
-  return resolveTeamScopedUserIds(
-    actor,
-    permissions,
-    PERMISSIONS.SALARY_READ,
-    PERMISSIONS.SALARY_READ_TEAM,
-  );
+  return resolveTeamScopedUserIds(actor, permissions);
 }
 
 /**
@@ -69,7 +71,7 @@ function validatePeriodKey(periodKey) {
 /**
  * Bulk-fetches attendance credit by user for a month.
  * Returns Map<userId_string, Map<dayKey, credit>>.
- * credit = 1.0 for Present, 0.5 for HD.
+ * credit = 1.0 for Present, 0.5 for HD/LV.
  */
 async function bulkFetchAttendanceByUser(userIds, monthStart, monthEnd) {
   if (userIds.length === 0) return new Map();
@@ -87,7 +89,7 @@ async function bulkFetchAttendanceByUser(userIds, monthStart, monthEnd) {
     if (!outerMap.has(uid)) outerMap.set(uid, new Map());
     const dayMap = outerMap.get(uid);
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = attendanceCreditForTag(record.attendanceTag);
     dayMap.set(dayKey, Math.max(dayMap.get(dayKey) ?? 0, credit));
   }
   return outerMap;
@@ -166,18 +168,24 @@ async function bulkFetchDepartments(departmentIds) {
  * @param {object} bulkData - pre-fetched data maps
  * @returns {object} salary summary
  */
-function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
-  const range = parseMonthInputAsISTRange(monthInput);
-  if (!range) {
+function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData, options = {}) {
+  const resolved = resolveSalaryAsOfDate(monthInput, options.asOfDate);
+  if (!resolved) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const { year, monthKey, start, end } = range;
-  const { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser } = bulkData;
+  const { monthKey, start, end, asOfDateKey } = resolved;
+  const {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById = new Map(),
+  } = bulkData;
 
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
-  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
   const userId = user._id.toString();
   const userAttendance = attendanceByUser.get(userId) ?? new Map();
@@ -191,9 +199,6 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     ]),
   );
 
-  const presentDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (userAttendance.get(day) ?? 0), 0),
-  );
   const paidLeaveByDay = buildPaidLeaveDayMap(
     userRequests,
     start,
@@ -202,27 +207,27 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     paidTypeIds,
     paidQuotaByTypeId,
   );
-  const paidLeaveDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  const unpaidLeaveByDay = buildUnpaidLeaveDayMap(
+    userRequests,
+    start,
+    end,
+    holidayDates,
+    paidTypeIds,
+    paidQuotaByTypeId,
+    leaveTypeCodeById,
   );
-  const payableDays = computeDailyCappedPayableDays(
-    workingDayList,
-    userAttendance,
-    paidLeaveByDay,
-  );
-  const lopDays = Math.max(0, workingDaysInMonth - payableDays);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
-  let perDaySalary = null;
-  let payableEstimate = null;
-  let lopDeduction = null;
-  if (monthlySalary != null && workingDaysInMonth > 0) {
-    perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
-    payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
-    lopDeduction = roundMoney(lopDays * perDaySalary);
-  }
+  const mtdMetrics = computeMtdSalaryMetrics({
+    monthlySalary,
+    workingDayList,
+    attendanceCreditByDay: userAttendance,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    asOfDateKey,
+  });
 
   return {
     month: monthKey,
@@ -233,13 +238,14 @@ function computeMonthlySalarySummaryInMemory(user, monthInput, bulkData) {
     monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
     workingDaysInMonth,
-    presentDays,
-    paidLeaveDays,
-    payableDays,
-    lopDays,
-    lopDeduction,
-    perDaySalary,
-    payableEstimate,
+    presentDays: mtdMetrics.presentDays,
+    paidLeaveDays: mtdMetrics.paidLeaveDays,
+    payableDays: mtdMetrics.payableDays,
+    lopDays: mtdMetrics.lopDays,
+    lopDeduction: mtdMetrics.lopDeduction,
+    perDaySalary: mtdMetrics.perDaySalary,
+    payableEstimate: mtdMetrics.payableEstimate,
+    asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
 }
@@ -292,7 +298,6 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
       employeeCode: employee.employeeCode ?? null,
       employeeName: employee.name,
       department: employee.departmentId?.toString?.() ?? null,
-      joiningDate: employee.joiningDate ?? null,
       periodKey: month,
       grossSalary,
       workingDays: summary.workingDaysInMonth,
@@ -321,7 +326,6 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
     employeeCode: employee.employeeCode ?? null,
     employeeName: employee.name,
     department: employee.departmentId?.toString?.() ?? null,
-    joiningDate: employee.joiningDate ?? null,
     periodKey: month,
     grossSalary,
     workingDays: summary.workingDaysInMonth,
@@ -454,15 +458,27 @@ async function fetchSalaryTransfersByPeriod(userId, periodKeys) {
 async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
   const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
 
-  const [holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser] = await Promise.all([
+  const [holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser, leaveTypes] = await Promise.all([
     getHolidayDateSet(year),
     loadPaidLeaveTypeIds(year),
     bulkFetchAttendanceByUser(userIds, monthStart, monthEnd),
     bulkFetchLeaveBalancesByUser(userIds, year),
     bulkFetchLeaveRequestsByUser(userIds, yearStart, monthEnd),
+    LeaveType.find({ isActive: true }).select('_id code').lean(),
   ]);
 
-  return { holidayDates, paidTypeIds, attendanceByUser, balancesByUser, requestsByUser };
+  const leaveTypeCodeById = new Map(
+    leaveTypes.map((leaveType) => [leaveType._id.toString(), leaveType.code]),
+  );
+
+  return {
+    holidayDates,
+    paidTypeIds,
+    attendanceByUser,
+    balancesByUser,
+    requestsByUser,
+    leaveTypeCodeById,
+  };
 }
 
 // ── API: Employee salary history ──────────────────────────────────────
@@ -481,7 +497,7 @@ async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
  */
 export async function getEmployeeSalaryHistory(actor, permissions, userId, options = {}) {
   const subject = await User.findById(userId)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate createdAt')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId isActive joiningDate endingDate createdAt')
     .lean();
   if (!subject) {
     throwError('Employee not found.', 404);
@@ -507,6 +523,8 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
         monthlySalary: subject.monthlySalary ?? null,
         salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
         salaryCurrency: 'INR',
+        joiningDate: subject.joiningDate ?? null,
+        endingDate: subject.endingDate ?? null,
       },
       history: [],
       inactive: true,
@@ -535,22 +553,6 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
   const months = [];
   for (let m = minMonth; m <= maxMonth; m++) {
     months.push(`${year}-${String(m).padStart(2, '0')}`);
-  }
-
-  if (months.length === 0) {
-    return {
-      employee: {
-        id: subject._id.toString(),
-        name: subject.name,
-        employeeCode: subject.employeeCode ?? null,
-        monthlySalary: subject.monthlySalary ?? null,
-        salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
-        salaryCurrency: 'INR',
-        joiningDate: subject.joiningDate ?? null,
-        createdAt: subject.createdAt ?? null,
-      },
-      history: [],
-    };
   }
 
   // Determine date range for bulk fetch (need full year data for quota consumption)
@@ -613,6 +615,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
       salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
       salaryCurrency: 'INR',
       joiningDate: subject.joiningDate ?? null,
+      endingDate: subject.endingDate ?? null,
       createdAt: subject.createdAt ?? null,
     },
     history,
@@ -635,6 +638,10 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
 export async function getMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   validatePeriodKey(periodKey);
 
+  if (options.departmentId) {
+    await assertDepartmentInAccessibleSet(actor, permissions, options.departmentId);
+  }
+
   const scopedIds = await getAuditScope(actor, permissions);
 
   // Include ALL active employees (including those without salary)
@@ -647,7 +654,7 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
   }
 
   const employees = await User.find(employeeQuery)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId joiningDate')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId')
     .sort({ name: 1 })
     .lean();
 
@@ -711,25 +718,29 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
 export async function exportMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   const audit = await getMonthlySalaryAudit(actor, permissions, periodKey, options);
 
-  const rows = audit.employees.map((row) => ({
+  const rows = audit.employees.map((row) => {
+    const { year, monthName } = parseSalaryPeriodKey(row.periodKey);
+    return {
     'Employee Code': row.employeeCode ?? '',
     'Employee Name': row.employeeName,
     'Department': row.departmentName ?? '',
-    'Month': row.periodKey,
-    'Gross Salary (INR)': row.grossSalary,
+    Year: year,
+    Month: monthName,
+    'Monthly salary': formatInrNumber(row.grossSalary),
     'Working Days': row.workingDays,
     'Present Days': row.presentDays,
     'Paid Leave Days': row.paidLeaveDays,
     'Payable Days': row.payableDays,
-    'LOP Days': row.lopDays,
-    'LOP Deduction (INR)': row.lopDeduction,
-    'Per Day Salary (INR)': row.perDaySalary ?? '',
-    'Other Deductions (INR)': row.otherDeductions,
-    'Total Deductions (INR)': row.totalDeductions,
-    'Net Salary (INR)': row.netSalary ?? '',
+    'Loss of pay (days)': row.lopDays,
+    'Loss of pay till date': formatInrNumber(row.lopDeduction),
+    'Per day salary': formatInrNumber(row.perDaySalary),
+    'Other Deductions (INR)': formatInrNumber(row.otherDeductions),
+    'Total Deductions (INR)': formatInrNumber(row.totalDeductions),
+    'Month-to-date payable': formatInrNumber(row.netSalary),
     'Transfer Status': row.transferStatus ?? '',
     'Status': row.status,
-  }));
+    };
+  });
 
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);

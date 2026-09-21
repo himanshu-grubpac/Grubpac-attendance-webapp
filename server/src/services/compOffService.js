@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import { PERMISSIONS, hasCompanyWideScope, hasPermission } from '../../../shared/permissions.js';
 import { WFH_LEAVE_TYPE_CODE } from '../../../shared/utils/wfhPolicy.js';
 import {
   endOfDayIST,
@@ -1664,7 +1664,7 @@ export async function listCompOffRequests(actor, permissions, query) {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view the comp off approval queue.', 403);
     }
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (!hasCompanyWideScope(permissions)) {
       const reportIds = await resolveLeaveApprovalUserIds(actor);
       filter.userId = { $in: reportIds };
     }
@@ -1677,7 +1677,7 @@ export async function listCompOffRequests(actor, permissions, query) {
     // employees may only ever see their own requests; approvers only their
     // reports (unless LEAVE_READ_ALL). Without this, any LEAVE_READ holder
     // could read anyone's requests via ?userId=.
-    if (!hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+    if (!hasCompanyWideScope(permissions)) {
       if (scope !== 'approvals') {
         if (String(query.userId) !== String(actor._id)) {
           throwError('You can only view your own comp off requests.', 403);
@@ -1751,7 +1751,7 @@ export async function getCompOffRequest(requestId, actor, permissions) {
   if (requesterId === actor._id.toString()) {
     return request.toSafeJSON();
   }
-  if (hasPermission(permissions, PERMISSIONS.LEAVE_READ_ALL)) {
+  if (hasCompanyWideScope(permissions)) {
     return request.toSafeJSON();
   }
   if (hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {

@@ -5,6 +5,7 @@ import {
 } from '@shared/validation/departments.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { broadcastDepartmentSync } from '../../utils/portalSync.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
@@ -193,6 +194,7 @@ export default function AdminDepartments() {
         showSuccess(`Department "${validation.data.name ?? modal.department.name}" updated.`);
       }
 
+      broadcastDepartmentSync();
       closeModal();
       await loadDepartments();
     } catch (err) {
@@ -213,6 +215,7 @@ export default function AdminDepartments() {
       variant: nextActive ? 'default' : 'danger',
       onConfirm: async () => {
         await adminApi.updateDepartment(department.id, { isActive: nextActive });
+        broadcastDepartmentSync();
         showSuccess(
           nextActive
             ? `Department "${department.name}" activated.`
@@ -231,6 +234,7 @@ export default function AdminDepartments() {
       variant: 'danger',
       onConfirm: async () => {
         await adminApi.deleteDepartment(department.id);
+        broadcastDepartmentSync();
         showSuccess(`Department "${department.name}" deleted.`);
         await loadDepartments();
       },

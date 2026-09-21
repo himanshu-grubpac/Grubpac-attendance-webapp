@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createHolidaySchema, createHolidayCategorySchema, updateHolidayCategorySchema } from '@shared/validation/holidays.js';
+import { broadcastHolidayPayrollSync } from '../../utils/portalSync.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { getErrorMessage, leaveApi } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -532,6 +533,9 @@ export default function AdminTeamLeaveCalendar() {
           ? current.map((holiday) => (holiday.id === saved.id ? saved : holiday))
           : [...current.filter((holiday) => holiday.id !== saved.id), saved];
       });
+      broadcastHolidayPayrollSync({
+        dayKey: result.holiday.dateInput ?? validation.data.date,
+      });
       resetForm(validation.data.date);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -550,6 +554,7 @@ export default function AdminTeamLeaveCalendar() {
       variant: 'danger',
       onConfirm: async () => {
         await leaveApi.deleteHoliday(editingId);
+        broadcastHolidayPayrollSync({ dayKey: form.date });
         showSuccess('Calendar entry deleted.');
         // Default selection is today; fall back to Jan 1 only when today lies
         // outside the currently viewed year, keeping the form coherent with the view.
@@ -615,6 +620,7 @@ export default function AdminTeamLeaveCalendar() {
     try {
       const result = await leaveApi.materializeRecurringHolidays({ year });
       showSuccess(`Generated ${result.created?.length ?? 0} holiday dates for ${year}.`);
+      broadcastHolidayPayrollSync({});
       yearsLoadedRef.current.delete(year);
       await loadHolidays();
     } catch (err) {
@@ -749,12 +755,14 @@ export default function AdminTeamLeaveCalendar() {
         try {
           const res = await leaveApi.deleteRecurringRuleHolidays(rule.name);
           const deleted = res.deleted ?? 0;
+          broadcastHolidayPayrollSync({});
           if (deleted > 0) {
             showSuccess(`Rule deleted. Removed ${deleted} generated holiday${deleted === 1 ? '' : 's'}.`);
           } else {
             showSuccess('Rule deleted.');
           }
         } catch {
+          broadcastHolidayPayrollSync({});
           showSuccess('Rule deleted. Holidays may need manual cleanup.');
         }
         yearsLoadedRef.current.delete(year);
@@ -855,9 +863,9 @@ export default function AdminTeamLeaveCalendar() {
               ))}
               <button type="button" className="calendar-management__add-category" onClick={() => openCategoryDialog()}>+ Add category</button>
             </div>
-          </div>
+        </div>
 
-          {loading ? (
+            {loading ? (
             <div className="calendar-management__loading" aria-busy="true">
               <div className="skeleton skeleton--calendar" />
             </div>
@@ -880,7 +888,7 @@ export default function AdminTeamLeaveCalendar() {
                   <ul className="calendar-management__event-list">
                     {monthHolidays.map((holiday) => {
                       const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
-                      return (
+                    return (
                         <li key={holiday.id}>
                           <button
                             type="button"
@@ -906,7 +914,7 @@ export default function AdminTeamLeaveCalendar() {
                 const holiday = holidaysByDate.get(key);
                 const category = categoriesByValue.get(holiday?.type) ?? BUILT_IN_CATEGORIES[0];
                 const parsed = parseDateKey(key);
-                return (
+                  return (
                   <div
                     key={key}
                     role="listitem"
@@ -939,9 +947,9 @@ export default function AdminTeamLeaveCalendar() {
                       <span className="calendar-management__week-empty" aria-hidden="true">—</span>
                     )}
                   </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+                </div>
           ) : null}
         </section>
 
@@ -969,7 +977,7 @@ export default function AdminTeamLeaveCalendar() {
             <div className="calendar-management__form-actions">
               <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Add holiday'}</button>
               {editingId ? <button type="button" className="btn btn-ghost" onClick={() => resetForm(form.date)}>Cancel</button> : null}
-            </div>
+                </div>
             {editingId ? <button type="button" className="calendar-management__delete" onClick={handleDelete}>Delete entry</button> : null}
           </form>
 

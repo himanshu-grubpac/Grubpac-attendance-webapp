@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { broadcastLeavePayrollSync } from '../../utils/portalSync.js';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -210,6 +211,7 @@ export default function LeaveAdjustmentBulkUploadModal({
           const summary = data?.summary ?? {};
           const applied = summary.success ?? 0;
           if (applied > 0) {
+            broadcastLeavePayrollSync({});
             showSuccess(`Applied ${applied} carried leave entr${applied === 1 ? 'y' : 'ies'}.`);
             try {
               await onImported?.();

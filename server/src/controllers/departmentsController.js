@@ -1,5 +1,7 @@
+import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
 import { User } from '../models/User.js';
+import { resolveAccessibleDepartmentIds } from '../services/teamScopeService.js';
 import {
   createDepartmentSchema,
   updateDepartmentSchema,
@@ -7,13 +9,27 @@ import {
 import { auditEntityChange, auditRequest } from '../utils/auditLog.js';
 
 export async function listDepartments(req, res) {
-  const departments = await Department.find()
+  const permissions = req.userPermissions ?? [];
+  const accessibleDeptIds = await resolveAccessibleDepartmentIds(req.user, permissions);
+
+  if (accessibleDeptIds !== null && accessibleDeptIds.length === 0) {
+    return res.json({ departments: [] });
+  }
+
+  const deptQuery = accessibleDeptIds !== null ? { _id: { $in: accessibleDeptIds } } : {};
+
+  const departments = await Department.find(deptQuery)
     .populate('leadUserId', 'name email')
     .populate('deputyUserId', 'name email')
     .sort({ name: 1 });
 
+  const countMatch =
+    accessibleDeptIds !== null
+      ? { departmentId: { $in: accessibleDeptIds } }
+      : { departmentId: { $ne: null } };
+
   const counts = await User.aggregate([
-    { $match: { departmentId: { $ne: null } } },
+    { $match: countMatch },
     { $group: { _id: '$departmentId', count: { $sum: 1 } } },
   ]);
   const countMap = Object.fromEntries(counts.map((c) => [c._id.toString(), c.count]));
@@ -91,6 +107,24 @@ export async function updateDepartment(req, res) {
     code: department.code,
     isActive: department.isActive,
   };
+
+  const permissions = req.userPermissions ?? [];
+
+  if (parsed.leadUserId !== undefined && String(parsed.leadUserId ?? '') !== String(department.leadUserId ?? '')) {
+    if (!hasPermission(permissions, PERMISSIONS.OPS_DEPARTMENT_X0)) {
+      return res.status(403).json({ message: 'You do not have permission to assign department lead.' });
+    }
+  }
+  if (parsed.deputyUserId !== undefined && String(parsed.deputyUserId ?? '') !== String(department.deputyUserId ?? '')) {
+    if (!hasPermission(permissions, PERMISSIONS.OPS_DEPARTMENT_X1)) {
+      return res.status(403).json({ message: 'You do not have permission to assign deputy lead.' });
+    }
+  }
+  if (parsed.isActive !== undefined && parsed.isActive !== department.isActive) {
+    if (!hasPermission(permissions, PERMISSIONS.OPS_DEPARTMENT_X2)) {
+      return res.status(403).json({ message: 'You do not have permission to activate or deactivate departments.' });
+    }
+  }
 
   if (parsed.name !== undefined) department.name = parsed.name;
   if (parsed.code !== undefined) department.code = parsed.code;

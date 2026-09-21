@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { formatInrInteger } from '@shared/utils/formatInr.js';
 import { adminApi, getErrorMessage, preferencesApi } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -16,6 +17,8 @@ import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastEmployeeSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const EMPLOYEE_PAGE_SIZE = 10;
 
@@ -25,7 +28,6 @@ const ALL_COLUMNS = [
   { key: 'name', label: 'Name', always: true },
   { key: 'employeeCode', label: 'Emp code' },
   { key: 'email', label: 'Email' },
-  { key: 'employeeCode', label: 'Employee code' },
   { key: 'mobile', label: 'Mobile' },
   { key: 'department', label: 'Department' },
   { key: 'designation', label: 'Designation' },
@@ -178,11 +180,8 @@ function shortDate(value) {
 
 function salaryLabel(value) {
   if (value == null) return '—';
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(value);
+  const formatted = formatInrInteger(value);
+  return formatted ? `₹${formatted}` : '—';
 }
 
 function managerDepartmentsLabel(employee, managerDeptMap) {
@@ -218,13 +217,14 @@ function TableSkeleton() {
 
 export default function AdminUsers() {
   const navigate = useNavigate();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, hasAnyPermission, user } = useAuth();
   const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
-  // Reporting managers get the scoped creation entry points (Employee role,
-  // managed departments only — enforced by the register API).
+  const canFilterByDepartment = hasAnyPermission([
+    PERMISSIONS.EMPLOYEES_STATS_R,
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+  ]);
   const canAddTeamEmployee = user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
   const canAddEmployee = canWriteUsers || canAddTeamEmployee;
-  const canReadAllAttendance = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { showSuccess } = useToast();
 
@@ -457,8 +457,9 @@ export default function AdminUsers() {
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
-      .catch(() => {
-        // Department filter remains optional.
+      .catch((err) => {
+        console.warn('Employee list: failed to load departments', getErrorMessage(err));
+        setDepartments([]);
       });
     adminApi
       .listRoles({ includeSystem: true })
@@ -488,6 +489,32 @@ export default function AdminUsers() {
     // Intentionally runs once: restores the persisted filter set (if any).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadColumnPreferences, loadEmployees, loadStats]);
+
+  const syncListReload = useCallback(() => {
+    void loadStats();
+    loadEmployees({
+      query: search,
+      nextPage: page,
+      nextStatus: statusFilter,
+      nextDepartment: departmentFilter,
+      nextRole: roleFilter,
+      nextNewThisMonth: newThisMonthFilter,
+      monthKey: statsRef.current?.monthKey ?? null,
+    });
+  }, [
+    departmentFilter,
+    loadEmployees,
+    loadStats,
+    newThisMonthFilter,
+    page,
+    roleFilter,
+    search,
+    statusFilter,
+  ]);
+
+  usePortalSync(syncListReload, {
+    topics: [PORTAL_TOPICS.EMPLOYEE, PORTAL_TOPICS.DEPARTMENT],
+  });
 
   useEffect(() => {
     try {
@@ -815,6 +842,7 @@ export default function AdminUsers() {
       variant: nextActive ? 'default' : 'danger',
       onConfirm: async () => {
         await adminApi.updateEmployeeStatus(employee.id, nextActive);
+        broadcastEmployeeSync({ userId: employee.id });
         await Promise.all([
           loadEmployees({
             query: search,
@@ -1106,7 +1134,7 @@ export default function AdminUsers() {
                 }}
               />
 
-              {canReadAllAttendance && (
+              {canFilterByDepartment ? (
                 <label className="field-inline filter-bar__field employees-toolbar__field">
                   <span className="label">Department</span>
                   <SelectField
@@ -1116,7 +1144,7 @@ export default function AdminUsers() {
                     aria-label="Department filter"
                   />
                 </label>
-              )}
+              ) : null}
 
               <label className="field-inline filter-bar__field employees-toolbar__field">
                 <span className="label">Role</span>

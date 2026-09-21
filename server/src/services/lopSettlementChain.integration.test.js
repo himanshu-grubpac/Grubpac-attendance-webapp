@@ -133,8 +133,8 @@ test('settleMonthPayroll finalizes LOP and is idempotent', async () => {
   const settled = await LopRecord.findOne({ leaveRequestId: request._id });
   assert.equal(settled.status, 'settled');
   assert.equal(settled.days, 3);
-  // June 2025 has 21 working days: 30000 / 21 = 1428.57 per day.
-  assert.equal(settled.deductionAmount, 4285.71);
+  // Fixed 30-day divisor: 30000 / 30 = 1000 per day × 3 LOP days.
+  assert.equal(settled.deductionAmount, 3000);
   assert.ok(settled.settledAt instanceof Date);
 
   const doc = await MonthSettlement.findOne({ periodKey: PERIOD });
@@ -210,12 +210,12 @@ test('monthly audit reflects settled LOP for the employee', async () => {
   const row = audit.employees[0];
   assert.equal(row.status, 'settled');
   assert.equal(row.lopDays, 3);
-  assert.equal(row.lopDeduction, 4285.71);
+  assert.equal(row.lopDeduction, 3000);
   // Settled months use the generated transfer amount as net-salary truth.
   const transfer = await SalaryTransfer.findOne({ userId: user._id, periodKey: PERIOD });
   assert.equal(row.netSalary, transfer.amount);
   assert.equal(audit.totals.lopDays, 3);
-  assert.equal(audit.totals.lopDeduction, 4285.71);
+  assert.equal(audit.totals.lopDeduction, 3000);
 });
 
 test('overdrawn settlement finalizes LOP records AND resets negative carried in one run', async () => {

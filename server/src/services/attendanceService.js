@@ -1,5 +1,10 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasPermission } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
@@ -17,8 +22,8 @@ import {
 } from './attendancePolicyService.js';
 import { getHolidayMapForYear, adminApplyLeaveForEmployeeDay } from './leaveService.js';
 import {
+  buildEmployeeDirectoryQuery,
   isUserInTeamScope,
-  resolveTeamRosterIds,
   resolveTeamScopedUserIds,
 } from './teamScopeService.js';
 import {
@@ -27,6 +32,7 @@ import {
   getISTDateInputValue,
   getISTYear,
   isWeekendIST,
+  iterateISTDays,
   listWorkingDaysIST,
   parseDateInputAsISTDay,
   parseMonthInputAsISTRange,
@@ -383,28 +389,41 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const todayKey = getISTDateInputValue();
   const istToday = todayKey;
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadAll = hasCompanyWideScope(permissions);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   let userIds = [];
   if (canReadAll) {
-    // Directory parity with the Employee List (All includes admins): the
-    // roster carries every scoped account of all statuses, so admins are
-    // searchable and the totals reconcile with the directory stats.
-    // Inactive members render as inactive rows, never as absent.
-    // Explicit department/role narrowing still applies below.
-    const roster = await User.find({}).select('_id').lean();
+    // Directory parity with the Employee List: non-admin accounts of all
+    // statuses so totals reconcile with directory stats. Inactive members
+    // render as inactive rows, never as absent.
+    const roster = await User.find(await buildEmployeeDirectoryQuery()).select('_id').lean();
     userIds = roster.map((e) => e._id);
   } else if (canReadTeam && actor?._id) {
     // Visibility roster (managed departments + reports + delegates + self +
-    // fellow RMs, all statuses): same membership as the Employee List so both
-    // totals reconcile. Inactive members render as inactive rows below.
-    userIds = await resolveTeamRosterIds(
-      actor,
-      permissions,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    ) ?? [];
+    // fellow top-level RMs, all statuses): same membership as the Employee
+    // List plus self for the today board. Inactive members render as inactive.
+    userIds = [...((await resolveTeamScopedUserIds(actor, permissions)) ?? [])];
+    if (!userIds.some((id) => id.toString() === actor._id.toString())) {
+      userIds.push(actor._id);
+    }
+    if (!actor.reportingManagerId) {
+      const rmRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER }).select('_id').lean();
+      if (rmRole) {
+        const fellowRms = await User.find({
+          roleId: rmRole._id,
+          $or: [{ reportingManagerId: null }, { reportingManagerId: { $exists: false } }],
+          _id: { $ne: actor._id },
+        })
+          .select('_id')
+          .lean();
+        for (const fellow of fellowRms) {
+          if (!userIds.some((id) => id.toString() === fellow._id.toString())) {
+            userIds.push(fellow._id);
+          }
+        }
+      }
+    }
   } else {
     const actorDoc = await User.findById(actor._id).select('reportingManagerId departmentId').lean();
     const managerId = actorDoc?.reportingManagerId ?? null;
@@ -1030,15 +1049,24 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
   }
 }
 
-export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) {
+export async function getEmployeeHistory(userId, { page = 1, limit = 20, dateFrom, dateTo, status, type } = {}) {
   const skip = (page - 1) * limit;
+  const filter = { userId };
+  if (dateFrom || dateTo) {
+    filter.timestamp = {};
+    if (dateFrom) filter.timestamp.$gte = new Date(dateFrom + 'T00:00:00.000Z');
+    if (dateTo) filter.timestamp.$lte = new Date(dateTo + 'T23:59:59.999Z');
+  }
+  if (status) filter.status = status;
+  if (type) filter.type = type;
+
   const [allRecords, total] = await Promise.all([
-    AttendanceRecord.find({ userId })
+    AttendanceRecord.find(filter)
       // _id tiebreaker keeps offset pagination stable when timestamps tie.
       .sort({ timestamp: -1, _id: -1 })
       .skip(skip)
       .limit(limit * 2),
-    AttendanceRecord.countDocuments({ userId }),
+    AttendanceRecord.countDocuments(filter),
   ]);
 
   const records = filterOrphanCheckOuts(allRecords).slice(0, limit);
@@ -1056,8 +1084,11 @@ export async function getEmployeeHistory(userId, { page = 1, limit = 20 } = {}) 
 
 export async function getAdminAttendance({
   userId,
+  departmentId,
   date,
   weekStart,
+  dateFrom,
+  dateTo,
   search,
   type,
   status,
@@ -1077,8 +1108,12 @@ export async function getAdminAttendance({
     query.status = status;
   }
 
-  // Name / employee-code search: resolve matching users first, then filter
-  // records to them (intersected with team scope below when applicable).
+  if (dateFrom || dateTo) {
+    query.timestamp = {};
+    if (dateFrom) query.timestamp.$gte = new Date(dateFrom + 'T00:00:00.000Z');
+    if (dateTo) query.timestamp.$lte = new Date(dateTo + 'T23:59:59.999Z');
+  }
+
   let searchUserIds = null;
   const needle = String(search ?? '').trim();
   if (needle) {
@@ -1091,16 +1126,23 @@ export async function getAdminAttendance({
     searchUserIds = matched.map((user) => user._id);
   }
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  if (departmentId) {
+    const deptUsers = await User.find({ departmentId, isActive: true })
+      .select('_id')
+      .lean();
+    const deptUserIds = deptUsers.map((u) => u._id);
+    if (searchUserIds) {
+      searchUserIds = searchUserIds.filter((id) => deptUserIds.some((du) => du.toString() === id.toString()));
+    } else {
+      searchUserIds = deptUserIds;
+    }
+  }
+
+  const canReadAll = hasCompanyWideScope(permissions);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && canReadTeam && actor?._id) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      actor,
-      permissions,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
+    const scopedIds = await resolveTeamScopedUserIds(actor, permissions);
 
     if (userId) {
       const allowed = scopedIds === null || scopedIds.some((id) => id.toString() === userId.toString());
@@ -1255,8 +1297,54 @@ async function loadApprovedLeaveDaySets(userId, monthStart, monthEnd, holidayDat
 }
 
 /**
+ * Comp-off days in the month on weekends/holidays only (IST keys).
+ * Worked = request status worked; approved days with check-in are resolved in
+ * resolveEmployeeMonthDayStatus (mirrors checkout → worked flip).
+ */
+async function loadCompOffDaySets(userId, monthStart, monthEnd, holidayDates, weekendDays) {
+  const requests = await CompOffRequest.find({
+    userId,
+    status: { $in: ['pending', 'approved', 'worked'] },
+    startDate: { $lte: monthEnd },
+    endDate: { $gte: monthStart },
+  }).select('startDate endDate status');
+
+  const pendingCompOffDays = new Set();
+  const approvedCompOffDays = new Set();
+  const workedCompOffDays = new Set();
+
+  for (const request of requests) {
+    const overlapStart = request.startDate > monthStart ? request.startDate : monthStart;
+    const overlapEnd = request.endDate < monthEnd ? request.endDate : monthEnd;
+    if (overlapEnd < overlapStart) continue;
+
+    for (const day of iterateISTDays(overlapStart, overlapEnd)) {
+      const dayKey = getISTDateInputValue(day);
+      if (!isWeekendIST(day, weekendDays) && !holidayDates.has(dayKey)) continue;
+
+      if (request.status === 'worked') {
+        workedCompOffDays.add(dayKey);
+        approvedCompOffDays.delete(dayKey);
+        pendingCompOffDays.delete(dayKey);
+      } else if (request.status === 'approved') {
+        if (!workedCompOffDays.has(dayKey)) {
+          approvedCompOffDays.add(dayKey);
+          pendingCompOffDays.delete(dayKey);
+        }
+      } else if (request.status === 'pending') {
+        if (!workedCompOffDays.has(dayKey) && !approvedCompOffDays.has(dayKey)) {
+          pendingCompOffDays.add(dayKey);
+        }
+      }
+    }
+  }
+
+  return { pendingCompOffDays, approvedCompOffDays, workedCompOffDays };
+}
+
+/**
  * Pure day classifier for employee month calendar status codes.
- * Priority: weekend → holiday → (future leave/WFH) → check-in present/half_day → WFH → leave → absent.
+ * Priority: weekend/holiday (+ comp-off) → (future leave/WFH) → pending WFH → approved WFH (+ check-in) → check-in → WFH → leave → absent.
  */
 export function resolveEmployeeMonthDayStatus({
   dayKey,
@@ -1267,9 +1355,17 @@ export function resolveEmployeeMonthDayStatus({
   wfhDay = false,
   leaveDay = false,
   pendingWfhDay = false,
+  compOffPending = false,
+  compOffApproved = false,
+  compOffWorked = false,
 }) {
-  if (isWeekend) return 'weekend';
-  if (isHoliday) return 'holiday';
+  if (isWeekend || isHoliday) {
+    if (compOffPending) return 'comp_off_pending';
+    if (compOffWorked || (compOffApproved && checkInStatus)) return 'comp_off_worked';
+    if (compOffApproved) return 'comp_off_approved';
+    if (isWeekend) return 'weekend';
+    return 'holiday';
+  }
   if (dayKey > todayKey) {
     if (pendingWfhDay) return 'wfh_pending';
     if (wfhDay) return 'wfh_future';
@@ -1277,6 +1373,8 @@ export function resolveEmployeeMonthDayStatus({
     return 'future';
   }
   if (pendingWfhDay) return 'wfh_pending';
+  // Approved WFH day with attendance must stay blue (wfh), not office present (green).
+  if (wfhDay && checkInStatus) return 'wfh';
   if (checkInStatus) return checkInStatus;
   if (wfhDay) return 'wfh';
   if (leaveDay) return 'leave';
@@ -1354,9 +1452,10 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
   const holidayDates = new Set(holidayMap.keys());
   const todayKey = getISTDateInputValue();
 
-  const [checkInDayStatusMap, { leaveDays, wfhDays, pendingWfhDays }] = await Promise.all([
+  const [checkInDayStatusMap, { leaveDays, wfhDays, pendingWfhDays }, compOffDaySets] = await Promise.all([
     loadCheckInDayStatusMap(userId, start, end),
     loadApprovedLeaveDaySets(userId, start, end, holidayDates, new Date()),
+    loadCompOffDaySets(userId, start, end, holidayDates, weekendDays),
   ]);
 
   const days = {};
@@ -1375,6 +1474,9 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
       wfhDay: wfhDays.has(dayKey),
       leaveDay: leaveDays.has(dayKey),
       pendingWfhDay: pendingWfhDays.has(dayKey),
+      compOffPending: compOffDaySets.pendingCompOffDays.has(dayKey),
+      compOffApproved: compOffDaySets.approvedCompOffDays.has(dayKey),
+      compOffWorked: compOffDaySets.workedCompOffDays.has(dayKey),
     });
 
     if (days[dayKey] === 'holiday') {
@@ -1404,7 +1506,7 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
     return actor._id;
   }
 
-  const canReadAll = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_ALL);
+  const canReadAll = hasCompanyWideScope(permissions);
   const canReadTeam = hasPermission(permissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   if (!canReadAll && !canReadTeam) {
@@ -1416,13 +1518,7 @@ export async function resolveMonthSummaryTargetUserId(actor, permissions, reques
   }
 
   if (!canReadAll) {
-    const allowed = await isUserInTeamScope(
-      actor,
-      permissions,
-      requestedUserId,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
+    const allowed = await isUserInTeamScope(actor, permissions, requestedUserId);
     if (!allowed) {
       throwError('You do not have permission to view this employee\'s attendance.', 403);
     }
@@ -1666,13 +1762,7 @@ export async function adminEditAttendanceRecord({
     throwError('Attendance record not found.', 404);
   }
 
-  const allowed = await isUserInTeamScope(
-    actor,
-    permissions,
-    checkInRecord.userId,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const allowed = await isUserInTeamScope(actor, permissions, checkInRecord.userId);
   if (!allowed) {
     throwError('You do not have permission to edit this attendance record.', 403);
   }
@@ -1851,13 +1941,7 @@ export async function adminUpsertAttendanceForDay({
     throwError('Employee not found.', 404);
   }
 
-  const allowed = await isUserInTeamScope(
-    actor,
-    permissions,
-    userId,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const allowed = await isUserInTeamScope(actor, permissions, userId);
   if (!allowed) {
     throwError('You do not have permission to edit this attendance record.', 403);
   }

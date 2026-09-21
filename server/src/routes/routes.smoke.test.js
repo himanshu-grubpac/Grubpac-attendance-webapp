@@ -22,6 +22,7 @@ test('all route modules import without throwing', async () => {
     import('./notificationRoutes.js'),
     import('./salaryRoutes.js'),
     import('./tablePreferenceRoutes.js'),
+    import('./rbacRoutes.js'),
   ]);
   for (const mod of modules) {
     assert.equal(typeof mod.default, 'function', 'router modules must default-export the router');

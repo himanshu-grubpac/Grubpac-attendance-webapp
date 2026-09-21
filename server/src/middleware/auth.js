@@ -1,16 +1,20 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import {
-  ALL_PERMISSIONS,
   PERMISSIONS,
-  SYSTEM_ROLE_SLUGS,
+  hasAdminPortalAccess,
   hasAnyPermission,
+  hasEmployeePortalAccess,
   hasPermission,
   legacyRoleFromSlug,
+  migrateLegacyPermissions,
 } from '../../../shared/permissions.js';
+import { Role } from '../models/Role.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 
 const COOKIE_NAME = 'attendance_token';
+
+const ROLE_AUTH_FIELDS = 'name slug permissions isSystem permissionsVersion';
 
 export function signToken(user) {
   return jwt.sign(
@@ -39,19 +43,43 @@ function extractToken(req) {
   return null;
 }
 
+/**
+ * Resolve permissions strictly from the user's Role document.
+ * No hardcoded slug fallbacks — missing or unpopulated role → deny all.
+ */
 export function resolveUserPermissions(user) {
-  const roleDoc = user.roleId && typeof user.roleId === 'object' ? user.roleId : null;
-  if (roleDoc?.permissions?.length) {
-    return roleDoc.permissions;
+  const roleDoc = user?.roleId && typeof user.roleId === 'object' ? user.roleId : null;
+  if (roleDoc && Array.isArray(roleDoc.permissions)) {
+    return migrateLegacyPermissions(roleDoc.permissions);
   }
-  if (user.role === 'admin') {
-    return ALL_PERMISSIONS;
+  return [];
+}
+
+async function hydrateRoleDocument(user) {
+  if (!user?.roleId) {
+    return user;
   }
-  return [PERMISSIONS.ATTENDANCE_READ_OWN, PERMISSIONS.NOTIFICATIONS_READ];
+  const roleDoc = user.roleId;
+  if (typeof roleDoc === 'object' && Array.isArray(roleDoc.permissions)) {
+    return user;
+  }
+  const roleId = roleDoc._id?.toString?.() ?? roleDoc.toString?.();
+  if (!roleId) {
+    return user;
+  }
+  const role = await Role.findById(roleId).select(ROLE_AUTH_FIELDS);
+  if (role) {
+    user.roleId = role;
+  }
+  return user;
 }
 
 export async function loadAuthenticatedUser(userId) {
-  return User.findById(userId).populate(USER_POPULATE_FIELDS);
+  const user = await User.findById(userId).populate(USER_POPULATE_FIELDS);
+  if (!user) {
+    return null;
+  }
+  return hydrateRoleDocument(user);
 }
 
 export async function authenticate(req, res, next) {
@@ -69,6 +97,10 @@ export async function authenticate(req, res, next) {
     }
 
     if (user.endingDate && new Date(user.endingDate) < new Date()) {
+      if (user.isActive) {
+        user.isActive = false;
+        await user.save();
+      }
       return res.status(401).json({ message: 'Your employment has ended. Contact your administrator.' });
     }
 
@@ -109,35 +141,8 @@ export function requireAllPermissions(...requiredPermissions) {
   };
 }
 
-/**
- * Employee-creation surface (single register + assignable-role catalog):
- * full writers and role managers pass; reporting-manager team creators pass
- * the route but stay department/role-scoped inside the controller (scoped
- * creation under their managed departments only). Everyone else gets a 403.
- * req.user carries the populated roleId (slug) via loadAuthenticatedUser.
- */
-export function requireUserWriteOrTeamCreator(req, res, next) {
-  if (
-    hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE)
-    || hasPermission(req.userPermissions, PERMISSIONS.ROLES_MANAGE)
-    || req.user?.roleId?.slug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER
-  ) {
-    return next();
-  }
-  return res.status(403).json({ message: 'You do not have permission for this action.' });
-}
-
 export function requireAdminPortalAccess(req, res, next) {
-  if (!hasAnyPermission(req.userPermissions, [
-    PERMISSIONS.USERS_READ,
-    PERMISSIONS.USERS_WRITE,
-    PERMISSIONS.ROLES_MANAGE,
-    PERMISSIONS.DEPARTMENTS_MANAGE,
-    PERMISSIONS.OFFICE_MANAGE,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-    PERMISSIONS.AUDIT_READ,
-  ])) {
+  if (!hasAdminPortalAccess(req.userPermissions)) {
     return res.status(403).json({ message: 'Admin access required.' });
   }
   return next();
@@ -146,8 +151,8 @@ export function requireAdminPortalAccess(req, res, next) {
 /** @deprecated Use requirePermission — kept for gradual migration. */
 export function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin' && !hasAnyPermission(req.userPermissions, [
-    PERMISSIONS.USERS_WRITE,
-    PERMISSIONS.ROLES_MANAGE,
+    PERMISSIONS.EMPLOYEES_RECORD_U,
+    PERMISSIONS.RBAC_ROLE_R,
   ])) {
     return res.status(403).json({ message: 'Admin access required.' });
   }
@@ -155,7 +160,7 @@ export function requireAdmin(req, res, next) {
 }
 
 export function requireEmployeePortalAccess(req, res, next) {
-  if (!hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_OWN)) {
+  if (!hasEmployeePortalAccess(req.userPermissions)) {
     return res.status(403).json({ message: 'Employee access required.' });
   }
   return next();

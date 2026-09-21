@@ -1,7 +1,13 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import ExcelJS from 'exceljs';
-import { SYSTEM_ROLE_SLUGS, PERMISSIONS, canViewSalaryFields, hasPermission } from '../../../shared/permissions.js';
+import {
+  SYSTEM_ROLE_SLUGS,
+  PERMISSIONS,
+  canViewSalaryFields,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
 import { User, USER_POPULATE_FIELDS } from '../models/User.js';
 import { Role } from '../models/Role.js';
 import { Department } from '../models/Department.js';
@@ -52,10 +58,22 @@ import {
 } from '../services/userOrgService.js';
 import {
   applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
+  assertDepartmentInAccessibleSet,
+  assertManagedDepartmentsAccessible,
+  buildEmployeeDirectoryQuery,
   isUserInTeamScope,
-  isUserVisibleToActor,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
+import {
+  assertEmployeePatchAllowed,
+  assertEmployeeReadable,
+  buildEmployeeFieldAccess,
+  maskEmployeePayload,
+} from '../services/employeeFieldAccessService.js';
+import {
+  redactAuditExportRow,
+  redactAuditLogForCaller,
+} from '../services/auditLogAccessService.js';
 
 function refId(value) {
   if (!value) return null;
@@ -86,6 +104,7 @@ import { enrichAuditLogsWithConflicts } from '../services/deviceConflictService.
 const attendanceQuerySchema = paginationSchema
   .extend({
     userId: objectIdSchema.optional(),
+    departmentId: objectIdSchema.optional(),
     date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD.')
@@ -93,6 +112,14 @@ const attendanceQuerySchema = paginationSchema
     weekStart: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD.')
+      .optional(),
+    dateFrom: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'dateFrom must be YYYY-MM-DD.')
+      .optional(),
+    dateTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'dateTo must be YYYY-MM-DD.')
       .optional(),
     search: z.string().trim().max(100).optional(),
     type: z.enum(['check_in', 'check_out']).optional(),
@@ -201,20 +228,13 @@ async function assertCanAssignRole(actor, roleId, permissions = []) {
   }
 }
 
-async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
-  if (includeAdmins) return {};
-  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
-}
-
 async function buildEmployeeDirectoryQueryWithRoleFilter(requestedRoleId) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const adminRoleId = adminRole?._id?.toString() ?? null;
   // Admins are listed when the role filter is All — or when the Admin role
   // itself is selected (previously that combination matched nothing).
   const includeAdmins = !requestedRoleId || (adminRoleId && String(requestedRoleId) === adminRoleId);
-  if (includeAdmins) return {};
-  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+  return buildEmployeeDirectoryQuery({ includeAdmins });
 }
 
 async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo }) {
@@ -288,29 +308,27 @@ async function applyEmployeeListFilters(query, { search, isActive, departmentId,
 }
 
 function applyTeamScopeToEmployeeQuery(query, req) {
-  return applyEmployeeTeamScope(
-    query,
-    req.user,
-    req.userPermissions,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  return applyEmployeeTeamScope(query, req.user, req.userPermissions);
 }
 
 async function assertEmployeeInTeamScope(req, employeeId) {
-  return isUserInTeamScope(
-    req.user,
-    req.userPermissions,
-    employeeId,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  return isUserInTeamScope(req.user, req.userPermissions, employeeId);
 }
 
 export async function registerEmployee(req, res) {
+  if (req.body?.roleId && !hasPermission(req.userPermissions, PERMISSIONS.EMPLOYEES_REGISTER_X1)) {
+    return res.status(403).json({ message: 'You do not have permission to assign roles when registering employees.' });
+  }
+  if (req.body?.monthlySalary != null && !hasPermission(req.userPermissions, PERMISSIONS.EMPLOYEES_REGISTER_X2)) {
+    return res.status(403).json({ message: 'You do not have permission to set salary at registration.' });
+  }
+
   // Auto-generate a temporary password and email it to the new employee.
   // The plaintext exists only in this request scope — never persisted/logged.
   const sendCredentialsEmail = req.body?.sendCredentialsEmail === true;
+  if (sendCredentialsEmail && !hasPermission(req.userPermissions, PERMISSIONS.EMPLOYEES_REGISTER_X0)) {
+    return res.status(403).json({ message: 'You do not have permission to auto-generate credentials.' });
+  }
   const body = { ...req.body };
   let tempPassword = null;
   if (sendCredentialsEmail) {
@@ -318,13 +336,29 @@ export async function registerEmployee(req, res) {
     body.password = tempPassword;
   }
 
+  try {
+    if (body.departmentId) {
+      await assertDepartmentInAccessibleSet(req.user, req.userPermissions, body.departmentId);
+    }
+    if (body.managedDepartmentIds?.length) {
+      await assertManagedDepartmentsAccessible(
+        req.user,
+        req.userPermissions,
+        body.managedDepartmentIds,
+      );
+    }
+  } catch (scopeError) {
+    return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
+  }
+
   await assertCanAssignRole(req.user, body.roleId, req.userPermissions);
 
-  // Full writers create anywhere; reporting-manager team creators are
-  // department/role-scoped inside createScopedTeamEmployee.
   const canWriteAll = hasPermission(req.userPermissions, PERMISSIONS.USERS_WRITE);
   const employee = canWriteAll
-    ? await createEmployee(body, req.user._id)
+    ? await createEmployee(body, req.user._id, {
+        actor: req.user,
+        permissions: req.userPermissions,
+      })
     : await createScopedTeamEmployee(req, body);
 
   let credentialsEmail = null;
@@ -365,7 +399,14 @@ export async function listEmployees(req, res) {
   const { page, limit, search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo } =
     employeeListQuerySchema.parse(req.query);
 
-  // Auto-deactivate employees whose ending date has passed.
+  if (departmentId) {
+    try {
+      await assertDepartmentInAccessibleSet(req.user, req.userPermissions, departmentId);
+    } catch (scopeError) {
+      return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
+    }
+  }
+
   const now = new Date();
   await User.updateMany(
     { endingDate: { $lte: now }, isActive: true },
@@ -396,12 +437,19 @@ export async function listEmployees(req, res) {
     User.countDocuments(query),
   ]);
 
-  const canViewSalary = canViewSalaryFields(req.userPermissions);
+  const fieldAccess = buildEmployeeFieldAccess(req.userPermissions);
+  const canViewSalary = fieldAccess.salaryColumn && canViewSalaryFields(req.userPermissions);
   res.json({
-    employees: employees.map((employee) => ({
-      ...employee.toSafeJSON({ canViewSalary }),
-      lastLoginAt: employee.lastLoginAt ?? null,
-    })),
+    employees: employees.map((employee) =>
+      maskEmployeePayload(
+        {
+          ...employee.toSafeJSON({ canViewSalary }),
+          lastLoginAt: employee.lastLoginAt ?? null,
+        },
+        req.userPermissions,
+        { includeMeta: false },
+      ),
+    ),
 pagination: {
         page,
         limit,
@@ -515,26 +563,22 @@ export async function getEmployee(req, res) {
     return res.status(404).json({ message: 'Employee not found.' });
   }
 
-  const inScope = await assertEmployeeInTeamScope(req, employee._id);
-  // Visibility is wider than authority: an RM also sees themself, managed
-  // members, and fellow RMs (roster), even where they cannot act.
-  const visible = inScope
-    || await isUserVisibleToActor(
-      req.user,
-      req.userPermissions,
-      employee._id,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
-  if (!visible) {
-    return res.status(404).json({ message: 'Employee not found.' });
+  const readable = await assertEmployeeReadable(req.user, req.userPermissions, employee._id);
+  if (!readable.ok) {
+    return res.status(readable.status).json({ message: readable.message });
   }
 
+  const fieldAccess = buildEmployeeFieldAccess(req.userPermissions);
+  const canViewSalary = fieldAccess.salary.read || canViewSalaryFields(req.userPermissions);
+
   res.json({
-    employee: {
-      ...employee.toSafeJSON({ canViewSalary: canViewSalaryFields(req.userPermissions) }),
-      lastLoginAt: employee.lastLoginAt ?? null,
-    },
+    employee: maskEmployeePayload(
+      {
+        ...employee.toSafeJSON({ canViewSalary }),
+        lastLoginAt: employee.lastLoginAt ?? null,
+      },
+      req.userPermissions,
+    ),
   });
 }
 
@@ -668,9 +712,14 @@ export async function updateEmployee(req, res) {
     return res.status(400).json({ message: 'Cannot modify the system admin account here.' });
   }
 
-  const inScope = await assertEmployeeInTeamScope(req, employee._id);
-  if (!inScope) {
-    return res.status(404).json({ message: 'Employee not found.' });
+  const readable = await assertEmployeeReadable(req.user, req.userPermissions, employee._id);
+  if (!readable.ok) {
+    return res.status(readable.status).json({ message: readable.message });
+  }
+
+  const patchAllowed = assertEmployeePatchAllowed(req.userPermissions, req.body);
+  if (!patchAllowed.ok) {
+    return res.status(403).json({ message: patchAllowed.message });
   }
 
   if (parsed.joiningDate !== undefined || parsed.endingDate !== undefined) {
@@ -708,6 +757,16 @@ export async function updateEmployee(req, res) {
   };
 
   if (parsed.roleId !== undefined) {
+    const nextRoleId = refId(parsed.roleId);
+    if (nextRoleId !== previous.roleId) {
+      const canAssignRole =
+        hasPermission(req.userPermissions, PERMISSIONS.RBAC_ROLE_X0) ||
+        hasPermission(req.userPermissions, PERMISSIONS.RBAC_USER_U) ||
+        hasPermission(req.userPermissions, PERMISSIONS.EMPLOYEES_EMPLOYMENT_U);
+      if (!canAssignRole) {
+        return res.status(403).json({ message: 'You do not have permission to assign roles to users.' });
+      }
+    }
     await assertCanAssignRole(req.user, parsed.roleId, req.userPermissions);
     const role = await resolveRole(parsed.roleId);
     employee.roleId = role._id;
@@ -720,6 +779,15 @@ export async function updateEmployee(req, res) {
       // Legacy text field is no longer written; the name resolves from the master.
       employee.department = undefined;
     } else {
+      try {
+        await assertDepartmentInAccessibleSet(
+          req.user,
+          req.userPermissions,
+          parsed.departmentId,
+        );
+      } catch (scopeError) {
+        return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
+      }
       const department = await Department.findById(parsed.departmentId);
       if (!department || !department.isActive) {
         return res.status(400).json({ message: 'Department not found.' });
@@ -778,14 +846,20 @@ export async function updateEmployee(req, res) {
   }
 
   if (parsed.managedDepartmentIds !== undefined) {
+    try {
+      await assertManagedDepartmentsAccessible(
+        req.user,
+        req.userPermissions,
+        parsed.managedDepartmentIds,
+      );
+    } catch (scopeError) {
+      return res.status(scopeError.statusCode ?? 403).json({ message: scopeError.message });
+    }
     employee.managedDepartmentIds = await resolveManagedDepartments(parsed.managedDepartmentIds);
   }
 
   // Auto-deactivate if ending date is in the past.
-  const effectiveEndingDate = parsed.endingDate !== undefined
-    ? employee.endingDate
-    : employee.endingDate;
-  if (effectiveEndingDate && new Date(effectiveEndingDate) < new Date()) {
+  if (employee.endingDate && new Date(employee.endingDate) < new Date()) {
     employee.isActive = false;
   }
 
@@ -817,8 +891,14 @@ export async function updateEmployee(req, res) {
     actionType: 'update',
   });
 
+  const fieldAccess = buildEmployeeFieldAccess(req.userPermissions);
   res.json({
-    employee: employee.toSafeJSON({ canViewSalary: canViewSalaryFields(req.userPermissions) }),
+    employee: maskEmployeePayload(
+      employee.toSafeJSON({
+        canViewSalary: fieldAccess.salary.read || canViewSalaryFields(req.userPermissions),
+      }),
+      req.userPermissions,
+    ),
   });
 }
 
@@ -837,6 +917,11 @@ export async function resetEmployeePassword(req, res) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
   if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset password for the system admin here.' });
+  }
+
+  const readable = await assertEmployeeReadable(req.user, req.userPermissions, employee._id);
+  if (!readable.ok) {
+    return res.status(readable.status).json({ message: readable.message });
   }
 
   const sameAsCurrent = await bcrypt.compare(parsed.newPassword, employee.passwordHash);
@@ -874,6 +959,11 @@ export async function resetEmployeePin(req, res) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN });
   if (isAdminRoleHolder(employee, adminRole)) {
     return res.status(400).json({ message: 'Cannot reset PIN for the system admin here.' });
+  }
+
+  const readable = await assertEmployeeReadable(req.user, req.userPermissions, employee._id);
+  if (!readable.ok) {
+    return res.status(readable.status).json({ message: readable.message });
   }
 
   employee.pin4Hash = await bcrypt.hash(parsed.newPin, 12);
@@ -1008,6 +1098,16 @@ export async function bulkUploadEmployees(req, res) {
     changes,
   });
 
+  const affectedUserIds = changes
+    .filter((c) => c.id)
+    .map((c) => c.id);
+  if (affectedUserIds.length > 0) {
+    await User.updateMany(
+      { _id: { $in: affectedUserIds } },
+      { $set: { lastBulkImportAt: new Date(), lastBulkImportBy: req.user._id } },
+    );
+  }
+
   delete result.createdEmployees;
   res.status(201).json({ summary: result.summary, results: changes });
 }
@@ -1055,10 +1155,44 @@ export async function getOfficeSettingsHandler(req, res) {
   res.json({ settings });
 }
 
+const OFFICE_SETTINGS_PATCH_GROUPS = [
+  {
+    keys: ['latitude', 'longitude', 'radiusMeters', 'maxAccuracyMeters', 'name'],
+    permission: PERMISSIONS.OPS_GEOFENCE_U,
+  },
+  {
+    keys: ['officeStartTime', 'officeEndTime', 'graceThresholdTime', 'halfDayThresholdTime'],
+    permission: PERMISSIONS.OPS_HOURS_U,
+  },
+  { keys: ['weekendDays'], permission: PERMISSIONS.OPS_WEEKEND_U },
+  { keys: ['sandwichLeaveEnabled'], permission: PERMISSIONS.OPS_SANDWICH_U },
+  { keys: ['warningsPerQuarter'], permission: PERMISSIONS.OPS_WARNING_LIMIT_U },
+  { keys: ['autoCheckout'], permission: PERMISSIONS.OPS_AUTOCHECKOUT_U },
+];
+
+function assertOfficeSettingsPatchAllowed(permissions, parsed, previous) {
+  for (const { keys, permission } of OFFICE_SETTINGS_PATCH_GROUPS) {
+    for (const key of keys) {
+      if (parsed[key] === undefined) continue;
+      const before = previous?.[key] ?? null;
+      const after = parsed[key];
+      if (JSON.stringify(before) !== JSON.stringify(after) && !hasPermission(permissions, permission)) {
+        return { ok: false, message: `You do not have permission to update ${key}.` };
+      }
+    }
+  }
+  return { ok: true };
+}
+
 export async function updateOfficeSettings(req, res) {
   const parsed = officeUpdateSchema.parse(req.body);
   let settings = await OfficeSettings.findOne().sort({ updatedAt: -1 });
   const previous = settings ? settings.toObject() : null;
+
+  const patchAllowed = assertOfficeSettingsPatchAllowed(req.userPermissions, parsed, previous);
+  if (!patchAllowed.ok) {
+    return res.status(403).json({ message: patchAllowed.message });
+  }
   // Merge nested autoCheckout so partial updates keep existing officeTime/wfhTime/enabled.
   if (parsed.autoCheckout) {
     const existing = (settings && settings.autoCheckout) || {};
@@ -1216,22 +1350,15 @@ export async function upsertAttendanceRecord(req, res) {
 
 export async function getQuarterWarningSummary(req, res) {
   res.set('Cache-Control', 'no-store');
-  const canReadAll = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_ALL);
-  const canReadTeam = hasPermission(req.userPermissions, PERMISSIONS.ATTENDANCE_READ_TEAM);
 
   let userIds = [];
-  if (canReadAll) {
+  if (hasCompanyWideScope(req.userPermissions)) {
     const employees = await User.find(await buildEmployeeDirectoryQuery())
       .select('_id')
       .lean();
     userIds = employees.map((item) => item._id);
-  } else if (canReadTeam && req.user?._id) {
-    const scopedIds = await resolveTeamScopedUserIds(
-      req.user,
-      req.userPermissions,
-      PERMISSIONS.ATTENDANCE_READ_ALL,
-      PERMISSIONS.ATTENDANCE_READ_TEAM,
-    );
+  } else if (req.user?._id) {
+    const scopedIds = await resolveTeamScopedUserIds(req.user, req.userPermissions);
     userIds = scopedIds ?? [];
   }
 
@@ -1240,18 +1367,13 @@ export async function getQuarterWarningSummary(req, res) {
 }
 
 export async function resetQuarterWarnings(req, res) {
-  const { userIds } = resetQuarterWarningsSchema.parse(req.body);
+  const { userIds, reason } = resetQuarterWarningsSchema.parse(req.body);
 
-  const scopedIds = await resolveTeamScopedUserIds(
-    req.user,
-    req.userPermissions,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const scopedIds = await resolveTeamScopedUserIds(req.user, req.userPermissions);
 
   if (scopedIds !== null) {
     const scopedSet = new Set(scopedIds.map((id) => id.toString()));
-    const unauthorized = userIds.filter((id) => !scopedSet.has(id));
+    const unauthorized = userIds.filter((id) => !scopedSet.has(String(id)));
     if (unauthorized.length) {
       return res.status(403).json({
         message: 'You do not have permission to reset warnings for one or more selected employees.',
@@ -1270,7 +1392,10 @@ export async function resetQuarterWarnings(req, res) {
     reclassifiedLv: result.reclassifiedLv,
     clearedRecordIds: result.clearedRecordIds ?? [],
     clearedRecordIdsTruncated: result.clearedRecordIdsTruncated ?? false,
-    reason: 'manual_reset',
+    reclassifiedRecordIds: result.reclassifiedRecordIds,
+    reason: reason || 'manual_reset',
+    before: result.before,
+    after: result.after,
   });
 
   res.json(result);
@@ -1288,12 +1413,7 @@ export async function listWeekConfirmations(req, res) {
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .parse(req.query.weekStart);
 
-  const scopedIds = await resolveTeamScopedUserIds(
-    req.user,
-    req.userPermissions,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const scopedIds = await resolveTeamScopedUserIds(req.user, req.userPermissions);
 
   const query = { weekStart };
   if (scopedIds !== null) {
@@ -1313,12 +1433,7 @@ export async function listWeekConfirmations(req, res) {
 export async function confirmWeekAttendance(req, res) {
   const parsed = weekConfirmationSchema.parse(req.body);
 
-  const allowed = await resolveTeamScopedUserIds(
-    req.user,
-    req.userPermissions,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const allowed = await resolveTeamScopedUserIds(req.user, req.userPermissions);
   if (
     allowed !== null &&
     !allowed.some((id) => id.toString() === parsed.userId)
@@ -1360,12 +1475,7 @@ const weekConfirmationQuerySchema = z.object({
 export async function unconfirmWeekAttendance(req, res) {
   const parsed = weekConfirmationQuerySchema.parse(req.query);
 
-  const allowed = await resolveTeamScopedUserIds(
-    req.user,
-    req.userPermissions,
-    PERMISSIONS.ATTENDANCE_READ_ALL,
-    PERMISSIONS.ATTENDANCE_READ_TEAM,
-  );
+  const allowed = await resolveTeamScopedUserIds(req.user, req.userPermissions);
   if (
     allowed !== null &&
     !allowed.some((id) => id.toString() === parsed.userId)
@@ -1684,7 +1794,10 @@ export async function exportAuditLogs(req, res) {
     const conflictMap = await enrichAuditLogsWithConflicts(logs);
     logs = logs.filter((log) => conflictMap.get(log._id.toString())?.ipConflict);
   }
-  const rows = auditLogExportRows(logs, await resolveAuditActorNames(logs));
+  const actorNames = await resolveAuditActorNames(logs);
+  const rows = auditLogExportRows(logs, actorNames).map((row) =>
+    redactAuditExportRow(row, req.userPermissions),
+  );
   const stamp = getISTDateInputValue().slice(0, 10);
 
   auditRequest(req, 'audit_logs_exported', {
@@ -1785,7 +1898,10 @@ export async function listAuditLogs(req, res) {
           ipConflict: false,
           conflictWithUsers: [],
         };
-        return mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null);
+        return redactAuditLogForCaller(
+          mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null),
+          req.userPermissions,
+        );
       }),
       pagination: {
         page,
@@ -1812,7 +1928,10 @@ export async function listAuditLogs(req, res) {
         ipConflict: false,
         conflictWithUsers: [],
       };
-      return mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null);
+      return redactAuditLogForCaller(
+        mapAuditLogResponse(log, conflict, actorNames.get(log.userId?.toString?.() ?? '') ?? null),
+        req.userPermissions,
+      );
     }),
     pagination: {
       page,

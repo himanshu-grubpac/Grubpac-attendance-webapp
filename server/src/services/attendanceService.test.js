@@ -122,7 +122,7 @@ test('pending WFH keeps a check-in visually pending during the undo window', () 
   );
 });
 
-test('check-in present wins over approved WFH on the same day', () => {
+test('approved WFH with check-in maps to wfh (blue), not office present (green)', () => {
   assert.equal(
     resolveEmployeeMonthDayStatus({
       dayKey: '2026-08-07',
@@ -132,7 +132,18 @@ test('check-in present wins over approved WFH on the same day', () => {
       checkInStatus: 'present',
       wfhDay: true,
     }),
-    'present',
+    'wfh',
+  );
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-07',
+      todayKey: '2026-08-07',
+      isWeekend: false,
+      isHoliday: false,
+      checkInStatus: 'half_day',
+      wfhDay: true,
+    }),
+    'wfh',
   );
 });
 
@@ -173,7 +184,7 @@ test('WFH takes display priority over overlapping non-WFH leave when no check-in
   );
 });
 
-test('weekend and holiday still beat WFH', () => {
+test('weekend and holiday still beat WFH without comp-off', () => {
   assert.equal(
     resolveEmployeeMonthDayStatus({
       dayKey: '2026-08-08',
@@ -193,6 +204,71 @@ test('weekend and holiday still beat WFH', () => {
       wfhDay: true,
     }),
     'holiday',
+  );
+});
+
+test('approved comp-off with check-in on weekend maps to comp_off_worked', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-08',
+      todayKey: '2026-08-10',
+      isWeekend: true,
+      isHoliday: false,
+      checkInStatus: 'present',
+      compOffApproved: true,
+    }),
+    'comp_off_worked',
+  );
+});
+
+test('pending comp-off on holiday maps to comp_off_pending', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-15',
+      todayKey: '2026-08-07',
+      isWeekend: false,
+      isHoliday: true,
+      compOffPending: true,
+    }),
+    'comp_off_pending',
+  );
+});
+
+test('weekend without comp-off stays weekend', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-08',
+      todayKey: '2026-08-07',
+      isWeekend: true,
+      isHoliday: false,
+    }),
+    'weekend',
+  );
+});
+
+test('approved comp-off without check-in on weekend maps to comp_off_approved', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-09',
+      todayKey: '2026-08-07',
+      isWeekend: true,
+      isHoliday: false,
+      compOffApproved: true,
+    }),
+    'comp_off_approved',
+  );
+});
+
+test('worked comp-off status on holiday maps to comp_off_worked', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-15',
+      todayKey: '2026-08-20',
+      isWeekend: false,
+      isHoliday: true,
+      compOffWorked: true,
+    }),
+    'comp_off_worked',
   );
 });
 

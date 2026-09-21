@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createHelpTicketSchema } from '@shared/validation/help.js';
 import { formatISTDateTime } from '../../utils/datetime.js';
@@ -6,6 +6,8 @@ import { helpApi, getErrorMessage } from '../../services/api.js';
 import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastHelpSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 import { validateForm } from '../../utils/validation.js';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
 import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
@@ -244,7 +246,7 @@ export default function EmployeeHelp() {
     });
   }, [showForm, setMeta]);
 
-  async function loadTickets(nextPage = page) {
+  const loadTickets = useCallback(async (nextPage = page) => {
     setLoading(true);
     setError('');
     try {
@@ -256,11 +258,15 @@ export default function EmployeeHelp() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [page]);
 
   useEffect(() => {
     loadTickets(page);
-  }, [page]);
+  }, [loadTickets, page]);
+
+  usePortalSync(() => {
+    void loadTickets(page);
+  }, { topics: [PORTAL_TOPICS.HELP] });
 
   useEscapeKey(showForm, () => setShowForm(false));
 
@@ -425,6 +431,7 @@ export default function EmployeeHelp() {
       setSelectedFiles([]);
       setFileUploadStates([]);
       setShowForm(false);
+      broadcastHelpSync();
       await loadTickets(page);
       if (ticketId) {
         navigate(`/employee/help/${ticketId}`);

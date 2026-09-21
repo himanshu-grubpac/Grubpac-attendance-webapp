@@ -4,46 +4,26 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { formatINRCurrency } from '../../utils/datetime.js';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
 import SalaryDetailModal from '../../components/SalaryDetailModal.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
-import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
-import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { dayKeyInMonth, PORTAL_TOPICS } from '../../utils/portalSync.js';
 
 const HISTORY_PAGE_SIZE = 20;
 
 function currentIstYear() {
   return Number(getTodayMonthIst().split('-')[0]);
 }
-
-function buildYearOptions(minYear) {
-  const currentYear = currentIstYear();
-  const COMPANY_ESTABLISHED_YEAR = 2024;
-  const floor = minYear != null ? Math.max(Number(minYear), COMPANY_ESTABLISHED_YEAR) : COMPANY_ESTABLISHED_YEAR;
-  const years = [];
-  for (let year = currentYear; year >= floor; year -= 1) {
-    years.push({ value: String(year), label: String(year) });
-  }
-  return years;
-}
-
-function getJoinYearFromDate(joiningDate) {
-  if (!joiningDate) return null;
-  const dateStr = typeof joiningDate === 'string' ? joiningDate : String(joiningDate);
-  const match = dateStr.match(/^(\d{4})/);
-  return match ? Number(match[1]) : null;
-}
-
-const AUDIT_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -83,11 +63,6 @@ function TableSkeleton({ label }) {
 export function SalaryHistorySection({ fixedUserId = null, title = 'Salary history' }) {
   const { user } = useAuth();
   const currentYear = currentIstYear();
-  const oldestYear = useOldestJoiningYear();
-  const historyYearOptions = useMemo(
-    () => buildDynamicYearOptions(oldestYear, currentYear),
-    [oldestYear, currentYear],
-  );
   const [year, setYear] = useState(String(currentYear));
   const [employees, setEmployees] = useState([]);
   const [search, setSearch] = useState('');
@@ -104,10 +79,6 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
   const [detailError, setDetailError] = useState('');
   const [detailOpen, setDetailOpen] = useState(false);
 
-  const joinYear = getJoinYearFromDate(history?.employee?.joiningDate);
-
-  const yearOptions = useMemo(() => buildYearOptions(joinYear), [joinYear]);
-
   function closeDetail() {
     setDetailOpen(false);
     setDetailMonth(null);
@@ -119,15 +90,6 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     setSelectedId(fixedUserId);
     closeDetail();
   }, [fixedUserId]);
-
-  useEffect(() => {
-    if (joinYear != null) {
-      const yearNum = Number(year);
-      if (Number.isFinite(yearNum) && yearNum < joinYear) {
-        setYear(String(joinYear));
-      }
-    }
-  }, [joinYear, year]);
 
   const loadEmployees = useCallback(async (query) => {
     setLoadingEmployees(true);
@@ -173,31 +135,66 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     loadHistory(selectedId, year);
   }, [selectedId, year, loadHistory]);
 
+  const fetchDetailPayload = useCallback(async (userId, periodKey) => {
+    const isSelf = userId === user?.id;
+    const [summaryData, balanceData] = await Promise.all([
+      salaryApi.getSummary({ month: periodKey, userId }),
+      isSelf
+        ? leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
+        : leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) }),
+    ]);
+    return {
+      summary: summaryData.summary ?? null,
+      balances: balanceData.balances ?? [],
+      inactive: summaryData.inactive === true,
+    };
+  }, [user?.id]);
+
   const loadDetail = useCallback(async (userId, periodKey) => {
     setDetailOpen(true);
     setDetailMonth(periodKey);
     setDetailLoading(true);
     setDetailError('');
     try {
-      const isSelf = userId === user?.id;
-      const [summaryData, balanceData] = await Promise.all([
-        salaryApi.getSummary({ month: periodKey, userId }),
-        isSelf
-          ? leaveApi.getMyBalances({ year: Number(periodKey.split('-')[0]) })
-          : leaveApi.getBalances({ userId, year: Number(periodKey.split('-')[0]) }),
-      ]);
-      setDetail({
-        summary: summaryData.summary ?? null,
-        balances: balanceData.balances ?? [],
-        inactive: summaryData.inactive === true,
-      });
+      setDetail(await fetchDetailPayload(userId, periodKey));
     } catch (err) {
       setDetail(null);
       setDetailError(getErrorMessage(err));
     } finally {
       setDetailLoading(false);
     }
-  }, [user?.id]);
+  }, [fetchDetailPayload]);
+
+  const refetchOpenDetail = useCallback(async () => {
+    if (!detailOpen || !selectedId || !detailMonth) return;
+    setDetailLoading(true);
+    setDetailError('');
+    try {
+      setDetail(await fetchDetailPayload(selectedId, detailMonth));
+    } catch (err) {
+      setDetail(null);
+      setDetailError(getErrorMessage(err));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [detailMonth, detailOpen, fetchDetailPayload, selectedId]);
+
+  const handleAttendanceSalarySync = useCallback(
+    (detail) => {
+      if (!selectedId) return;
+      if (detail?.dayKey && !detail.dayKey.startsWith(`${year}-`)) return;
+      loadHistory(selectedId, year);
+      if (detailOpen && detailMonth && dayKeyInMonth(detail.dayKey, detailMonth)) {
+        refetchOpenDetail();
+      }
+    },
+    [detailMonth, detailOpen, loadHistory, refetchOpenDetail, selectedId, year],
+  );
+
+  usePortalSync(handleAttendanceSalarySync, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    userId: selectedId ?? undefined,
+  });
 
   const employeeOptions = useMemo(
     () =>
@@ -207,6 +204,35 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
       })),
     [employees],
   );
+
+  const historyEmployeeBounds = useMemo(() => {
+    if (fixedUserId && user) {
+      return {
+        joiningDate: user.joiningDate ?? null,
+        endingDate: user.endingDate ?? null,
+      };
+    }
+    if (history?.employee) {
+      return {
+        joiningDate: history.employee.joiningDate ?? null,
+        endingDate: history.employee.endingDate ?? null,
+      };
+    }
+    return null;
+  }, [fixedUserId, history?.employee, user]);
+
+  const historyYearOptions = useMemo(
+    () => buildSalaryYearOptions(historyEmployeeBounds),
+    [historyEmployeeBounds, year],
+  );
+
+  useEffect(() => {
+    if (!historyEmployeeBounds) return;
+    const clampedYear = clampYearToCurrentIst(year, historyEmployeeBounds);
+    if (clampedYear !== year) {
+      setYear(clampedYear);
+    }
+  }, [historyEmployeeBounds, year]);
 
   const rows = history?.history ?? [];
 
@@ -359,14 +385,18 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
  */
 export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary audit' }) {
   const { showSuccess } = useToast();
-  const currentAuditYear = Number(getTodayMonthIst().split('-')[0]);
-  const oldestAuditYear = useOldestJoiningYear();
-  const auditYearOptions = useMemo(
-    () => buildDynamicYearOptions(oldestAuditYear, currentAuditYear),
-    [oldestAuditYear, currentAuditYear],
-  );
-  const [yearFilter, setYearFilter] = useState(() => getTodayMonthIst().split('-')[0]);
-  const [monthPartFilter, setMonthPartFilter] = useState(() => getTodayMonthIst().split('-')[1]);
+  const initialPeriod = useMemo(() => {
+    const [year, month] = getTodayMonthIst().split('-');
+    const clampedYear = clampYearToCurrentIst(year);
+    return {
+      year: clampedYear,
+      month: clampMonthPartForYear(clampedYear, month),
+    };
+  }, []);
+  const [yearFilter, setYearFilter] = useState(initialPeriod.year);
+  const [monthPartFilter, setMonthPartFilter] = useState(initialPeriod.month);
+  const auditYearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const auditMonthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
   const [departmentId, setDepartmentId] = useState('');
   const [departments, setDepartments] = useState([]);
   const periodKey = `${yearFilter}-${monthPartFilter}`;
@@ -381,62 +411,60 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
   const [auditDetailError, setAuditDetailError] = useState('');
   const [auditDetailOpen, setAuditDetailOpen] = useState(false);
   const [auditDetailMonth, setAuditDetailMonth] = useState(null);
+  const [auditDetailEmployeeId, setAuditDetailEmployeeId] = useState(null);
   const tableWrapRef = useRef(null);
-
-  const earliestJoinYear = useMemo(() => {
-    if (employees.length === 0) return null;
-    let earliest = null;
-    for (const emp of employees) {
-      const jy = getJoinYearFromDate(emp.joiningDate);
-      if (jy != null && (earliest == null || jy < earliest)) {
-        earliest = jy;
-      }
-    }
-    return earliest;
-  }, [employees]);
-
-  const yearOptions = useMemo(() => buildYearOptions(earliestJoinYear), [earliestJoinYear]);
-
-  useEffect(() => {
-    const yearNum = Number(yearFilter);
-    if (earliestJoinYear != null && Number.isFinite(yearNum) && yearNum < earliestJoinYear) {
-      setYearFilter(String(earliestJoinYear));
-    }
-  }, [earliestJoinYear, yearFilter]);
 
   function closeAuditDetail() {
     setAuditDetailOpen(false);
     setAuditDetail(null);
     setAuditDetailError('');
     setAuditDetailMonth(null);
+    setAuditDetailEmployeeId(null);
   }
+
+  const fetchAuditDetailPayload = useCallback(async (employeeId, periodKey) => {
+    const [summaryData, balanceData] = await Promise.all([
+      salaryApi.getSummary({ month: periodKey, userId: employeeId }),
+      leaveApi
+        .getBalances({ userId: employeeId, year: Number(String(periodKey).split('-')[0]) })
+        .catch(() => leaveApi.getMyBalances({ year: Number(String(periodKey).split('-')[0]) })),
+    ]);
+    return {
+      summary: summaryData.summary ?? null,
+      balances: balanceData.balances ?? [],
+      inactive: summaryData.inactive === true,
+    };
+  }, []);
 
   const openAuditDetail = useCallback(async (row) => {
     setAuditDetailOpen(true);
     setAuditDetailMonth(row.periodKey);
+    setAuditDetailEmployeeId(row.employeeId);
     setAuditDetailLoading(true);
     setAuditDetailError('');
     try {
-      const [summaryData, balanceData] = await Promise.all([
-        salaryApi.getSummary({ month: row.periodKey, userId: row.employeeId }),
-        leaveApi
-          .getBalances({ userId: row.employeeId, year: Number(String(row.periodKey).split('-')[0]) })
-          .catch(() =>
-            leaveApi.getMyBalances({ year: Number(String(row.periodKey).split('-')[0]) }),
-          ),
-      ]);
-      setAuditDetail({
-        summary: summaryData.summary ?? null,
-        balances: balanceData.balances ?? [],
-        inactive: summaryData.inactive === true,
-      });
+      setAuditDetail(await fetchAuditDetailPayload(row.employeeId, row.periodKey));
     } catch (err) {
       setAuditDetail(null);
       setAuditDetailError(getErrorMessage(err));
     } finally {
       setAuditDetailLoading(false);
     }
-  }, []);
+  }, [fetchAuditDetailPayload]);
+
+  const refetchOpenAuditDetail = useCallback(async () => {
+    if (!auditDetailOpen || !auditDetailEmployeeId || !auditDetailMonth) return;
+    setAuditDetailLoading(true);
+    setAuditDetailError('');
+    try {
+      setAuditDetail(await fetchAuditDetailPayload(auditDetailEmployeeId, auditDetailMonth));
+    } catch (err) {
+      setAuditDetail(null);
+      setAuditDetailError(getErrorMessage(err));
+    } finally {
+      setAuditDetailLoading(false);
+    }
+  }, [auditDetailEmployeeId, auditDetailMonth, auditDetailOpen, fetchAuditDetailPayload]);
 
   // Close stale modal when the audit period changes.
 
@@ -444,7 +472,10 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     adminApi
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
-      .catch(() => setDepartments([]));
+      .catch((err) => {
+        console.warn('Salary audit: failed to load departments', getErrorMessage(err));
+        setDepartments([]);
+      });
   }, []);
 
   const departmentOptions = useMemo(
@@ -480,6 +511,36 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     loadAudit(periodKey, departmentId);
   }, [periodKey, departmentId, loadAudit]);
 
+  const handleAttendanceSalarySync = useCallback(
+    (detail) => {
+      loadAudit(periodKey, departmentId);
+      if (
+        auditDetailOpen &&
+        auditDetailMonth &&
+        auditDetailEmployeeId &&
+        detail?.userId &&
+        String(detail.userId) === String(auditDetailEmployeeId) &&
+        dayKeyInMonth(detail.dayKey, auditDetailMonth)
+      ) {
+        refetchOpenAuditDetail();
+      }
+    },
+    [
+      auditDetailEmployeeId,
+      auditDetailMonth,
+      auditDetailOpen,
+      departmentId,
+      loadAudit,
+      periodKey,
+      refetchOpenAuditDetail,
+    ],
+  );
+
+  usePortalSync(handleAttendanceSalarySync, {
+    topics: [PORTAL_TOPICS.PAYROLL],
+    month: periodKey,
+  });
+
   async function handleDownload() {
     setExporting(true);
     setError('');
@@ -497,6 +558,12 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
     }
   }
 
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   return (
     <>
       <p className="salary-disclaimer muted small">
@@ -511,7 +578,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={setYearFilter}
+                  onChange={handleYearChange}
                   options={auditYearOptions}
                   aria-label="Audit year"
                   disabled={loading}
@@ -519,7 +586,7 @@ export function TeamAuditSection({ allowDownload = true, title = 'Monthly salary
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={AUDIT_MONTH_OPTIONS}
+                  options={auditMonthOptions}
                   aria-label="Audit month"
                   disabled={loading}
                 />

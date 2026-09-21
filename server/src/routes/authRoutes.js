@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { authenticate, invalidateUserSessions } from '../middleware/auth.js';
+import { PERMISSIONS } from '../../../shared/permissions.js';
+import { authenticate, invalidateUserSessions, requirePermission } from '../middleware/auth.js';
 import { authLimiter, passwordResetLimiter, refreshLimiter } from '../middleware/rateLimiters.js';
 import {
   loginUser,
   getCurrentUser,
+  getPermissionsVersion,
   refreshSession,
   updateProfile,
   changePassword,
@@ -76,15 +78,26 @@ router.post(
 router.get(
   '/me',
   authenticate,
+  requirePermission(PERMISSIONS.ACCOUNT_PROFILE_R, PERMISSIONS.PORTAL_ADMIN, PERMISSIONS.PORTAL_EMPLOYEE),
   asyncHandler(async (req, res) => {
     const user = await getCurrentUser(req.user._id);
     res.json({ user });
   }),
 );
 
+router.get(
+  '/me/permissions-version',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await getPermissionsVersion(req.user._id);
+    res.json(result);
+  }),
+);
+
 router.patch(
   '/me',
   authenticate,
+  requirePermission(PERMISSIONS.ACCOUNT_PROFILE_U),
   asyncHandler(async (req, res) => {
     const user = await updateProfile(req.user._id, req.body);
     res.json({ user });
@@ -94,6 +107,7 @@ router.patch(
 router.post(
   '/change-password',
   authenticate,
+  requirePermission(PERMISSIONS.ACCOUNT_PASSWORD_U),
   asyncHandler(async (req, res) => {
     const result = await changePassword(req.user._id, req.body);
     applyAuthSession(res, result);
