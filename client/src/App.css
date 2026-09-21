@@ -6689,6 +6689,25 @@ body::-webkit-scrollbar-thumb {
   color: #0891b2;
 }
 
+.month-calendar__cell--comp_off_pending {
+  background: color-mix(in srgb, #a855f7 12%, var(--surface));
+  border-color: color-mix(in srgb, #a855f7 35%, var(--border));
+  border-style: dashed;
+  color: #7e22ce;
+}
+
+.month-calendar__cell--comp_off_approved {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--surface));
+  border-color: color-mix(in srgb, #8b5cf6 38%, var(--border));
+  color: #6d28d9;
+}
+
+.month-calendar__cell--comp_off_worked {
+  background: color-mix(in srgb, #7c3aed 18%, var(--surface));
+  border-color: color-mix(in srgb, #7c3aed 42%, var(--border));
+  color: #5b21b6;
+}
+
 .month-calendar__cell--holiday {
   background: rgba(255, 95, 46, 0.12);
   border-color: rgba(255, 95, 46, 0.28);
@@ -6771,6 +6790,22 @@ body::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, #06b6d4 8%, var(--surface));
   border-style: dashed;
   border-color: color-mix(in srgb, #06b6d4 40%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_pending {
+  background: color-mix(in srgb, #a855f7 12%, var(--surface));
+  border-style: dashed;
+  border-color: color-mix(in srgb, #a855f7 35%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_approved {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--surface));
+  border-color: color-mix(in srgb, #8b5cf6 38%, var(--border));
+}
+
+.month-calendar__swatch--comp_off_worked {
+  background: color-mix(in srgb, #7c3aed 18%, var(--surface));
+  border-color: color-mix(in srgb, #7c3aed 42%, var(--border));
 }
 
 .month-calendar__swatch--holiday {

@@ -130,6 +130,8 @@ export const PERMISSIONS = {
   HELP_TICKET_X0: 'help.ticket.x0',
   HELP_TICKET_X1: 'help.ticket.x1',
   HELP_TICKET_X2: 'help.ticket.x2',
+  /** Set ticket priority (catalog extra help.ticket.x0). */
+  HELP_SET_PRIORITY: 'help.ticket.x0',
 
   // Leave admin (rows 35–44)
   LEAVE_TYPE_C: 'leave.type.c',

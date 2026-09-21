@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
+import { PERMISSIONS } from '@shared/permissions.js';
 import { Link } from 'react-router-dom';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
 import HelpPriorityBadge from '../../components/HelpPriorityBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
@@ -18,6 +20,9 @@ const PRIORITY_OPTIONS = [
 ];
 
 export default function AdminHelpTeam() {
+  const { hasPermission } = useAuth();
+  const canSetPriority =
+    hasPermission(PERMISSIONS.HELP_SET_PRIORITY) || hasPermission(PERMISSIONS.HELP_MANAGE);
   const [tickets, setTickets] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -88,7 +93,7 @@ export default function AdminHelpTeam() {
                   <th>Employee</th>
                   <th>Title</th>
                   <th>Priority</th>
-                  <th>Set Priority</th>
+                  {canSetPriority ? <th>Set Priority</th> : null}
                   <th>Status</th>
                   <th>Created</th>
                   <th>Actions</th>
@@ -104,15 +109,17 @@ export default function AdminHelpTeam() {
                     <td data-label="Priority">
                       <HelpPriorityBadge priority={item.priority} />
                     </td>
-                    <td data-label="Set Priority">
-                      <SelectField
-                        value={item.priority ?? 'medium'}
-                        onChange={(value) => handlePriorityChange(item.id, value)}
-                        options={PRIORITY_OPTIONS}
-                        aria-label={`Set priority for ${item.title}`}
-                        disabled={updatingPriorityId === item.id}
-                      />
-                    </td>
+                    {canSetPriority ? (
+                      <td data-label="Set Priority">
+                        <SelectField
+                          value={item.priority ?? 'medium'}
+                          onChange={(value) => handlePriorityChange(item.id, value)}
+                          options={PRIORITY_OPTIONS}
+                          aria-label={`Set priority for ${item.title}`}
+                          disabled={updatingPriorityId === item.id}
+                        />
+                      </td>
+                    ) : null}
                     <td data-label="Status">
                       <HelpStatusBadge status={item.status} />
                     </td>

@@ -1,7 +1,19 @@
 import mongoose from 'mongoose';
+import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasPermission } from '../../../shared/permissions.js';
+import {
+  PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
+  hasCompanyWideScope,
+  hasPermission,
+} from '../../../shared/permissions.js';
+import {
+  applyTeamScopeToUserIdQuery,
+  isUserInTeamScope,
+  resolveTeamScopedUserIds,
+} from './teamScopeService.js';
 import { escapeRegex } from '../../../shared/utils/escapeRegex.js';
+import { formatInrNumber } from '../../../shared/utils/formatInr.js';
 import { AttendanceRecord } from '../models/AttendanceRecord.js';
 import { LeaveBalance } from '../models/LeaveBalance.js';
 import { LeaveRequest } from '../models/LeaveRequest.js';
@@ -17,7 +29,6 @@ import {
   countWorkingDaysIST,
   getISTDateInputValue,
   getISTYear,
-  isWeekendIST,
   listWorkingDaysIST,
   parseDateInputAsISTDay,
   parseMonthInputAsISTRange,
@@ -34,6 +45,63 @@ function roundMoney(value) {
   return Math.round(value * 100) / 100;
 }
 
+/** Fixed 30-day month divisor for per-day salary (team-lead spec). */
+export const SALARY_DAYS_DIVISOR = 30;
+
+export function computePerDaySalary(monthlySalary) {
+  if (monthlySalary == null || monthlySalary <= 0) {
+    return null;
+  }
+  return roundMoney(monthlySalary / SALARY_DAYS_DIVISOR);
+}
+
+/** LOP amount from monthly salary and day fraction — avoids perDay rounding drift on half days. */
+export function computeLopDeductionAmount(monthlySalary, dayFraction) {
+  if (monthlySalary == null || monthlySalary <= 0 || dayFraction <= 0) {
+    return 0;
+  }
+  return roundMoney((monthlySalary / SALARY_DAYS_DIVISOR) * dayFraction);
+}
+
+/**
+ * Resolves MTD cutoff within a salary month.
+ * Defaults: today when viewing current month, month-end for past months, month-start for future.
+ */
+export function resolveSalaryAsOfDate(monthInput, asOfDateInput = null) {
+  const range = parseMonthInputAsISTRange(monthInput);
+  if (!range) {
+    return null;
+  }
+
+  const monthStartKey = getISTDateInputValue(range.start);
+  const monthEndKey = getISTDateInputValue(range.end);
+  const todayKey = getISTDateInputValue(new Date());
+
+  let asOfKey;
+  if (asOfDateInput != null && asOfDateInput !== '') {
+    const parsed = String(asOfDateInput).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed)) {
+      return null;
+    }
+    asOfKey = parsed;
+  } else if (todayKey >= monthStartKey && todayKey <= monthEndKey) {
+    asOfKey = todayKey;
+  } else if (todayKey > monthEndKey) {
+    asOfKey = monthEndKey;
+  } else {
+    asOfKey = monthStartKey;
+  }
+
+  if (asOfKey < monthStartKey) {
+    asOfKey = monthStartKey;
+  }
+  if (asOfKey > monthEndKey) {
+    asOfKey = monthEndKey;
+  }
+
+  return { ...range, asOfDateKey: asOfKey };
+}
+
 export function salaryAppliesForMonth(user, monthEnd) {
   if (user.monthlySalary == null || user.monthlySalary <= 0) {
     return false;
@@ -42,6 +110,17 @@ export function salaryAppliesForMonth(user, monthEnd) {
     return true;
   }
   return user.salaryEffectiveFrom <= monthEnd;
+}
+
+/**
+ * Allowed check-in credit for salary/LOP: P (or legacy untagged) = 1, HD/LV = 0.5.
+ * No check-in is 0 and is handled by absence in computeLopDeductionRows.
+ */
+export function attendanceCreditForTag(attendanceTag) {
+  if (attendanceTag === 'HD' || attendanceTag === 'LV') {
+    return 0.5;
+  }
+  return 1;
 }
 
 async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
@@ -55,7 +134,7 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
   const creditByDay = new Map();
   for (const record of records) {
     const dayKey = getISTDateInputValue(record.timestamp);
-    const credit = record.attendanceTag === 'HD' ? 0.5 : 1;
+    const credit = attendanceCreditForTag(record.attendanceTag);
     // A day can only have one allowed check-in, but retaining the highest credit
     // keeps historic/duplicate records from creating an accidental deduction.
     creditByDay.set(dayKey, Math.max(creditByDay.get(dayKey) ?? 0, credit));
@@ -188,6 +267,234 @@ export function buildPaidLeaveDayMap(
   return dayMap;
 }
 
+/**
+ * Per IST working day: unpaid leave fraction beyond yearly paid quota.
+ * Same chronological quota consumption as buildPaidLeaveDayMap.
+ *
+ * @returns {Map<string, { fraction: number, leaveTypeCode: string, leaveTypeId: string }>}
+ */
+export function buildUnpaidLeaveDayMap(
+  requests,
+  monthStart,
+  monthEnd,
+  holidayDates,
+  paidTypeIds,
+  paidQuotaByTypeId,
+  leaveTypeCodeById = new Map(),
+) {
+  const dayMap = new Map();
+  if (!(paidQuotaByTypeId instanceof Map)) {
+    return dayMap;
+  }
+  // Empty quota map means zero paid stock for all types — still tag overdrawn days.
+
+  const remainingQuota = new Map(paidQuotaByTypeId);
+  const ordered = [...requests].sort(compareLeaveRequestsChronologically);
+  const monthStartKey = getISTDateInputValue(monthStart);
+  const monthEndKey = getISTDateInputValue(monthEnd);
+
+  for (const request of ordered) {
+    const typeId = request.leaveTypeId?.toString?.() ?? String(request.leaveTypeId);
+    if (!paidTypeIds.has(typeId)) {
+      continue;
+    }
+
+    const totalWorkingDays = countWorkingDaysIST(
+      request.startDate,
+      request.endDate,
+      holidayDates,
+    );
+    if (totalWorkingDays === 0) {
+      continue;
+    }
+
+    const perDay = request.days / totalWorkingDays;
+    let quotaLeft = remainingQuota.get(typeId) ?? 0;
+    const typeCode =
+      leaveTypeCodeById.get(typeId)
+      ?? request.leaveTypeId?.code
+      ?? 'Leave';
+
+    const workingDayList = listWorkingDaysIST(
+      request.startDate,
+      request.endDate,
+      holidayDates,
+    );
+
+    for (const day of workingDayList) {
+      const key = typeof day === 'string' ? day : getISTDateInputValue(day);
+      const paidSlice = Math.min(perDay, quotaLeft);
+      quotaLeft -= paidSlice;
+      const unpaidSlice = perDay - paidSlice;
+
+      if (unpaidSlice > 0.001 && key >= monthStartKey && key <= monthEndKey) {
+        const existing = dayMap.get(key);
+        if (existing) {
+          existing.fraction = roundMoney(existing.fraction + unpaidSlice);
+        } else {
+          dayMap.set(key, {
+            fraction: roundMoney(unpaidSlice),
+            leaveTypeCode: typeCode,
+            leaveTypeId: typeId,
+          });
+        }
+      }
+    }
+
+    remainingQuota.set(typeId, quotaLeft);
+  }
+
+  return dayMap;
+}
+
+/**
+ * Builds LOP deduction rows from attendance + leave source data (recompute-on-read).
+ * Reasons: Absent (100%), Half day (50%), Unpaid {type} (100% per unpaid fraction).
+ */
+export function computeLopDeductionRows({
+  workingDayList,
+  attendanceCreditByDay,
+  paidLeaveByDay,
+  unpaidLeaveByDay,
+  monthlySalary,
+  asOfDateKey,
+}) {
+  const rows = [];
+  if (monthlySalary == null || monthlySalary <= 0 || !asOfDateKey) {
+    return rows;
+  }
+
+  for (const day of workingDayList) {
+    if (day > asOfDateKey) {
+      continue;
+    }
+
+    const attendance = attendanceCreditByDay.get(day) ?? 0;
+    const paidLeave = paidLeaveByDay.get(day) ?? 0;
+    const unpaidInfo = unpaidLeaveByDay.get(day);
+    const unpaidLeave = unpaidInfo?.fraction ?? 0;
+
+    if (unpaidLeave > 0.001) {
+      rows.push({
+        date: day,
+        reason: `Unpaid ${unpaidInfo.leaveTypeCode ?? 'Leave'}`,
+        amount: computeLopDeductionAmount(monthlySalary, unpaidLeave),
+        category: 'unpaid_leave',
+        days: unpaidLeave,
+        leaveTypeId: unpaidInfo.leaveTypeId ?? null,
+      });
+    }
+
+    const covered = Math.min(1, attendance + paidLeave + unpaidLeave);
+    const uncovered = roundMoney(1 - covered);
+    if (uncovered <= 0.001) {
+      continue;
+    }
+
+    const isHalfDay = Math.abs(uncovered - 0.5) < 0.001;
+    rows.push({
+      date: day,
+      reason: isHalfDay ? 'Half day' : 'Absent',
+      amount: computeLopDeductionAmount(monthlySalary, uncovered),
+      category: isHalfDay ? 'half_day' : 'absent',
+      days: uncovered,
+      leaveTypeId: null,
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Resolves payable from the fixed 30-day salary pool.
+ * Deduction sum is the rounding source of truth; paidDaysOutOf30 is the pool view.
+ */
+export function computePayableFromSalaryPool(monthlySalary, lopDays, lopDeductionTotal) {
+  if (monthlySalary == null || monthlySalary <= 0) {
+    return { paidDaysOutOf30: null, payableEstimate: null };
+  }
+
+  const perDaySalary = computePerDaySalary(monthlySalary);
+  const paidDaysOutOf30 = roundMoney(Math.max(0, SALARY_DAYS_DIVISOR - (lopDays ?? 0)));
+  const payableFromPool = roundMoney(paidDaysOutOf30 * perDaySalary);
+  const payableFromDeductions = roundMoney(monthlySalary - (lopDeductionTotal ?? 0));
+
+  // Deduction rows use monthlySalary/30 per fraction — keep that as payable source of truth.
+  const payableEstimate = payableFromDeductions;
+
+  return { paidDaysOutOf30, payableEstimate, payableFromPool, perDaySalary };
+}
+
+/**
+ * Pure MTD salary metrics — 30-day pool with LOP on working days only through asOfDate.
+ * payableEstimate = monthlySalary − sum(LOP deductions) ≡ (30 − lopDays) × perDay when aligned.
+ */
+export function computeMtdSalaryMetrics({
+  monthlySalary,
+  workingDayList,
+  attendanceCreditByDay,
+  paidLeaveByDay,
+  unpaidLeaveByDay,
+  asOfDateKey,
+}) {
+  const mtdWorkingDays = workingDayList.filter((day) => day <= asOfDateKey);
+  const maxLopDaysPossible = mtdWorkingDays.length;
+
+  const lopDeductionRows = computeLopDeductionRows({
+    workingDayList,
+    attendanceCreditByDay,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    monthlySalary,
+    asOfDateKey,
+  });
+
+  const lopDeductionTotal = roundMoney(lopDeductionRows.reduce((sum, row) => sum + row.amount, 0));
+  const lopDeduction = monthlySalary != null ? lopDeductionTotal : null;
+  const lopDays = roundMoney(lopDeductionRows.reduce((sum, row) => sum + row.days, 0));
+
+  const pool = computePayableFromSalaryPool(monthlySalary, lopDays, lopDeductionTotal);
+  const perDaySalary = pool.perDaySalary ?? computePerDaySalary(monthlySalary);
+  const paidDaysOutOf30 = pool.paidDaysOutOf30;
+  const payableEstimate = pool.payableEstimate;
+
+  const presentDays = roundMoney(
+    mtdWorkingDays.reduce((total, day) => total + (attendanceCreditByDay.get(day) ?? 0), 0),
+  );
+  const paidLeaveDays = roundMoney(
+    mtdWorkingDays.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  );
+  const payableDays = computeDailyCappedPayableDays(
+    mtdWorkingDays,
+    attendanceCreditByDay,
+    paidLeaveByDay,
+  );
+
+  const lopDates = lopDeductionRows.map((row) => ({
+    date: row.date,
+    reason: row.reason,
+    unpaidDays: row.days,
+    amount: row.amount,
+  }));
+
+  return {
+    perDaySalary,
+    payableEstimate,
+    lopDeduction,
+    lopDays,
+    paidDaysOutOf30,
+    salaryDaysDivisor: SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible,
+    lopDeductionRows,
+    lopDates,
+    presentDays,
+    paidLeaveDays,
+    payableDays,
+    asOfDate: asOfDateKey,
+    mtdPayable: payableEstimate,
+  };
+}
+
 /** Caps payable credit at 1.0 per working calendar day (prevents half-day leave + present double-count). */
 export function computeDailyCappedPayableDays(workingDayList, attendanceCreditByDay, paidLeaveByDay) {
   let total = 0;
@@ -203,24 +510,26 @@ export function computeDailyCappedPayableDays(workingDayList, attendanceCreditBy
 }
 
 /**
- * Monthly salary impact (v1 — estimate only, not payroll).
+ * Monthly salary impact — recompute-on-read from attendance + leave source of truth.
  *
- * workingDaysInMonth = Mon–Fri in the IST month minus company holidays.
- * presentDays        = attendance credit: 1.0 for Present and 0.5 for Half Day.
- * paidLeaveDays      = approved leave working-days overlapping the month that fall
- *                      within the per-type yearly paid quota (overdrawn = LOP).
- * lopDays            = max(0, workingDaysInMonth − payableDays).
- * payableDays        = present + paid leave, capped at 1.0 per working day.
- * perDaySalary       = monthlySalary / workingDaysInMonth (handbook encashment basis).
- * payableEstimate    = monthlySalary × (payableDays / workingDaysInMonth).
+ * perDaySalary       = monthlySalary / 30 (fixed 30-day salary pool).
+ * working days       = IST Mon–Fri minus holidays; LOP applies only on these days.
+ * paidDaysOutOf30    = max(0, 30 − lopDays) where lopDays sums fractional LOP through asOfDate.
+ * payableEstimate    = monthlySalary − sum(LOP deductions) ≡ paidDaysOutOf30 × perDay when aligned.
+ * maxLopDaysPossible = working days in month through asOfDate (LOP cannot exceed this count).
+ * LOP reasons        = Absent (100%), Half day (50%), Unpaid {type} (100% per unpaid fraction).
+ *
+ * @param {object} user
+ * @param {string} monthInput - YYYY-MM
+ * @param {{ asOfDate?: string }} [options] - IST YYYY-MM-DD cutoff within month
  */
-export async function computeMonthlySalarySummary(user, monthInput) {
-  const range = parseMonthInputAsISTRange(monthInput);
-  if (!range) {
+export async function computeMonthlySalarySummary(user, monthInput, options = {}) {
+  const resolved = resolveSalaryAsOfDate(monthInput, options.asOfDate);
+  if (!resolved) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const { year, monthKey, start, end } = range;
+  const { year, monthKey, start, end, asOfDateKey } = resolved;
   const holidayDates = await getHolidayDateSet(year);
   const workingDayList = listWorkingDaysIST(start, end, holidayDates);
   const workingDaysInMonth = workingDayList.length;
@@ -228,7 +537,7 @@ export async function computeMonthlySalarySummary(user, monthInput) {
 
   const paidTypeIds = await loadPaidLeaveTypeIds(year);
 
-  const [attendanceCreditByDay, balances, yearLeaveRequests] = await Promise.all([
+  const [attendanceCreditByDay, balances, yearLeaveRequests, leaveTypes] = await Promise.all([
     loadAttendanceCreditByDay(user._id, start, end),
     LeaveBalance.find({ userId: user._id, year }).select('leaveTypeId entitled carried compOffEarned encashed'),
     LeaveRequest.find({
@@ -237,7 +546,12 @@ export async function computeMonthlySalarySummary(user, monthInput) {
       startDate: { $lte: end },
       endDate: { $gte: yearStart },
     }).select('leaveTypeId startDate endDate days halfDay'),
+    LeaveType.find({ isActive: true }).select('_id code'),
   ]);
+
+  const leaveTypeCodeById = new Map(
+    leaveTypes.map((leaveType) => [leaveType._id.toString(), leaveType.code]),
+  );
 
   const paidQuotaByTypeId = new Map(
     balances.map((balance) => [
@@ -246,9 +560,6 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     ]),
   );
 
-  const presentDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (attendanceCreditByDay.get(day) ?? 0), 0),
-  );
   const paidLeaveByDay = buildPaidLeaveDayMap(
     yearLeaveRequests,
     start,
@@ -257,39 +568,29 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     paidTypeIds,
     paidQuotaByTypeId,
   );
-  const paidLeaveDays = roundMoney(
-    workingDayList.reduce((total, day) => total + (paidLeaveByDay.get(day) ?? 0), 0),
+  const unpaidLeaveByDay = buildUnpaidLeaveDayMap(
+    yearLeaveRequests,
+    start,
+    end,
+    holidayDates,
+    paidTypeIds,
+    paidQuotaByTypeId,
+    leaveTypeCodeById,
   );
-  const payableDays = computeDailyCappedPayableDays(
-    workingDayList,
-    attendanceCreditByDay,
-    paidLeaveByDay,
-  );
-  const lopDays = Math.max(0, workingDaysInMonth - payableDays);
-  // Working dates that are (partly) unpaid — shown in salary views so
-  // employees/RMs can see exactly which days became LOP and for how much.
-  const lopDates = workingDayList
-    .map((day) => {
-      const unpaid = roundMoney(
-        1 - (attendanceCreditByDay.get(day) ?? 0) - (paidLeaveByDay.get(day) ?? 0),
-      );
-      return unpaid > 0.001 ? { date: day, unpaidDays: unpaid } : null;
-    })
-    .filter(Boolean);
 
   const hasSalary = salaryAppliesForMonth(user, end);
   const monthlySalary = hasSalary ? user.monthlySalary : null;
 
-  let perDaySalary = null;
-  let payableEstimate = null;
-  let lopDeduction = null;
-  if (monthlySalary != null && workingDaysInMonth > 0) {
-    perDaySalary = roundMoney(monthlySalary / workingDaysInMonth);
-    payableEstimate = roundMoney(monthlySalary * (payableDays / workingDaysInMonth));
-    lopDeduction = roundMoney(lopDays * perDaySalary);
-  }
+  const mtdMetrics = computeMtdSalaryMetrics({
+    monthlySalary,
+    workingDayList,
+    attendanceCreditByDay,
+    paidLeaveByDay,
+    unpaidLeaveByDay,
+    asOfDateKey,
+  });
 
-  return {
+  const summary = {
     month: monthKey,
     currency: 'INR',
     userId: user._id.toString(),
@@ -298,17 +599,35 @@ export async function computeMonthlySalarySummary(user, monthInput) {
     monthlySalary,
     salaryEffectiveFrom: user.salaryEffectiveFrom ?? null,
     joiningDate: user.joiningDate ?? null,
+    endingDate: user.endingDate ?? null,
     workingDaysInMonth,
-    presentDays,
-    paidLeaveDays,
-    payableDays,
-    lopDays,
-    lopDates,
-    lopDeduction,
-    perDaySalary,
-    payableEstimate,
+    presentDays: mtdMetrics.presentDays,
+    paidLeaveDays: mtdMetrics.paidLeaveDays,
+    payableDays: mtdMetrics.payableDays,
+    lopDays: mtdMetrics.lopDays,
+    lopDates: mtdMetrics.lopDates,
+    lopDeductionRows: mtdMetrics.lopDeductionRows,
+    lopDeduction: mtdMetrics.lopDeduction,
+    perDaySalary: mtdMetrics.perDaySalary,
+    payableEstimate: mtdMetrics.payableEstimate,
+    mtdPayable: mtdMetrics.mtdPayable,
+    paidDaysOutOf30: mtdMetrics.paidDaysOutOf30,
+    salaryDaysDivisor: mtdMetrics.salaryDaysDivisor,
+    maxLopDaysPossible: mtdMetrics.maxLopDaysPossible,
+    asOfDate: mtdMetrics.asOfDate,
     hasSalaryConfigured: monthlySalary != null,
   };
+
+  if (options.includeDayMaps) {
+    summary.dayExportContext = {
+      workingDayList,
+      attendanceCreditByDay,
+      paidLeaveByDay,
+      unpaidLeaveByDay,
+    };
+  }
+
+  return summary;
 }
 
 export async function loadSalarySubject(userId, { allowInactive = false } = {}) {
@@ -322,39 +641,26 @@ export async function loadSalarySubject(userId, { allowInactive = false } = {}) 
   return user;
 }
 
-export function canViewSalarySummary(actor, subject, permissions) {
+export async function canViewSalarySummary(actor, subject, permissions) {
   const actorId = actor._id.toString();
   const subjectId = subject._id.toString();
 
   if (actorId === subjectId) {
-    return hasPermission(permissions, PERMISSIONS.SALARY_READ);
+    return hasPermission(permissions, PERMISSIONS.EMP_PAY_R);
   }
 
   if (
-    hasPermission(permissions, PERMISSIONS.SALARY_READ) &&
-    (hasPermission(permissions, PERMISSIONS.USERS_READ) ||
-      hasPermission(permissions, PERMISSIONS.USERS_WRITE))
+    hasPermission(permissions, PERMISSIONS.SALARY_PAYROLL_R) &&
+    hasCompanyWideScope(permissions)
   ) {
     return true;
   }
 
-  if (hasPermission(permissions, PERMISSIONS.SALARY_READ_TEAM)) {
-    const managerId =
-      subject.reportingManagerId?._id?.toString() ??
-      subject.reportingManagerId?.toString?.() ??
-      null;
-    if (managerId === actorId) {
-      return true;
-    }
-
-    const subjectDept =
-      subject.departmentId?._id?.toString?.() ??
-      subject.departmentId?.toString?.() ??
-      null;
-    if (Array.isArray(actor.managedDepartmentIds) && actor.managedDepartmentIds.length > 0) {
-      return actor.managedDepartmentIds.some((id) => id.toString() === subjectDept);
-    }
-    return false;
+  if (
+    hasPermission(permissions, PERMISSIONS.SALARY_TEAM_AUDIT_R) ||
+    hasPermission(permissions, PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R)
+  ) {
+    return isUserInTeamScope(actor, permissions, subjectId);
   }
 
   return false;
@@ -364,7 +670,7 @@ export async function getSalarySummaryForUser(actor, permissions, userId, month)
   // Reads tolerate deactivated subjects (empty-state downstream); writes keep
   // the strict loader so inactive records stay uneditable.
   const subject = await loadSalarySubject(userId, { allowInactive: true });
-  if (!canViewSalarySummary(actor, subject, permissions)) {
+  if (!(await canViewSalarySummary(actor, subject, permissions))) {
     throwError('You do not have permission to view this salary summary.', 403);
   }
   if (!subject.isActive) {
@@ -374,23 +680,19 @@ export async function getSalarySummaryForUser(actor, permissions, userId, month)
   return { summary };
 }
 
-export async function listSalarySummariesForMonth(month, { departmentId } = {}) {
+export async function listSalarySummariesForMonth(month, scopeContext = null) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  const baseQuery = { isActive: true, monthlySalary: { $ne: null, $gt: 0 } };
-  if (adminRole) {
-    baseQuery.roleId = { $ne: adminRole._id };
-  }
-  if (departmentId) {
-    baseQuery.departmentId = departmentId;
+  const query = { isActive: true, monthlySalary: { $ne: null, $gt: 0 } };
+  if (scopeContext?.actor && scopeContext?.permissions) {
+    await applyTeamScopeToUserIdQuery(query, scopeContext.actor, scopeContext.permissions);
   }
 
-  const employees = await User.find(baseQuery)
-    .select('name employeeCode monthlySalary salaryEffectiveFrom joiningDate')
+  const employees = await User.find(query)
+    .select('name employeeCode monthlySalary salaryEffectiveFrom')
     .sort({ name: 1 });
 
   const summaries = [];
@@ -479,8 +781,12 @@ export function computeSalaryTransferStatsFromRows(rows) {
   };
 }
 
-export async function getSalaryTransferStats(periodKey) {
-  const rows = await SalaryTransfer.find({ periodKey }).select('status amount');
+export async function getSalaryTransferStats(periodKey, scopeUserIds = null) {
+  const query = { periodKey };
+  if (scopeUserIds !== null) {
+    query.userId = { $in: scopeUserIds };
+  }
+  const rows = await SalaryTransfer.find(query).select('status amount');
   return computeSalaryTransferStatsFromRows(rows);
 }
 
@@ -493,7 +799,6 @@ function salaryTransferToJSON(transfer) {
     userId,
     userName: user?.name ?? null,
     employeeCode: user?.employeeCode ?? null,
-    joiningDate: user?.joiningDate ?? null,
     periodKey: transfer.periodKey,
     amount: transfer.amount,
     currency: transfer.currency ?? 'INR',
@@ -506,7 +811,14 @@ function salaryTransferToJSON(transfer) {
   };
 }
 
-export async function listSalaryTransfers({ month, status, page = 1, limit = 20 }) {
+export async function listSalaryTransfers({
+  month,
+  status,
+  page = 1,
+  limit = 20,
+  actor = null,
+  permissions = null,
+}) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
@@ -516,17 +828,24 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
   if (status) {
     query.status = status;
   }
+  let scopedIds = null;
+  if (actor && permissions) {
+    scopedIds = await resolveTeamScopedUserIds(actor, permissions);
+    if (scopedIds !== null) {
+      query.userId = { $in: scopedIds };
+    }
+  }
 
   const skip = (page - 1) * limit;
 
   const [transfers, total, stats] = await Promise.all([
     SalaryTransfer.find(query)
-      .populate('userId', 'name employeeCode joiningDate')
+      .populate('userId', 'name employeeCode')
       .sort({ updatedAt: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit),
     SalaryTransfer.countDocuments(query),
-    getSalaryTransferStats(month),
+    getSalaryTransferStats(month, scopedIds),
   ]);
 
   return {
@@ -542,13 +861,18 @@ export async function listSalaryTransfers({ month, status, page = 1, limit = 20 
   };
 }
 
-export async function generatePendingSalaryTransfers(month, actorId, session = null) {
+export async function generatePendingSalaryTransfers(
+  month,
+  actorId,
+  session = null,
+  scopeContext = null,
+) {
   const range = parseMonthInputAsISTRange(month);
   if (!range) {
     throwError('Invalid month. Use YYYY-MM.');
   }
 
-  const summaries = await listSalarySummariesForMonth(month);
+  const summaries = await listSalarySummariesForMonth(month, scopeContext);
   const eligible = summaries.filter(
     (item) => item.payableEstimate != null || item.monthlySalary != null,
   );
@@ -692,17 +1016,13 @@ export async function buildSalaryMonthMeta(month, summaries) {
   };
 }
 
-async function buildSalaryStructureQuery(search, { departmentId } = {}) {
+async function buildSalaryStructureQuery(search) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const query = { isActive: true };
   if (adminRole) {
     query.roleId = { $ne: adminRole._id };
   } else {
     query.role = { $ne: 'admin' };
-  }
-
-  if (departmentId) {
-    query.departmentId = departmentId;
   }
 
   const trimmed = search?.trim();
@@ -714,8 +1034,17 @@ async function buildSalaryStructureQuery(search, { departmentId } = {}) {
   return query;
 }
 
-export async function listSalaryStructure({ page = 1, limit = 20, search = '', departmentId } = {}) {
-  const query = await buildSalaryStructureQuery(search, { departmentId });
+export async function listSalaryStructure({
+  page = 1,
+  limit = 20,
+  search = '',
+  actor = null,
+  permissions = null,
+}) {
+  const query = await buildSalaryStructureQuery(search);
+  if (actor && permissions) {
+    await applyTeamScopeToUserIdQuery(query, actor, permissions);
+  }
   const skip = (page - 1) * limit;
 
   const [employees, total] = await Promise.all([
@@ -753,72 +1082,751 @@ export async function listSalaryStructure({ page = 1, limit = 20, search = '', d
   };
 }
 
-export function buildSalaryExportWorkbook(summaries, month) {
-  const [year, mon] = (month || '').split('-');
-  const fromDate = `${year}-${mon}-01`;
-  const monthEnd = new Date(Date.UTC(Number(year), Number(mon), 0));
-  const toDate = `${year}-${mon}-${String(monthEnd.getUTCDate()).padStart(2, '0')}`;
-  const asOfDate = new Date().toISOString().slice(0, 10);
+export function mapLopListRow(summary) {
+  return {
+    userId: summary.userId,
+    name: summary.userName,
+    employeeCode: summary.employeeCode ?? null,
+    totalSalary: summary.monthlySalary,
+    mtdPayable: summary.mtdPayable,
+    totalLopDeduction: summary.lopDeduction,
+    lopDays: summary.lopDays,
+    paidDaysOutOf30: summary.paidDaysOutOf30,
+    salaryDaysDivisor: summary.salaryDaysDivisor ?? SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible: summary.maxLopDaysPossible,
+    asOfDate: summary.asOfDate,
+    hasLop: (summary.lopDeduction ?? 0) > 0,
+  };
+}
 
-  const overviewRows = summaries.map((item) => ({
-    'Employee Name': item.userName,
-    'Employee Code': item.employeeCode ?? '',
-    Year: year,
-    Month: mon,
-    'From Date': fromDate,
-    'To Date': toDate,
-    'As Of Date': asOfDate,
-    'Total Salary (INR)': item.monthlySalary ?? '',
-    'LOP Reason': (item.lopDates || []).map((d) => `${d.date} (${d.unpaidDays} day${d.unpaidDays !== 1 ? 's' : ''})`).join(', ') || '—',
-    'Amount Deducted (INR)': item.lopDeduction ?? '',
-    'Remaining Salary (INR)': item.payableEstimate ?? '',
-  }));
+export function mapLopDetail(summary) {
+  return {
+    userId: summary.userId,
+    name: summary.userName,
+    month: summary.month,
+    asOfDate: summary.asOfDate,
+    joiningDate: summary.joiningDate
+      ? getISTDateInputValue(new Date(summary.joiningDate))
+      : null,
+    endingDate: summary.endingDate
+      ? getISTDateInputValue(new Date(summary.endingDate))
+      : null,
+    totalLopDays: summary.lopDays,
+    paidDaysOutOf30: summary.paidDaysOutOf30,
+    salaryDaysDivisor: summary.salaryDaysDivisor ?? SALARY_DAYS_DIVISOR,
+    maxLopDaysPossible: summary.maxLopDaysPossible,
+    deductions: (summary.lopDeductionRows ?? []).map((row) => ({
+      date: row.date,
+      reason: row.reason,
+      amountDeducted: row.amount,
+    })),
+  };
+}
 
-  const detailedRows = summaries.flatMap((item) => {
-    const lopMap = new Map((item.lopDates || []).map((d) => [d.date, d.unpaidDays]));
-    const rows = [];
-    for (let day = 1; day <= new Date(Date.UTC(Number(year), Number(mon), 0)).getUTCDate(); day++) {
-      const dateStr = `${year}-${mon}-${String(day).padStart(2, '0')}`;
-      const isWorkingDay = !isWeekendIST(new Date(dateStr));
-      if (!isWorkingDay) continue;
-      const unpaid = lopMap.get(dateStr) || 0;
+function validateLopAsOfDate(month, asOf) {
+  if (asOf == null || asOf === '') {
+    return;
+  }
+  const trimmed = String(asOf).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throwError('Invalid as-of date. Use YYYY-MM-DD within the selected month.');
+  }
+  const parsed = parseDateInputAsISTDay(trimmed);
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    throwError('Invalid as-of date. Use YYYY-MM-DD within the selected month.');
+  }
+  if (getISTDateInputValue(parsed) !== trimmed) {
+    throwError('Invalid as-of date. Use YYYY-MM-DD within the selected month.');
+  }
+  const resolved = resolveSalaryAsOfDate(month, trimmed);
+  if (!resolved) {
+    throwError('Invalid as-of date. Use YYYY-MM-DD within the selected month.');
+  }
+}
+
+export async function listLopSummaries({
+  month,
+  asOf,
+  page = 1,
+  limit = 20,
+  actor = null,
+  permissions = null,
+}) {
+  const range = parseMonthInputAsISTRange(month);
+  if (!range) {
+    throwError('Invalid month. Use YYYY-MM.');
+  }
+  validateLopAsOfDate(month, asOf);
+
+  const query = {
+    isActive: true,
+    monthlySalary: { $ne: null, $gt: 0 },
+  };
+  if (actor && permissions) {
+    await applyTeamScopeToUserIdQuery(query, actor, permissions);
+  }
+  const skip = (page - 1) * limit;
+
+  const [employees, total] = await Promise.all([
+    User.find(query)
+      .select('name employeeCode monthlySalary salaryEffectiveFrom')
+      .sort({ name: 1, _id: 1 })
+      .skip(skip)
+      .limit(limit),
+    User.countDocuments(query),
+  ]);
+
+  const resolved = resolveSalaryAsOfDate(month, asOf);
+  const employeesInMonth = employees.filter((employee) => salaryAppliesForMonth(employee, range.end));
+  const rows = [];
+  for (const employee of employeesInMonth) {
+    const summary = await computeMonthlySalarySummary(employee, month, { asOfDate: asOf });
+    rows.push(mapLopListRow(summary));
+  }
+
+  return {
+    month,
+    asOfDate: resolved?.asOfDateKey ?? null,
+    salaryDaysDivisor: SALARY_DAYS_DIVISOR,
+    employees: rows,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit) || 1,
+    },
+  };
+}
+
+export async function listAllLopSummariesForMonth(month, asOf, options = {}) {
+  const range = parseMonthInputAsISTRange(month);
+  if (!range) {
+    throwError('Invalid month. Use YYYY-MM.');
+  }
+  validateLopAsOfDate(month, asOf);
+
+  const query = {
+    isActive: true,
+    monthlySalary: { $ne: null, $gt: 0 },
+  };
+  if (options.actor && options.permissions) {
+    await applyTeamScopeToUserIdQuery(query, options.actor, options.permissions);
+  }
+
+  const employees = await User.find(query)
+    .select('name employeeCode monthlySalary salaryEffectiveFrom')
+    .sort({ name: 1, _id: 1 });
+
+  const summaries = [];
+  for (const employee of employees) {
+    if (!salaryAppliesForMonth(employee, range.end)) {
+      continue;
+    }
+    summaries.push(await computeMonthlySalarySummary(employee, month, {
+      asOfDate: asOf,
+      includeDayMaps: options.includeDayMaps === true,
+    }));
+  }
+  return summaries;
+}
+
+export async function getLopDetailForUser(actor, permissions, userId, month, asOf) {
+  const subject = await loadSalarySubject(userId);
+  if (!(await canViewSalarySummary(actor, subject, permissions))) {
+    throwError('You do not have permission to view this LOP detail.', 403);
+  }
+  validateLopAsOfDate(month, asOf);
+  const summary = await computeMonthlySalarySummary(subject, month, { asOfDate: asOf });
+  return mapLopDetail(summary);
+}
+
+const EXPORT_DATE_FMT = 'dd-mm-yyyy';
+const EXPORT_DATE_HEADERS = new Set([
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Loss of pay date',
+  'Date',
+]);
+
+const ENGLISH_MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+function parseIstDateKeyToExcelDate(dateKey) {
+  if (!dateKey || typeof dateKey !== 'string') {
+    return null;
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function monthNumToEnglishName(monthNum) {
+  const num = Number(String(monthNum).padStart(2, '0'));
+  if (num >= 1 && num <= 12) {
+    return ENGLISH_MONTH_NAMES[num - 1];
+  }
+  return String(monthNum);
+}
+
+/** Split YYYY-MM into numeric year and English month name (export columns). */
+export function parseSalaryPeriodKey(periodKey) {
+  if (!periodKey || !/^\d{4}-\d{2}$/.test(periodKey)) {
+    return { year: null, monthName: '' };
+  }
+  const [year, monthNum] = periodKey.split('-');
+  return {
+    year: Number(year),
+    monthName: monthNumToEnglishName(monthNum),
+  };
+}
+
+function formatLopReasonDayLabel(days) {
+  return days === 1 ? 'day' : 'days';
+}
+
+export function formatLopReasonSummary(lopDeductionRows) {
+  const byReason = new Map();
+  for (const row of lopDeductionRows ?? []) {
+    if (!row.reason) {
+      continue;
+    }
+    const existing = byReason.get(row.reason) ?? 0;
+    byReason.set(row.reason, roundMoney(existing + (row.days ?? 0)));
+  }
+  return [...byReason.entries()]
+    .map(([reason, days]) => `${reason} (${days} ${formatLopReasonDayLabel(days)})`)
+    .join('; ');
+}
+
+export function lopDeductionRowsToExportRows(summary) {
+  const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
+  const rows = [];
+  for (const row of summary.lopDeductionRows ?? []) {
+    rows.push({
+      'Employee Name': summary.userName,
+      'Employee Code': summary.employeeCode ?? '',
+      Year: Number(year),
+      Month: monthNumToEnglishName(monthNum),
+      'From Date': fromDate,
+      'To Date': toDate,
+      'Calculated as of date': asOfDate,
+      'Loss of pay date': row.date,
+      Reason: row.reason,
+      'Amount Deducted (INR)': row.amount,
+    });
+  }
+  return rows;
+}
+
+export const LOP_BULK_OVERVIEW_HEADERS = [
+  'Employee Name',
+  'Employee Code',
+  'Year',
+  'Month',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Monthly salary',
+  'Loss of pay reason',
+  'Loss of pay till date',
+  'Month-to-date payable',
+];
+
+export const LOP_BULK_DETAILED_HEADERS = [
+  'Employee Name',
+  'Employee Code',
+  'Year',
+  'Month',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Date',
+  'Reason',
+  'Loss of pay (days)',
+  'Daily loss of pay amount',
+  'Per day salary',
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+];
+
+function lopBulkPeriodFields(summary) {
+  const [year, monthNum] = summary.month.split('-');
+  return {
+    year,
+    monthNum,
+    fromDate: `${summary.month}-01`,
+    toDate: summary.asOfDate,
+    asOfDate: summary.asOfDate,
+  };
+}
+
+export function buildLopOverviewExportRows(summaries) {
+  return summaries.map((summary) => {
+    const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
+    return {
+      'Employee Name': summary.userName,
+      'Employee Code': summary.employeeCode ?? '',
+      Year: Number(year),
+      Month: monthNumToEnglishName(monthNum),
+      'From Date': fromDate,
+      'To Date': toDate,
+      'Calculated as of date': asOfDate,
+      'Monthly salary': summary.monthlySalary ?? null,
+      'Loss of pay reason': formatLopReasonSummary(summary.lopDeductionRows),
+      'Loss of pay till date': summary.lopDeduction ?? 0,
+      'Month-to-date payable': summary.mtdPayable ?? summary.payableEstimate ?? null,
+    };
+  });
+}
+
+export function buildLopDetailedExportRows(summaries) {
+  const rows = [];
+  for (const summary of summaries) {
+    const { year, monthNum, fromDate, toDate, asOfDate } = lopBulkPeriodFields(summary);
+
+    for (const lopRow of summary.lopDeductionRows ?? []) {
+      if (lopRow.date > asOfDate) {
+        continue;
+      }
+
       rows.push({
-        'Employee Name': item.userName,
-        'Employee Code': item.employeeCode ?? '',
-        Year: year,
-        Month: mon,
+        'Employee Name': summary.userName,
+        'Employee Code': summary.employeeCode ?? '',
+        Year: Number(year),
+        Month: monthNumToEnglishName(monthNum),
         'From Date': fromDate,
         'To Date': toDate,
-        'As Of Date': asOfDate,
-        Date: dateStr,
-        'Per Day Salary (INR)': item.perDaySalary ?? '',
-        'Working Day': isWorkingDay ? 'Yes' : 'No',
-        'LOP Days': unpaid,
-        'Day Payable': unpaid > 0 ? roundMoney((item.perDaySalary ?? 0) * (1 - unpaid)) : (item.perDaySalary ?? ''),
-        'Total Salary (INR)': item.monthlySalary ?? '',
-        'Amount Deducted (INR)': item.lopDeduction ?? '',
-        'Remaining Salary (INR)': item.payableEstimate ?? '',
+        'Calculated as of date': asOfDate,
+        Date: lopRow.date,
+        Reason: lopRow.reason,
+        'Loss of pay (days)': lopRow.days,
+        'Daily loss of pay amount': lopRow.amount,
+        'Per day salary': summary.perDaySalary ?? null,
+        'Monthly salary': summary.monthlySalary ?? null,
+        'Loss of pay till date': summary.lopDeduction ?? 0,
+        'Month-to-date payable': summary.mtdPayable ?? summary.payableEstimate ?? null,
       });
     }
-    return rows;
+  }
+  return rows;
+}
+
+const LOP_EXPORT_COMPANY_NAME = 'Grubpac Technologies';
+const LOP_EXPORT_BRAND_ORANGE = 'FFE85D04';
+const LOP_EXPORT_HEADER_DARK = 'FF1F2937';
+const LOP_EXPORT_WHITE = 'FFFFFFFF';
+const LOP_EXPORT_ROW_EVEN = 'FFF9FAFB';
+const LOP_EXPORT_ROW_ODD = 'FFFFFFFF';
+const LOP_EXPORT_INSTRUCTION_FILL = 'FFFFF7ED';
+const LOP_EXPORT_INSTRUCTION_TEXT = 'FF9A3412';
+const LOP_EXPORT_BORDER_COLOR = 'FFE5E7EB';
+
+export const LOP_EXPORT_SHEET_HEADER_ROW = 5;
+const LOP_EXPORT_DATA_START_ROW = 6;
+
+export const LOP_EXPORT_HEADERS = [
+  'Employee Name',
+  'Employee Code',
+  'Year',
+  'Month',
+  'From Date',
+  'To Date',
+  'Calculated as of date',
+  'Loss of pay date',
+  'Reason',
+  'Amount Deducted (INR)',
+];
+
+const LOP_EXPORT_COLUMN_WIDTHS = [24, 14, 8, 12, 12, 12, 18, 14, 20, 22];
+
+const INR_NUM_FMT = '#,##,##0.00';
+
+const LOP_EXPORT_MONEY_HEADERS = new Set(['Amount Deducted (INR)']);
+
+const LOP_BULK_OVERVIEW_MONEY_HEADERS = new Set([
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+]);
+
+const LOP_BULK_DETAILED_MONEY_HEADERS = new Set([
+  'Per day salary',
+  'Daily loss of pay amount',
+  'Monthly salary',
+  'Loss of pay till date',
+  'Month-to-date payable',
+]);
+
+function isNumericExportValue(value) {
+  return value !== '' && value != null && Number.isFinite(Number(value));
+}
+
+function assignExportCellValue(cell, header, value, moneyHeaders) {
+  if (moneyHeaders.has(header) && isNumericExportValue(value)) {
+    cell.value = Number(value);
+    cell.numFmt = INR_NUM_FMT;
+    return;
+  }
+  if (header === 'Year' && isNumericExportValue(value)) {
+    cell.value = Number(value);
+    cell.numFmt = '0';
+    return;
+  }
+  if (header === 'Month' && value != null && value !== '') {
+    cell.value = String(value);
+    cell.numFmt = '@';
+    return;
+  }
+  if (
+    EXPORT_DATE_HEADERS.has(header) &&
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
+    const excelDate = parseIstDateKeyToExcelDate(value);
+    if (excelDate) {
+      cell.value = excelDate;
+      cell.numFmt = EXPORT_DATE_FMT;
+      return;
+    }
+  }
+  cell.value = value ?? '';
+}
+
+function lopExportThinBorder() {
+  return {
+    top: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    left: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    bottom: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+    right: { style: 'thin', color: { argb: LOP_EXPORT_BORDER_COLOR } },
+  };
+}
+
+function applyLopExportHeaderStyle(row, colCount) {
+  row.height = 22;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.font = { bold: true, color: { argb: LOP_EXPORT_WHITE }, size: 11, name: 'Calibri' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_HEADER_DARK } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = lopExportThinBorder();
+  }
+}
+
+function styleLopExportDataRow(row, rowIndex, colCount) {
+  const fill = rowIndex % 2 === 0 ? LOP_EXPORT_ROW_EVEN : LOP_EXPORT_ROW_ODD;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+    cell.border = lopExportThinBorder();
+    cell.alignment = { vertical: 'middle', wrapText: false };
+    cell.font = { size: 10, name: 'Calibri' };
+    if (column === LOP_EXPORT_HEADERS.length) {
+      cell.alignment = { vertical: 'middle', horizontal: 'right' };
+    }
+  }
+}
+
+export async function buildLopExportWorkbook(
+  exportRows,
+  {
+    sheetName = 'LOP Deductions',
+    subtitle = 'LOP Deduction Export',
+    instructionText =
+      'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30). Calculated as of date is the salary/LOP cutoff for this report; Loss of pay date is the working day each deduction applies to.',
+  } = {},
+) {
+  const colCount = LOP_EXPORT_HEADERS.length;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = LOP_EXPORT_COMPANY_NAME;
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet(sheetName.slice(0, 31), {
+    views: [{ state: 'frozen', ySplit: LOP_EXPORT_SHEET_HEADER_ROW }],
+    properties: { defaultRowHeight: 18 },
+  });
+
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = LOP_EXPORT_COMPANY_NAME;
+  titleCell.font = { bold: true, size: 16, name: 'Calibri', color: { argb: LOP_EXPORT_WHITE } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_BRAND_ORANGE } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(1).height = 30;
+
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = subtitle;
+  subtitleCell.font = { bold: true, size: 11, name: 'Calibri', color: { argb: LOP_EXPORT_HEADER_DARK } };
+  subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_ROW_EVEN } };
+  subtitleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(2).height = 22;
+
+  sheet.mergeCells(3, 1, 3, colCount);
+  const instructionCell = sheet.getCell(3, 1);
+  instructionCell.value = instructionText;
+  instructionCell.font = {
+    italic: true,
+    size: 10,
+    name: 'Calibri',
+    color: { argb: LOP_EXPORT_INSTRUCTION_TEXT },
+  };
+  instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_INSTRUCTION_FILL } };
+  instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
+  sheet.getRow(3).height = 20;
+
+  sheet.getRow(4).height = 6;
+
+  const headerRow = sheet.getRow(LOP_EXPORT_SHEET_HEADER_ROW);
+  LOP_EXPORT_HEADERS.forEach((header, index) => {
+    headerRow.getCell(index + 1).value = header;
+  });
+  applyLopExportHeaderStyle(headerRow, colCount);
+
+  exportRows.forEach((rowObject, rowIndex) => {
+    const row = sheet.getRow(LOP_EXPORT_DATA_START_ROW + rowIndex);
+    LOP_EXPORT_HEADERS.forEach((header, columnIndex) => {
+      assignExportCellValue(
+        row.getCell(columnIndex + 1),
+        header,
+        rowObject[header],
+        LOP_EXPORT_MONEY_HEADERS,
+      );
+    });
+    styleLopExportDataRow(row, rowIndex, colCount);
+  });
+
+  LOP_EXPORT_COLUMN_WIDTHS.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
+
+  sheet.autoFilter = {
+    from: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: 1 },
+    to: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: colCount },
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+const LOP_BULK_OVERVIEW_COLUMN_WIDTHS = [24, 14, 8, 12, 12, 12, 12, 16, 28, 20, 22];
+const LOP_BULK_DETAILED_COLUMN_WIDTHS = [
+  24, 14, 8, 12, 12, 12, 12, 12, 20, 16, 20, 14, 16, 20, 22,
+];
+
+function styleLopBulkExportDataRow(row, rowIndex, colCount, rightAlignColumns = new Set()) {
+  const fill = rowIndex % 2 === 0 ? LOP_EXPORT_ROW_EVEN : LOP_EXPORT_ROW_ODD;
+  for (let column = 1; column <= colCount; column += 1) {
+    const cell = row.getCell(column);
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+    cell.border = lopExportThinBorder();
+    cell.alignment = {
+      vertical: 'middle',
+      horizontal: rightAlignColumns.has(column) ? 'right' : 'left',
+      wrapText: false,
+    };
+    cell.font = { size: 10, name: 'Calibri' };
+  }
+}
+
+function appendLopBulkExportSheet(
+  workbook,
+  {
+    sheetName,
+    headers,
+    columnWidths,
+    exportRows,
+    subtitle,
+    instructionText = 'Amounts are in INR. Per-day rate uses a fixed 30-day month (monthly salary ÷ 30).',
+    rightAlignColumns = new Set(),
+    moneyHeaders = new Set(),
+  },
+) {
+  const colCount = headers.length;
+  const sheet = workbook.addWorksheet(sheetName.slice(0, 31), {
+    views: [{ state: 'frozen', ySplit: LOP_EXPORT_SHEET_HEADER_ROW }],
+    properties: { defaultRowHeight: 18 },
+  });
+
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = LOP_EXPORT_COMPANY_NAME;
+  titleCell.font = { bold: true, size: 16, name: 'Calibri', color: { argb: LOP_EXPORT_WHITE } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_BRAND_ORANGE } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(1).height = 30;
+
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = subtitle;
+  subtitleCell.font = { bold: true, size: 11, name: 'Calibri', color: { argb: LOP_EXPORT_HEADER_DARK } };
+  subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_ROW_EVEN } };
+  subtitleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  sheet.getRow(2).height = 22;
+
+  sheet.mergeCells(3, 1, 3, colCount);
+  const instructionCell = sheet.getCell(3, 1);
+  instructionCell.value = instructionText;
+  instructionCell.font = {
+    italic: true,
+    size: 10,
+    name: 'Calibri',
+    color: { argb: LOP_EXPORT_INSTRUCTION_TEXT },
+  };
+  instructionCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOP_EXPORT_INSTRUCTION_FILL } };
+  instructionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
+  sheet.getRow(3).height = 20;
+
+  sheet.getRow(4).height = 6;
+
+  const headerRow = sheet.getRow(LOP_EXPORT_SHEET_HEADER_ROW);
+  headers.forEach((header, index) => {
+    headerRow.getCell(index + 1).value = header;
+  });
+  applyLopExportHeaderStyle(headerRow, colCount);
+
+  exportRows.forEach((rowObject, rowIndex) => {
+    const row = sheet.getRow(LOP_EXPORT_DATA_START_ROW + rowIndex);
+    headers.forEach((header, columnIndex) => {
+      assignExportCellValue(
+        row.getCell(columnIndex + 1),
+        header,
+        rowObject[header],
+        moneyHeaders,
+      );
+    });
+    styleLopBulkExportDataRow(row, rowIndex, colCount, rightAlignColumns);
+  });
+
+  columnWidths.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
+
+  sheet.autoFilter = {
+    from: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: 1 },
+    to: { row: LOP_EXPORT_SHEET_HEADER_ROW, column: colCount },
+  };
+
+  return sheet;
+}
+
+function lopBulkRightAlignColumnSet(headers, headerNames) {
+  const columns = new Set();
+  for (const headerName of headerNames) {
+    const index = headers.indexOf(headerName);
+    if (index >= 0) {
+      columns.add(index + 1);
+    }
+  }
+  return columns;
+}
+
+export async function buildLopBulkExportWorkbook(
+  overviewRows,
+  detailedRows,
+  {
+    subtitlePrefix = 'LOP Bulk Export',
+    month,
+    asOfDate,
+    employeeCount = overviewRows.length,
+  } = {},
+) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = LOP_EXPORT_COMPANY_NAME;
+  workbook.created = new Date();
+
+  const asOfLabel = asOfDate ?? month ?? '';
+  const employeeLabel = `${employeeCount} employee${employeeCount === 1 ? '' : 's'}`;
+  const overviewSubtitle = `${subtitlePrefix} — Overview — ${month} as of ${asOfLabel} — ${employeeLabel}`;
+  const detailedSubtitle = `${subtitlePrefix} — Detailed — ${month} as of ${asOfLabel} — ${detailedRows.length} deduction row${detailedRows.length === 1 ? '' : 's'}`;
+
+  appendLopBulkExportSheet(workbook, {
+    sheetName: 'Overview',
+    headers: LOP_BULK_OVERVIEW_HEADERS,
+    columnWidths: LOP_BULK_OVERVIEW_COLUMN_WIDTHS,
+    exportRows: overviewRows,
+    subtitle: overviewSubtitle,
+    rightAlignColumns: lopBulkRightAlignColumnSet(LOP_BULK_OVERVIEW_HEADERS, [
+      'Monthly salary',
+      'Loss of pay till date',
+      'Month-to-date payable',
+    ]),
+    moneyHeaders: LOP_BULK_OVERVIEW_MONEY_HEADERS,
+  });
+
+  appendLopBulkExportSheet(workbook, {
+    sheetName: 'Detailed',
+    headers: LOP_BULK_DETAILED_HEADERS,
+    columnWidths: LOP_BULK_DETAILED_COLUMN_WIDTHS,
+    exportRows: detailedRows,
+    subtitle: detailedSubtitle,
+    rightAlignColumns: lopBulkRightAlignColumnSet(LOP_BULK_DETAILED_HEADERS, [
+      'Loss of pay (days)',
+      'Per day salary',
+      'Daily loss of pay amount',
+      'Monthly salary',
+      'Loss of pay till date',
+      'Month-to-date payable',
+    ]),
+    moneyHeaders: LOP_BULK_DETAILED_MONEY_HEADERS,
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+export function buildSalaryExportWorkbook(summaries, month) {
+  const rows = summaries.map((item) => {
+    const { year, monthName } = parseSalaryPeriodKey(item.month);
+    const lopTillDate =
+      item.lopDeduction ??
+      (item.monthlySalary != null && item.payableEstimate != null
+        ? roundMoney(Math.max(0, item.monthlySalary - item.payableEstimate))
+        : null);
+    return {
+      Year: year,
+      Month: monthName,
+      'Employee Name': item.userName,
+      'Employee Code': item.employeeCode ?? '',
+      'Monthly salary': formatInrNumber(item.monthlySalary),
+      'Working Days': item.workingDaysInMonth,
+      Present: item.presentDays,
+      'Paid Leave': item.paidLeaveDays,
+      'Payable Days': item.payableDays,
+      'Loss of pay (days)': item.lopDays,
+      'Paid days (out of 30)': item.paidDaysOutOf30,
+      'Per day salary': formatInrNumber(item.perDaySalary),
+      'Loss of pay till date': formatInrNumber(lopTillDate),
+      'Month-to-date payable': formatInrNumber(item.payableEstimate),
+    };
   });
 
   const workbook = XLSX.utils.book_new();
-  const overviewSheet = XLSX.utils.json_to_sheet(overviewRows);
-  XLSX.utils.book_append_sheet(workbook, overviewSheet, 'Overview');
-  const detailedSheet = XLSX.utils.json_to_sheet(detailedRows);
-  XLSX.utils.book_append_sheet(workbook, detailedSheet, 'Detailed');
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Salary Summary');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
 
 export async function updateUserSalary(userId, payload, actorId) {
   const user = await loadSalarySubject(userId);
-
-  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  const subjectRoleId = user.roleId?._id?.toString() ?? user.roleId?.toString?.() ?? null;
-  if (adminRole && subjectRoleId && subjectRoleId === adminRole._id.toString()) {
-    throwError('Cannot modify the system admin account here.', 400);
-  }
 
   if (payload.monthlySalary !== undefined) {
     user.monthlySalary = payload.monthlySalary;

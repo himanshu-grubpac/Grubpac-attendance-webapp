@@ -3,9 +3,18 @@ import {
   COMPANY_WIDE_SCOPE_SLUG,
   hasCompanyWideScope,
   hasPermission,
+  SYSTEM_ROLE_SLUGS,
 } from '../../../shared/permissions.js';
 import { Department } from '../models/Department.js';
+import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
+
+/** Employee directory base query — excludes system Admin role unless includeAdmins. */
+export async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
+  if (includeAdmins) return {};
+  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
+  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+}
 
 function scopeError(message, statusCode = 403) {
   const error = new Error(message);
@@ -149,6 +158,21 @@ export async function resolveLeaveApprovalUserIds(actor) {
   ];
 }
 
+/** Direct reports + delegate chain for visibility rosters (all employment statuses). */
+async function resolveVisibilityReportUserIds(actor) {
+  const directReports = await User.find({ reportingManagerId: actor._id }).select('_id');
+  const delegatedManagers = await User.find({ delegateApproverId: actor._id }).select('_id');
+  const managerIds = delegatedManagers.map((item) => item._id);
+  const delegatedReports =
+    managerIds.length > 0
+      ? await User.find({ reportingManagerId: { $in: managerIds } }).select('_id')
+      : [];
+  return [
+    ...directReports.map((item) => item._id),
+    ...delegatedReports.map((item) => item._id),
+  ];
+}
+
 /** Team-scope user set for leave reads — same membership as approvals. */
 export async function resolveLeaveTeamUserIds(actor) {
   return resolveLeaveApprovalUserIds(actor);
@@ -161,7 +185,7 @@ export async function resolveLeaveTeamUserIds(actor) {
 export async function resolveManagedTeamUserIds(actor) {
   const idSet = new Set();
 
-  const reportIds = await resolveLeaveApprovalUserIds(actor);
+  const reportIds = await resolveVisibilityReportUserIds(actor);
   reportIds.forEach((id) => idSet.add(id.toString()));
 
   const managedDeptIds = [
@@ -181,7 +205,6 @@ export async function resolveManagedTeamUserIds(actor) {
   if (uniqueDeptIds.length > 0) {
     const deptMembers = await User.find({
       departmentId: { $in: uniqueDeptIds },
-      isActive: true,
     }).select('_id');
     deptMembers.forEach((user) => idSet.add(user._id.toString()));
   }

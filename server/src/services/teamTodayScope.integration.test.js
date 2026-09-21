@@ -25,7 +25,11 @@ let memoryServer;
 let sequence = 0;
 
 const RM_PERMS = [PERMISSIONS.ATTENDANCE_READ_TEAM];
-const ADMIN_PERMS = [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM];
+const ADMIN_PERMS = [
+  PERMISSIONS.ATTENDANCE_READ_ALL,
+  PERMISSIONS.ATTENDANCE_READ_TEAM,
+  PERMISSIONS.EMPLOYEES_RECORD_R,
+];
 
 before(async () => {
   memoryServer = await MongoMemoryReplSet.create({ replSet: { count: 1 } });

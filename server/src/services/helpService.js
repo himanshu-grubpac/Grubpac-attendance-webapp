@@ -313,7 +313,10 @@ export async function updateHelpTicketStatus(ticketId, actor, permissions, paylo
   }
 
   if (payload.priority !== undefined && payload.priority !== previousPriority) {
-    if (!hasPermission(permissions, PERMISSIONS.HELP_TICKET_X0)) {
+    if (
+      !hasPermission(permissions, PERMISSIONS.HELP_SET_PRIORITY) &&
+      !hasPermission(permissions, PERMISSIONS.HELP_MANAGE)
+    ) {
       throwError('You do not have permission to change ticket priority.', 403);
     }
     ticket.priority = payload.priority;

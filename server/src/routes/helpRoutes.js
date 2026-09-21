@@ -41,7 +41,11 @@ router.get(
 
 router.patch(
   '/tickets/:id',
-  requirePermission(PERMISSIONS.HELP_TICKET_X1, PERMISSIONS.HELP_TICKET_U),
+  requirePermission(
+    PERMISSIONS.HELP_TICKET_X1,
+    PERMISSIONS.HELP_TICKET_U,
+    PERMISSIONS.HELP_SET_PRIORITY,
+  ),
   asyncHandler(updateTicketStatusHandler),
 );
 

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { PERMISSIONS } from '@shared/permissions.js';
 import { formatISTDateTime } from '../../utils/datetime.js';
 import { helpApi, getErrorMessage } from '../../services/api.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
 import HelpStatusBadge from '../../components/HelpStatusBadge.jsx';
@@ -81,6 +83,9 @@ function uploadFileToS3(uploadUrl, file, headers = {}) {
 }
 
 export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
+  const { hasPermission } = useAuth();
+  const canSetPriority =
+    hasPermission(PERMISSIONS.HELP_SET_PRIORITY) || hasPermission(PERMISSIONS.HELP_MANAGE);
   const { showSuccess } = useToast();
   const { id } = useParams();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
@@ -397,15 +402,17 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
                 aria-label="Status"
               />
             </label>
-            <label className="field-inline form-field--sm">
-              <span className="label">Set Priority</span>
-              <SelectField
-                value={priorityValue}
-                onChange={setPriorityValue}
-                options={PRIORITY_OPTIONS}
-                aria-label="Set Priority"
-              />
-            </label>
+            {canSetPriority ? (
+              <label className="field-inline form-field--sm">
+                <span className="label">Set Priority</span>
+                <SelectField
+                  value={priorityValue}
+                  onChange={setPriorityValue}
+                  options={PRIORITY_OPTIONS}
+                  aria-label="Set Priority"
+                />
+              </label>
+            ) : null}
             <button type="submit" className="btn btn-primary" disabled={updatingStatus}>
               {updatingStatus ? 'Saving…' : 'Save changes'}
             </button>

@@ -60,8 +60,8 @@ import {
   applyTeamScopeToEmployeeQuery as applyEmployeeTeamScope,
   assertDepartmentInAccessibleSet,
   assertManagedDepartmentsAccessible,
+  buildEmployeeDirectoryQuery,
   isUserInTeamScope,
-  isUserVisibleToActor,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
 import {
@@ -228,20 +228,13 @@ async function assertCanAssignRole(actor, roleId, permissions = []) {
   }
 }
 
-async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
-  if (includeAdmins) return {};
-  const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
-  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
-}
-
 async function buildEmployeeDirectoryQueryWithRoleFilter(requestedRoleId) {
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id');
   const adminRoleId = adminRole?._id?.toString() ?? null;
   // Admins are listed when the role filter is All — or when the Admin role
   // itself is selected (previously that combination matched nothing).
   const includeAdmins = !requestedRoleId || (adminRoleId && String(requestedRoleId) === adminRoleId);
-  if (includeAdmins) return {};
-  return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+  return buildEmployeeDirectoryQuery({ includeAdmins });
 }
 
 async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo }) {

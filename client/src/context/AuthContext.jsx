@@ -8,6 +8,7 @@ import {
 } from 'react';
 import {
   PERMISSIONS,
+  SYSTEM_ROLE_SLUGS,
   hasAdminPortalAccess as userHasAdminPortalAccess,
   hasAnyPermission as userHasAnyPermission,
   hasEmployeePortalAccess as userHasEmployeePortalAccess,
@@ -33,6 +34,11 @@ function readStoredLoginPortal() {
     // Ignore storage failures.
   }
   return null;
+}
+
+function resolveUserRoleSlug(user) {
+  if (!user) return null;
+  return user.roleSlug ?? user.role?.slug ?? user.role ?? null;
 }
 
 function storeLoginPortal(portal) {
@@ -240,7 +246,9 @@ export function AuthProvider({ children }) {
       isAdmin: loginPortal === 'admin',
       hasAdminPortalAccess: userHasAdminPortalAccess(user?.permissions),
       hasEmployeePortalAccess: userHasEmployeePortalAccess(user?.permissions),
-      canSwitchPortal: userHasPermission(user?.permissions, PERMISSIONS.PORTAL_SWITCH),
+      canSwitchPortal:
+        userHasPermission(user?.permissions, PERMISSIONS.PORTAL_SWITCH) &&
+        resolveUserRoleSlug(user) !== SYSTEM_ROLE_SLUGS.ADMIN,
       hasPermission: (permission) => userHasPermission(user?.permissions, permission),
       hasAnyPermission: (permissions) => userHasAnyPermission(user?.permissions, permissions),
     }),

@@ -28,7 +28,6 @@ const ALL_COLUMNS = [
   { key: 'name', label: 'Name', always: true },
   { key: 'employeeCode', label: 'Emp code' },
   { key: 'email', label: 'Email' },
-  { key: 'employeeCode', label: 'Employee code' },
   { key: 'mobile', label: 'Mobile' },
   { key: 'department', label: 'Department' },
   { key: 'designation', label: 'Designation' },

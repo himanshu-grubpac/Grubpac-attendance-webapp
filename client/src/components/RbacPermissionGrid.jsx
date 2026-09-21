@@ -54,7 +54,7 @@ const EXTRA_ACTION_LABELS = {
   'rbac.role.x0': 'Assign to users',
   'audit.log.x0': 'Export',
   'audit.log.x1': 'Run archive',
-  'help.ticket.x0': 'Assign',
+  'help.ticket.x0': 'Set Priority',
   'help.ticket.x1': 'Close',
   'help.ticket.x2': 'Download attachment',
   'emp.punch.x0': 'Undo punch',

@@ -298,7 +298,6 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
       employeeCode: employee.employeeCode ?? null,
       employeeName: employee.name,
       department: employee.departmentId?.toString?.() ?? null,
-      joiningDate: employee.joiningDate ?? null,
       periodKey: month,
       grossSalary,
       workingDays: summary.workingDaysInMonth,
@@ -327,7 +326,6 @@ function buildAuditRow(employee, month, lopRecordsByUser, transfersByUser, settl
     employeeCode: employee.employeeCode ?? null,
     employeeName: employee.name,
     department: employee.departmentId?.toString?.() ?? null,
-    joiningDate: employee.joiningDate ?? null,
     periodKey: month,
     grossSalary,
     workingDays: summary.workingDaysInMonth,
@@ -557,22 +555,6 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
     months.push(`${year}-${String(m).padStart(2, '0')}`);
   }
 
-  if (months.length === 0) {
-    return {
-      employee: {
-        id: subject._id.toString(),
-        name: subject.name,
-        employeeCode: subject.employeeCode ?? null,
-        monthlySalary: subject.monthlySalary ?? null,
-        salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
-        salaryCurrency: 'INR',
-        joiningDate: subject.joiningDate ?? null,
-        createdAt: subject.createdAt ?? null,
-      },
-      history: [],
-    };
-  }
-
   // Determine date range for bulk fetch (need full year data for quota consumption)
   const lastMonthRange = parseMonthInputAsISTRange(months[months.length - 1]);
 
@@ -672,7 +654,7 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
   }
 
   const employees = await User.find(employeeQuery)
-    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId joiningDate')
+    .select('_id name employeeCode monthlySalary salaryEffectiveFrom departmentId reportingManagerId')
     .sort({ name: 1 })
     .lean();
 

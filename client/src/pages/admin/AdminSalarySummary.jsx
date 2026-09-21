@@ -12,6 +12,8 @@ import { useEscapeKey } from '../../hooks/useEscapeKey.js';
 import { formatINRCurrency, formatISTDate, formatISTDateTime } from '../../utils/datetime.js';
 import { formatInrInput, parseInrInput } from '../../utils/formatNumber.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import { usePortalSync } from '../../hooks/usePortalSync.js';
+import { broadcastSalaryPayrollSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog.jsx';
@@ -19,9 +21,15 @@ import { SalaryHistorySection, TeamAuditSection } from './SalaryAuditSections.js
 import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
 import InrInput from '../../components/InrInput.jsx';
-import { getTodayMonthIst } from '../../components/MonthField.jsx';
-import { useOldestJoiningYear } from '../../hooks/useOldestJoiningYear.js';
-import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
+import {
+  buildSalaryMonthOptions,
+  buildSalaryYearOptions,
+  clampMonthPartForYear,
+  clampYearToCurrentIst,
+  formatMonthLabel,
+  getTodayMonthIst,
+} from '../../components/MonthField.jsx';
+import DownloadProgressModal from '../../components/DownloadProgressModal.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
@@ -138,27 +146,6 @@ function parseMonthFilterValue(value) {
 function toMonthFilterValue(year, month) {
   return `${year}-${month}`;
 }
-
-function getCurrentIstYear() {
-  return Number(getTodayMonthIst().split('-')[0]);
-}
-
-function clampYearToCurrent(year) {
-  const currentYear = getCurrentIstYear();
-  const parsed = Number(year);
-  if (!Number.isFinite(parsed) || parsed > currentYear) {
-    return String(currentYear);
-  }
-  return String(parsed);
-}
-
-const SALARY_MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => ({
-  value: String(index + 1).padStart(2, '0'),
-  label: new Intl.DateTimeFormat('en-IN', {
-    month: 'long',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2020, index, 1))),
-}));
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -285,13 +272,16 @@ function MonthlyPayrollTab({
   selectedId,
   setSelectedId,
 }) {
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
+
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   const debouncedSearch = useDebouncedValue(search, 350);
-  const currentYear = getCurrentIstYear();
-  const oldestYear = useOldestJoiningYear();
-  const yearOptions = useMemo(
-    () => buildDynamicYearOptions(oldestYear, currentYear),
-    [oldestYear, currentYear],
-  );
 
   const filtered = useMemo(() => {
     const query = debouncedSearch.trim().toLowerCase();
@@ -343,6 +333,7 @@ function MonthlyPayrollTab({
     () => summaries.find((item) => item.userId === selectedId) ?? null,
     [summaries, selectedId],
   );
+  const selectedLopTillDate = selectedSummary ? computeLopDeduction(selectedSummary) : null;
 
   const closeDetail = useCallback(() => setSelectedId(null), [setSelectedId]);
   useEscapeKey(Boolean(selectedSummary), closeDetail);
@@ -405,7 +396,7 @@ function MonthlyPayrollTab({
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={(value) => setYearFilter(clampYearToCurrent(value))}
+                  onChange={handleYearChange}
                   options={yearOptions}
                   aria-label="Salary year"
                   disabled={loading}
@@ -413,7 +404,7 @@ function MonthlyPayrollTab({
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={SALARY_MONTH_OPTIONS}
+                  options={monthOptions}
                   aria-label="Salary month"
                   disabled={loading}
                 />
@@ -440,7 +431,7 @@ function MonthlyPayrollTab({
               onClick={onExport}
               disabled={exporting || loading}
             >
-              {exporting ? 'Exporting…' : 'Export Excel'}
+              Export Excel
             </button>
           </div>
         </div>
@@ -473,9 +464,9 @@ function MonthlyPayrollTab({
                     </th>
                     <th>Employee</th>
                     <th>Code</th>
-                    <th className="salary-table__num">Base salary</th>
-                    <th className="salary-table__num">LOP deduction</th>
-                    <th className="salary-table__num">Net estimate</th>
+                    <th className="salary-table__num">Monthly salary</th>
+                    <th className="salary-table__num">Loss of pay till date</th>
+                    <th className="salary-table__num">Month-to-date payable</th>
                     <th>Status</th>
                     <th className="cell-actions-col--text">Actions</th>
                   </tr>
@@ -510,13 +501,18 @@ function MonthlyPayrollTab({
                         <td data-label="Code" className="salary-table__code">
                           {item.employeeCode || '—'}
                         </td>
-                        <td data-label="Base salary" className="salary-table__num">
+                        <td data-label="Monthly salary" className="salary-table__num">
                           {formatINRCurrency(item.monthlySalary)}
+                          {item.paidDaysOutOf30 != null ? (
+                            <div className="muted small">
+                              Paid days (out of 30) {item.paidDaysOutOf30}
+                            </div>
+                          ) : null}
                         </td>
-                        <td data-label="LOP deduction" className="salary-table__num">
+                        <td data-label="Loss of pay till date" className="salary-table__num">
                           {deduction == null ? '—' : formatINRCurrency(deduction)}
                         </td>
-                        <td data-label="Net estimate" className="salary-table__num salary-table__net">
+                        <td data-label="Month-to-date payable" className="salary-table__num salary-table__net">
                           {formatINRCurrency(item.payableEstimate)}
                         </td>
                         <td data-label="Status">
@@ -547,11 +543,11 @@ function MonthlyPayrollTab({
                           {hasActiveFilters ? ' matching search' : ''})
                         </span>
                       </td>
-                      <td data-label="Base total" className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
-                      <td data-label="Deduction total" className="salary-table__num">
+                      <td data-label="Monthly salary total" className="salary-table__num">{formatINRCurrency(footerTotals.baseTotal)}</td>
+                      <td data-label="Loss of pay till date total" className="salary-table__num">
                         {formatINRCurrency(footerTotals.deductionTotal)}
                       </td>
-                      <td data-label="Net total" className="salary-table__num salary-table__net">
+                      <td data-label="Month-to-date payable total" className="salary-table__num salary-table__net">
                         {formatINRCurrency(footerTotals.netTotal)}
                       </td>
                       <td colSpan={2} data-label="" aria-hidden="true" />
@@ -606,15 +602,25 @@ function MonthlyPayrollTab({
                       <dd>{selectedSummary.payableDays}</dd>
                     </div>
                     <div>
-                      <dt>LOP days</dt>
+                      <dt>Loss of pay (days)</dt>
                       <dd>{selectedSummary.lopDays}</dd>
+                    </div>
+                    <div>
+                      <dt>Paid days (out of 30)</dt>
+                      <dd>{selectedSummary.paidDaysOutOf30 ?? '—'}</dd>
                     </div>
                     <div>
                       <dt>Per day (INR)</dt>
                       <dd>{formatINRCurrency(selectedSummary.perDaySalary)}</dd>
                     </div>
                     <div>
-                      <dt>Net estimate (INR)</dt>
+                      <dt>Loss of pay till date (INR)</dt>
+                      <dd>
+                        {selectedLopTillDate == null ? '—' : formatINRCurrency(selectedLopTillDate)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Month-to-date payable (INR)</dt>
                       <dd>{formatINRCurrency(selectedSummary.payableEstimate)}</dd>
                     </div>
                   </dl>
@@ -754,6 +760,10 @@ function SalaryStructureTab({ canManageSalary }) {
 
     try {
       await salaryApi.updateUserSalary(editing.id, validation.data);
+      broadcastSalaryPayrollSync({
+        userId: editing.id,
+        salaryEffectiveFrom: validation.data.salaryEffectiveFrom,
+      });
       showSuccess(`Salary updated for ${editing.name}.`);
       closeEdit();
       await loadStructure();
@@ -975,6 +985,15 @@ function SalaryStructureTab({ canManageSalary }) {
 function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMonthPartFilter, canManageSalary }) {
   const { showSuccess } = useToast();
   const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const yearOptions = useMemo(() => buildSalaryYearOptions(), [yearFilter, monthPartFilter]);
+  const monthOptions = useMemo(() => buildSalaryMonthOptions(yearFilter), [yearFilter]);
+
+  const handleYearChange = (value) => {
+    const nextYear = clampYearToCurrentIst(value);
+    setYearFilter(nextYear);
+    setMonthPartFilter((currentMonth) => clampMonthPartForYear(nextYear, currentMonth));
+  };
+
   const [transfers, setTransfers] = useState([]);
   const [stats, setStats] = useState(null);
   const [pagination, setPagination] = useState({
@@ -995,12 +1014,6 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
   const [failReason, setFailReason] = useState('');
   const [failError, setFailError] = useState('');
   const failModalTitleId = 'salary-transfer-fail-title';
-  const currentYear = getCurrentIstYear();
-  const oldestYear = useOldestJoiningYear();
-  const yearOptions = useMemo(
-    () => buildDynamicYearOptions(oldestYear, currentYear),
-    [oldestYear, currentYear],
-  );
 
   const loadTransfers = useCallback(async () => {
     setLoading(true);
@@ -1219,7 +1232,7 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
               <div className="salary-toolbar__period">
                 <SelectField
                   value={yearFilter}
-                  onChange={(value) => setYearFilter(clampYearToCurrent(value))}
+                  onChange={handleYearChange}
                   options={yearOptions}
                   aria-label="Transfer year"
                   disabled={loading || generating}
@@ -1227,7 +1240,7 @@ function TransfersTab({ month, yearFilter, monthPartFilter, setYearFilter, setMo
                 <SelectField
                   value={monthPartFilter}
                   onChange={setMonthPartFilter}
-                  options={SALARY_MONTH_OPTIONS}
+                  options={monthOptions}
                   aria-label="Transfer month"
                   disabled={loading || generating}
                 />
@@ -1635,18 +1648,22 @@ export default function AdminSalarySummary() {
     ? searchParams.get('tab')
     : 'monthly';
 
-  const [yearFilter, setYearFilter] = useState(() =>
-    clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
-  );
-  const [monthPartFilter, setMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
-  const [transferYearFilter, setTransferYearFilter] = useState(() =>
-    clampYearToCurrent(parseMonthFilterValue(getTodayMonthIst()).year),
-  );
-  const [transferMonthPartFilter, setTransferMonthPartFilter] = useState(
-    () => parseMonthFilterValue(getTodayMonthIst()).month,
-  );
+  const [yearFilter, setYearFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampYearToCurrentIst(year);
+  });
+  const [monthPartFilter, setMonthPartFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampMonthPartForYear(clampYearToCurrentIst(year), month);
+  });
+  const [transferYearFilter, setTransferYearFilter] = useState(() => {
+    const { year } = parseMonthFilterValue(getTodayMonthIst());
+    return clampYearToCurrentIst(year);
+  });
+  const [transferMonthPartFilter, setTransferMonthPartFilter] = useState(() => {
+    const { year, month } = parseMonthFilterValue(getTodayMonthIst());
+    return clampMonthPartForYear(clampYearToCurrentIst(year), month);
+  });
   const month = useMemo(
     () => toMonthFilterValue(yearFilter, monthPartFilter),
     [yearFilter, monthPartFilter],
@@ -1661,8 +1678,13 @@ export default function AdminSalarySummary() {
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
+  const [downloadModal, setDownloadModal] = useState({
+    open: false,
+    subtitle: '',
+    error: '',
+  });
   const [error, setError] = useState('');
+  const monthLabel = useMemo(() => formatMonthLabel(month), [month]);
 
   const setActiveTab = useCallback(
     (tabId) => {
@@ -1688,6 +1710,14 @@ export default function AdminSalarySummary() {
     }
   }, [month]);
 
+  const handleAttendanceSalarySync = useCallback(() => {
+    if (activeTab === 'monthly') {
+      loadSummaries();
+    }
+  }, [activeTab, loadSummaries]);
+
+  usePortalSync(handleAttendanceSalarySync, { topics: [PORTAL_TOPICS.PAYROLL], month });
+
   useEffect(() => {
     if (activeTab === 'monthly') {
       loadSummaries();
@@ -1698,18 +1728,27 @@ export default function AdminSalarySummary() {
     setPage(1);
   }, [month, search]);
 
+  const closeDownloadModal = useCallback(() => {
+    setDownloadModal({ open: false, subtitle: '', error: '' });
+  }, []);
+
   const handleExport = useCallback(async () => {
-    setExporting(true);
+    setDownloadModal({
+      open: true,
+      subtitle: `Salary summary for ${monthLabel}`,
+      error: '',
+    });
     setError('');
     try {
       const blob = await salaryApi.exportSummary(month);
       downloadBlob(blob, `salary-summary-${month}.xlsx`);
+      closeDownloadModal();
     } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setExporting(false);
+      const message = getErrorMessage(err);
+      setDownloadModal((current) => ({ ...current, error: message }));
+      setError(message);
     }
-  }, [month]);
+  }, [closeDownloadModal, month, monthLabel]);
 
   const handleSettingsSaved = useCallback(
     (settings) => {
@@ -1756,7 +1795,7 @@ export default function AdminSalarySummary() {
           meta={meta}
           loading={loading}
           error={error}
-          exporting={exporting}
+          exporting={downloadModal.open}
           onExport={handleExport}
           search={search}
           setSearch={setSearch}
@@ -1790,6 +1829,13 @@ export default function AdminSalarySummary() {
           onGoToTransfers={() => setActiveTab('transfers')}
         />
       ) : null}
+
+      <DownloadProgressModal
+        open={downloadModal.open}
+        subtitle={downloadModal.subtitle}
+        error={downloadModal.error}
+        onClose={closeDownloadModal}
+      />
     </div>
   );
 }

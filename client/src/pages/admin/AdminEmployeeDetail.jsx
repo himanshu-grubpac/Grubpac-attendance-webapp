@@ -95,6 +95,10 @@ function DetailField({ label, value, valueClassName, fullWidth = false }) {
   );
 }
 
+function isSystemAdminEmployee(employee) {
+  return employee?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN;
+}
+
 function EmploymentEditFields({
   employee,
   orgForm,
@@ -113,6 +117,7 @@ function EmploymentEditFields({
   const selectedRoleSlug = roles.find((role) => role.id === orgForm.roleId)?.slug ?? null;
   const reportingManagerRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.EMPLOYEE;
   const managedDeptsRequired = selectedRoleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER;
+  const hideOrgScopeFields = isSystemAdminEmployee(employee);
 
   return (
     <div className="employee-detail-form__grid">
@@ -242,7 +247,7 @@ function EmploymentEditFields({
         <FieldError message={fieldErrors.roleId} />
       </div>
 
-      {hasDepartments ? (
+      {!hideOrgScopeFields && (hasDepartments ? (
         <div className="employee-detail-field-control">
           <DetailLabel required>Department</DetailLabel>
           <SelectField
@@ -262,7 +267,7 @@ function EmploymentEditFields({
             <Link to="/admin/departments">Create departments</Link> before assigning employees.
           </p>
         </div>
-      )}
+      ))}
 
       <div className="employee-detail-field-control">
         <DetailLabel required={reportingManagerRequired} optional={!reportingManagerRequired}>
@@ -283,7 +288,7 @@ function EmploymentEditFields({
         <FieldError message={fieldErrors.reportingManagerId} />
       </div>
 
-      {hasDepartments ? (
+      {!hideOrgScopeFields && hasDepartments ? (
         <div className="employee-detail-field-control">
           <DetailLabel required={managedDeptsRequired} optional={!managedDeptsRequired}>
             Managed departments (team scope)
@@ -855,7 +860,12 @@ export default function AdminEmployeeDetail() {
   }
 
   const departmentLabel = employee.departmentName || employee.department;
-  const summaryLine = [employee.roleName, departmentLabel, employee.designation]
+  const hideOrgScopeFields = isSystemAdminEmployee(employee);
+  const summaryLine = [
+    employee.roleName,
+    hideOrgScopeFields ? null : departmentLabel,
+    employee.designation,
+  ]
     .filter(Boolean)
     .join(' · ');
   const inFocusedMode = orgEditing;
@@ -1038,7 +1048,9 @@ export default function AdminEmployeeDetail() {
                 <DetailField label="First name" value={employee.firstName} />
                 <DetailField label="Last name" value={employee.lastName} />
                 <DetailField label="Role" value={employee.roleName} />
-                <DetailField label="Department" value={departmentLabel} />
+                {!hideOrgScopeFields ? (
+                  <DetailField label="Department" value={departmentLabel} />
+                ) : null}
                 <DetailField label="Designation" value={employee.designation} />
                 <DetailField label="Reporting manager" value={employee.reportingManagerName} />
                 <DetailField label="Delegate approver" value={employee.delegateApproverName} />
