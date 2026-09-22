@@ -88,11 +88,10 @@ export function getCurrentIstYearValue() {
   );
 }
 
-/** Leave/salary year selectors: 2000 through current IST year inclusive. */
+/** Leave/salary year selectors: integer, not in the future. */
 export const pastOrCurrentYearSchema = z.coerce
   .number()
   .int()
-  .min(2000)
   .refine((year) => year <= getCurrentIstYearValue(), {
     message: 'Year cannot be in the future.',
   });

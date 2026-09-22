@@ -81,7 +81,8 @@ export async function loginUser(body, portal, auditContext = {}) {
       reason: 'invalid_or_inactive',
       ...loginAuditContext,
     });
-    const error = new Error('Invalid credentials.');
+    const idType = detectIdentifierType(parsed.identifier);
+    const error = new Error(idType === 'email' ? 'Invalid email. Please try again.' : idType === 'mobile' ? 'Invalid mobile number. Please try again.' : 'Invalid employee code. Please try again.');
     error.statusCode = 401;
     throw error;
   }
@@ -94,7 +95,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       reason: 'invalid_or_inactive',
       ...loginAuditContext,
     });
-    const error = new Error('Invalid credentials.');
+    const error = new Error('Invalid credentials. Please try again.');
     error.statusCode = 401;
     throw error;
   }
@@ -111,7 +112,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       endingDate: user.endingDate,
       ...loginAuditContext,
     });
-    const error = new Error('Your employment has ended. Contact your administrator.');
+    const error = new Error('Your employment has ended. Please try again later or contact your administrator.');
     error.statusCode = 403;
     throw error;
   }
@@ -126,7 +127,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       portal,
       ...loginAuditContext,
     });
-    const error = new Error('You do not have access to this portal.');
+    const error = new Error('You do not have access to this portal. Please try again with the correct portal.');
     error.statusCode = 403;
     throw error;
   }
@@ -139,7 +140,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       portal,
       ...loginAuditContext,
     });
-    const error = new Error('You do not have access to this portal.');
+    const error = new Error('You do not have access to this portal. Please try again with the correct portal.');
     error.statusCode = 403;
     throw error;
   }
@@ -165,7 +166,7 @@ export async function loginUser(body, portal, auditContext = {}) {
       reason: 'bad_password',
       ...loginAuditContext,
     });
-    const error = new Error('Invalid credentials.');
+    const error = new Error(isFourDigit ? 'Wrong PIN. Please try again.' : 'Wrong password. Please try again.');
     error.statusCode = 401;
     throw error;
   }

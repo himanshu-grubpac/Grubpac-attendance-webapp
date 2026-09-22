@@ -1463,7 +1463,7 @@ export async function importEmployeesFromRowsUpsert(rows, createdBy, options = {
 
   for (const row of uniqueRows) {
     const email = String(row.data.email ?? '').trim().toLowerCase();
-    const mobile = String(row.data.mobile ?? '').replace(/\D/g, '').slice(0, 10);
+    const mobile = String(row.data.mobile ?? '').replace(/\D/g, '').slice(-10);
     const employeeCode = normalizeEmployeeCode(row.data.employeeCode);
 
     if (!email && !mobile && !employeeCode) {
