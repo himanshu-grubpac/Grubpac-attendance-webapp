@@ -14,12 +14,13 @@ import { showFormError } from '../../utils/formErrors.js';
 import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 import RequestsTabs from '../../components/RequestsTabs.jsx';
+import {
+  DECISION_UNDO_FALLBACK_MS,
+  resolveDecisionUndoExpiresAt,
+  stagedDecisionUndoRemainingMs,
+} from '../../utils/decisionUndo.js';
 
 const QUEUE_SIZE = 20;
-
-// Fallback only: the popup countdown prefers the server-authoritative
-// `decisionUndoExpiresAt` (decision/assessment windows are ~15s).
-const DECISION_UNDO_MS = 15000;
 const PENDING_SETTLE_POLL_MS = 5000;
 const MAX_SETTLE_POLLS = 24;
 
@@ -131,12 +132,6 @@ const MONTH_PART_OPTIONS = [
 function toMonthFilterValue(year, monthPart, fallbackYear) {
   if (!monthPart) return undefined;
   return `${year || fallbackYear}-${monthPart}`;
-}
-
-function decisionUndoDurationMs(request) {
-  const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
-  if (!Number.isFinite(expiresAt)) return DECISION_UNDO_MS;
-  return Math.max(0, expiresAt - Date.now());
 }
 
 const ASSESSMENT_OPTIONS = [
@@ -385,6 +380,28 @@ export default function AdminCompOffRequests() {
     loadRequests({ nextPage: 1, nextQueueStatus: value });
   }
 
+  function syncQueueAfterDecision(nextQueueStatus, nextPage = pageRef.current) {
+    setQueueStatus(nextQueueStatus);
+    return loadRequests({ nextPage, nextQueueStatus });
+  }
+
+  function showDecisionUndoPopup({ message, undoExpiresAtMs, onUndo, afterSync }) {
+    const durationMs = Number.isFinite(undoExpiresAtMs)
+      ? Math.max(0, undoExpiresAtMs - Date.now())
+      : DECISION_UNDO_FALLBACK_MS;
+    if (durationMs <= 0) return;
+    showActionPopup({
+      message,
+      undoExpiresAtMs,
+      onExpired: async () => {
+        showError('The undo window has expired. Refreshing the queue.');
+        await afterSync?.();
+      },
+      onUndo,
+      durationMs,
+    });
+  }
+
   function handleEmployeeChange(value) {
     setEmployeeFilter(value);
     loadRequests({ nextPage: 1, nextEmployee: value });
@@ -426,32 +443,32 @@ export default function AdminCompOffRequests() {
       const response = decision === 'reject'
         ? await compOffApi.reject(id, payload)
         : await compOffApi.approve(id, payload);
-      const durationMs = decisionUndoDurationMs(response?.request);
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request, { pendingField: 'pendingAction' });
+      const nextQueue = decision === 'reject' ? 'closed' : 'approved';
       setDecisionModal({ open: false, item: null, comment: '' });
-      if (durationMs > 0) {
-        const decided = decision === 'reject' ? 'declined' : 'approved';
-        showActionPopup({
-          message: `Comp off request ${decided}. If done by mistake, click Undo to revert it.`,
-          undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await compOffApi.undo(id);
-              showSuccess('Comp off decision undone.');
-              broadcastLeaveItemSync(item);
-              await loadRequests({ nextPage: pageRef.current });
-              setDecisionModal({ open: true, item, comment: note });
-            } catch (err) {
-              showError(getErrorMessage(err));
-              await loadRequests({ nextPage: pageRef.current });
-            }
-          },
-          durationMs,
-        });
-      } else {
-        showSuccess(`Comp off request ${decision === 'reject' ? 'declined' : 'approved'}.`);
+      const decided = decision === 'reject' ? 'declined' : 'approved';
+      showDecisionUndoPopup({
+        message: `Comp off request ${decided}. If done by mistake, click Undo to revert it.`,
+        undoExpiresAtMs,
+        afterSync: () => syncQueueAfterDecision(nextQueue),
+        onUndo: async () => {
+          try {
+            await compOffApi.undo(id);
+            showSuccess('Comp off decision undone.');
+            broadcastLeaveItemSync(item);
+            await syncQueueAfterDecision('pending');
+            setDecisionModal({ open: true, item, comment: note });
+          } catch (err) {
+            showError(getErrorMessage(err));
+            await syncQueueAfterDecision(nextQueue);
+          }
+        },
+      });
+      if (!stagedDecisionUndoRemainingMs(response?.request, { pendingField: 'pendingAction' })) {
+        showSuccess(`Comp off request ${decided}.`);
       }
       broadcastLeaveItemSync(item);
-      await loadRequests({ nextPage: pageRef.current });
+      await syncQueueAfterDecision(nextQueue);
     } catch (err) {
       showError(getErrorMessage(err));
       // A 409 race means the row changed underneath us — resync.
@@ -474,30 +491,29 @@ export default function AdminCompOffRequests() {
     setError('');
     try {
       const response = await compOffApi.cancelApproved(item.id, { comment: note });
-      const durationMs = decisionUndoDurationMs(response?.request);
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request, { pendingField: 'pendingAction' });
       setCancelModal({ open: false, item: null, comment: '' });
-      if (durationMs > 0) {
-        showActionPopup({
-          message: 'Approved comp off cancelled. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await compOffApi.undo(item.id);
-              showSuccess('Cancellation undone. Comp off restored to approved.');
-              broadcastLeaveItemSync(item);
-              await loadRequests({ nextPage: pageRef.current });
-            } catch (err) {
-              showError(getErrorMessage(err));
-              await loadRequests({ nextPage: pageRef.current });
-            }
-          },
-          durationMs,
-        });
-      } else {
+      showDecisionUndoPopup({
+        message: 'Approved comp off cancelled. If done by mistake, click Undo to revert it.',
+        undoExpiresAtMs,
+        afterSync: () => syncQueueAfterDecision('closed'),
+        onUndo: async () => {
+          try {
+            await compOffApi.undo(item.id);
+            showSuccess('Cancellation undone. Comp off restored to approved.');
+            broadcastLeaveItemSync(item);
+            await syncQueueAfterDecision('approved');
+          } catch (err) {
+            showError(getErrorMessage(err));
+            await syncQueueAfterDecision('closed');
+          }
+        },
+      });
+      if (!stagedDecisionUndoRemainingMs(response?.request, { pendingField: 'pendingAction' })) {
         showSuccess('Approved comp off cancelled.');
       }
       broadcastLeaveItemSync(item);
-      await loadRequests({ nextPage: pageRef.current });
+      await syncQueueAfterDecision('closed');
     } catch (err) {
       showError(getErrorMessage(err));
       // A 409 race means the row changed underneath us — resync.
@@ -528,30 +544,29 @@ export default function AdminCompOffRequests() {
         comment: remark,
       };
       const response = await compOffApi.assess(item.id, payload);
-      const durationMs = decisionUndoDurationMs(response?.request);
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request, { pendingField: 'pendingAction' });
       setAssessment({ open: false, item: null, values: {}, comment: '' });
-      if (durationMs > 0) {
-        showActionPopup({
-          message: 'Assessment recorded. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-          onUndo: async () => {
-            try {
-              await compOffApi.undoAssess(item.id);
-              showSuccess('Comp off assessment undone.');
-              broadcastLeaveItemSync(item);
-              await loadRequests({ nextPage: pageRef.current });
-            } catch (err) {
-              showError(getErrorMessage(err));
-              await loadRequests({ nextPage: pageRef.current });
-            }
-          },
-          durationMs,
-        });
-      } else {
+      showDecisionUndoPopup({
+        message: 'Assessment recorded. If done by mistake, click Undo to revert it.',
+        undoExpiresAtMs,
+        afterSync: () => syncQueueAfterDecision('assessed'),
+        onUndo: async () => {
+          try {
+            await compOffApi.undoAssess(item.id);
+            showSuccess('Comp off assessment undone.');
+            broadcastLeaveItemSync(item);
+            await syncQueueAfterDecision('worked');
+          } catch (err) {
+            showError(getErrorMessage(err));
+            await syncQueueAfterDecision('assessed');
+          }
+        },
+      });
+      if (!stagedDecisionUndoRemainingMs(response?.request, { pendingField: 'pendingAction' })) {
         showSuccess('Comp off assessment recorded.');
       }
       broadcastLeaveItemSync(item);
-      await loadRequests({ nextPage: pageRef.current });
+      await syncQueueAfterDecision('assessed');
     } catch (err) {
       showError(getErrorMessage(err));
       await loadRequests({ nextPage: pageRef.current });

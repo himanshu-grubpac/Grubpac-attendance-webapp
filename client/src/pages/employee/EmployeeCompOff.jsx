@@ -10,13 +10,19 @@ import DateField from '../../components/DateField.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
+import {
+  DECISION_UNDO_FALLBACK_MS,
+  isDecisionUndoExpired,
+  parseDecisionUndoExpiresAt,
+  resolveDecisionUndoExpiresAt,
+  submitUndoRemainingMs,
+  SUBMIT_UNDO_FALLBACK_MS,
+  stagedDecisionUndoRemainingMs,
+} from '../../utils/decisionUndo.js';
 
 // Quiet background settle cadence for rows with a staged (undoable) action.
 const PENDING_SETTLE_POLL_MS = 5000;
 const MAX_SETTLE_POLLS = 24;
-const SUBMIT_UNDO_FALLBACK_MS = 10000;
-// Staged withdrawals use the 15s decision window, like other staged actions.
-const WITHDRAW_UNDO_FALLBACK_MS = 15000;
 
 /** Comp-off status → badge tone (local map; classes already in App.css). */
 const COMP_OFF_STATUS_TONE = {
@@ -208,15 +214,13 @@ export default function EmployeeCompOff() {
       const req = response?.request ?? {};
       const snapshot = { ...form };
       setForm((current) => ({ ...current, startDate: getISTDateInputValue(), endDate: getISTDateInputValue(), reason: '' }));
-      const serverUndoMs = Date.parse(req.decisionUndoExpiresAt ?? '');
-      const undoMs = Number.isFinite(serverUndoMs)
-        ? Math.max(0, serverUndoMs - Date.now())
-        : SUBMIT_UNDO_FALLBACK_MS;
+      const undoExpiresAtMs = parseDecisionUndoExpiresAt(req.decisionUndoExpiresAt);
+      const undoMs = submitUndoRemainingMs(req, SUBMIT_UNDO_FALLBACK_MS);
       if (undoMs > 0) {
         showToast('Comp off request submitted.', {
           variant: 'success',
           durationMs: undoMs,
-          action: { label: 'Undo', onClick: () => handleUndoSubmit(req.id, snapshot) },
+          action: { label: 'Undo', onClick: () => handleUndoSubmit(req.id, snapshot, undoExpiresAtMs) },
         });
       } else {
         showSuccess('Comp off request submitted.');
@@ -240,8 +244,13 @@ export default function EmployeeCompOff() {
     }
   }
 
-  async function handleUndoSubmit(id, snapshot) {
+  async function handleUndoSubmit(id, snapshot, undoExpiresAtMs) {
     if (!id) return;
+    if (isDecisionUndoExpired(undoExpiresAtMs)) {
+      showToast('The undo window has expired.', { variant: 'error' });
+      loadRequests(page);
+      return;
+    }
     try {
       await compOffApi.withdraw(id);
       if (snapshot) setForm(snapshot);
@@ -259,8 +268,13 @@ export default function EmployeeCompOff() {
     }
   }
 
-  async function handleUndoWithdraw(id) {
+  async function handleUndoWithdraw(id, undoExpiresAtMs) {
     if (!id) return;
+    if (isDecisionUndoExpired(undoExpiresAtMs)) {
+      showToast('The undo window has expired.', { variant: 'error' });
+      loadRequests(page);
+      return;
+    }
     try {
       await compOffApi.undoWithdraw(id);
       showToast('Withdrawal undone. Your request is pending again.', { variant: 'info' });
@@ -291,15 +305,19 @@ export default function EmployeeCompOff() {
       // Legacy fallback: rows staged before the delete-on-withdraw change
       // still surface here with an Undo action until they settle.
       const req = response?.request ?? {};
-      const serverUndoMs = Date.parse(req.decisionUndoExpiresAt ?? '');
-      const undoMs = Number.isFinite(serverUndoMs)
-        ? Math.max(0, serverUndoMs - Date.now())
-        : WITHDRAW_UNDO_FALLBACK_MS;
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(req, {
+        pendingField: 'pendingAction',
+        fallbackWindowMs: DECISION_UNDO_FALLBACK_MS,
+      });
+      const undoMs = stagedDecisionUndoRemainingMs(req, {
+        pendingField: 'pendingAction',
+        fallbackWindowMs: DECISION_UNDO_FALLBACK_MS,
+      });
       if (undoMs > 0) {
         showToast('Withdrawal staged. The request cancels when the timer ends.', {
           variant: 'success',
           durationMs: undoMs,
-          action: { label: 'Undo', onClick: () => handleUndoWithdraw(item.id) },
+          action: { label: 'Undo', onClick: () => handleUndoWithdraw(item.id, undoExpiresAtMs) },
         });
       } else {
         showSuccess('Comp off request withdrawn.');
@@ -311,15 +329,20 @@ export default function EmployeeCompOff() {
     }
   }
 
-  const canWithdraw = useCallback(
-    (item) => {
-      if (item.status !== 'pending') return false;
-      if (item.pendingAction) return false;
-      const expiresAt = Date.parse(item.decisionUndoExpiresAt ?? '');
-      return Number.isFinite(expiresAt) && expiresAt > Date.now();
-    },
-    [],
-  );
+  const canWithdraw = useCallback((item) => {
+    if (item.status !== 'pending') return false;
+    if (item.pendingAction) return false;
+    const expiresAt = parseDecisionUndoExpiresAt(item.decisionUndoExpiresAt);
+    return expiresAt != null && expiresAt > Date.now();
+  }, []);
+
+  const canUndoWithdraw = useCallback((item) => {
+    if (item.status !== 'pending' || item.pendingAction !== 'cancelled') return false;
+    return stagedDecisionUndoRemainingMs(item, {
+      pendingField: 'pendingAction',
+      fallbackWindowMs: DECISION_UNDO_FALLBACK_MS,
+    }) > 0;
+  }, []);
 
   const balancePill = useMemo(() => {
     if (coAvailable === null) return null;
@@ -465,8 +488,20 @@ export default function EmployeeCompOff() {
                           Withdraw
                         </button>
                       )}
-                      {item.status === 'pending' && item.pendingAction === 'cancelled' && (
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleUndoWithdraw(item.id)}>
+                      {canUndoWithdraw(item) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() =>
+                            handleUndoWithdraw(
+                              item.id,
+                              resolveDecisionUndoExpiresAt(item, {
+                                pendingField: 'pendingAction',
+                                fallbackWindowMs: DECISION_UNDO_FALLBACK_MS,
+                              }),
+                            )
+                          }
+                        >
                           Undo withdraw
                         </button>
                       )}

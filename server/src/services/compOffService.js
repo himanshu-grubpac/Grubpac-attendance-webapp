@@ -54,6 +54,47 @@ const LEAVE_NOTIFICATION_DELAY_MS = env.leaveNotificationDelayMs;
 const COMP_OFF_LEAVE_TYPE_CODE = 'CO';
 /** Terminal statuses: an overlap check only considers non-terminal requests. */
 const ACTIVE_STATUSES = ['pending', 'approved', 'worked'];
+
+/**
+ * Maps an approval-queue tab to a Mongo filter that includes provisional
+ * (undo-window) rows whose committed `status` has not yet been written.
+ */
+export function buildCompOffApprovalStatusFilter(status) {
+  switch (status) {
+    case 'approved':
+      return {
+        $or: [
+          { status: 'approved' },
+          { status: 'pending', pendingAction: 'approved' },
+        ],
+      };
+    case 'closed':
+      return {
+        $or: [
+          { status: { $in: ['rejected', 'lapsed', 'cancelled'] } },
+          { status: 'pending', pendingAction: 'rejected' },
+          { status: 'approved', pendingAction: 'cancelled' },
+        ],
+      };
+    case 'worked':
+      return {
+        $or: [
+          { status: 'worked' },
+          { status: 'worked', pendingAction: 'assessed' },
+        ],
+      };
+    case 'assessed':
+      return {
+        $or: [
+          { status: 'assessed' },
+          { status: 'worked', pendingAction: 'assessed' },
+        ],
+      };
+    case 'pending':
+    default:
+      return { status: 'pending' };
+  }
+}
 const ASSESSMENT_RATE = { completed: 1, half: 0.5, none: 0 };
 
 /**
@@ -1706,12 +1747,17 @@ export async function listCompOffRequests(actor, permissions, query) {
     }
     filter.userId = query.userId;
   }
-  // Virtual queue: 'closed' covers every terminal non-credited outcome with
-  // real server-side pagination (rejected + lapsed + cancelled).
   if (query.status && query.status !== 'all') {
-    filter.status = query.status === 'closed'
-      ? { $in: ['rejected', 'lapsed', 'cancelled'] }
-      : query.status;
+    if (scope === 'approvals') {
+      Object.assign(filter, buildCompOffApprovalStatusFilter(query.status));
+    } else {
+      // Virtual queue: 'closed' covers every terminal non-credited outcome.
+      filter.status = query.status === 'closed'
+        ? { $in: ['rejected', 'lapsed', 'cancelled'] }
+        : query.status;
+    }
+  } else if (scope === 'approvals') {
+    filter.status = 'pending';
   }
 
   if (query.month) {
@@ -1731,9 +1777,12 @@ export async function listCompOffRequests(actor, permissions, query) {
   }
 
   const skip = (query.page - 1) * query.limit;
-  const resolvedStatus = filter.status ?? query.status;
+  const queueTab =
+    scope === 'approvals'
+      ? (query.status && query.status !== 'all' ? query.status : 'pending')
+      : (filter.status ?? query.status);
   const sort =
-    resolvedStatus === 'approved' || resolvedStatus === 'rejected'
+    queueTab === 'approved' || queueTab === 'closed' || queueTab === 'assessed'
       ? { decidedAt: -1, createdAt: -1, _id: -1 }
       : { createdAt: -1, _id: -1 };
   const [requests, total] = await Promise.all([

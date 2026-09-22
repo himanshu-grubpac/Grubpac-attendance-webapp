@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../context/ToastContext.jsx';
+import { ActionPopupProvider } from '../context/ActionPopupContext.jsx';
 import ApplyLeaveForm from '../pages/employee/ApplyLeaveForm.jsx';
 import { leaveApi } from '../services/api.js';
 
@@ -53,7 +54,9 @@ function setup(mode) {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <ApplyLeaveForm mode={mode} />
+        <ActionPopupProvider>
+          <ApplyLeaveForm mode={mode} />
+        </ActionPopupProvider>
       </ToastProvider>
     </MemoryRouter>,
   );

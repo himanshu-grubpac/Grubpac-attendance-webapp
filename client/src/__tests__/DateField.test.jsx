@@ -94,4 +94,24 @@ describe('DateField isDateAllowed gate', () => {
     expect(screen.getByRole('button', { name: SATURDAY })).toBeDisabled();
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('blocks year navigation before minYear', async () => {
+    const user = userEvent.setup();
+    render(
+      <DateField
+        value="2024-01-15"
+        onChange={() => {}}
+        min="2024-01-01"
+        minYear={2024}
+        aria-label="Joining date"
+      />,
+    );
+
+    await user.click(openPicker('Joining date'));
+
+    expect(screen.getByText('2024')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous year' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Previous month' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '2024-01-01' })).toBeEnabled();
+  });
 });

@@ -329,6 +329,39 @@ export async function peekLeaveDecisionToken(requestId, action, rawToken) {
 const LEAVE_DECISION_UNDO_MS = env.leaveDecisionUndoMs;
 
 /**
+ * Maps an approval-queue tab to a Mongo filter that includes provisional
+ * (undo-window) rows whose committed `status` has not yet been written.
+ */
+export function buildLeaveApprovalStatusFilter(status) {
+  switch (status) {
+    case 'approved':
+      return {
+        $or: [
+          { status: 'approved' },
+          { status: 'pending', pendingDecision: 'approved' },
+        ],
+      };
+    case 'rejected':
+      return {
+        $or: [
+          { status: 'rejected' },
+          { status: 'pending', pendingDecision: 'rejected' },
+        ],
+      };
+    case 'cancelled':
+      return {
+        $or: [
+          { status: 'cancelled' },
+          { status: 'approved', pendingDecision: 'cancelled' },
+        ],
+      };
+    case 'pending':
+    default:
+      return { status: 'pending' };
+  }
+}
+
+/**
  * Raw leave-type ObjectId for balance keying. Populating a deleted type
  * yields `leaveTypeId: null`, losing the id that balance rows are keyed by —
  * so fall back to a lean re-read. Only fires for orphaned-type requests.
@@ -1735,7 +1768,7 @@ export async function cancelApprovedLeaveByApprover(requestId, actor, permission
   }
 
   await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id, decisionComment, auditContext });
-  return request.toSafeJSON();
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 /**
@@ -2698,7 +2731,6 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view approval queue.', 403);
     }
-    filter.status = 'pending';
     if (hasCompanyWideScope(permissions, actor)) {
       // Admin/HR sees all pending
     } else {
@@ -2712,7 +2744,7 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (hasCompanyWideScope(permissions, actor)) {
       // unscoped
     } else {
-      // Direct reports (+ delegate chain) only — never managed departments.
+      // Full managed-team membership (direct reports, delegate chain, managed depts).
       const reportIds = await resolveLeaveTeamUserIds(actor);
       filter.userId = { $in: reportIds ?? [] };
     }
@@ -2773,7 +2805,14 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   if (query.status && query.status !== 'all') {
-    filter.status = query.status;
+    if (scope === 'approvals') {
+      delete filter.status;
+      Object.assign(filter, buildLeaveApprovalStatusFilter(query.status));
+    } else {
+      filter.status = query.status;
+    }
+  } else if (scope === 'approvals') {
+    filter.status = 'pending';
   }
 
   if (query.month) {
@@ -2793,10 +2832,13 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   const skip = (query.page - 1) * query.limit;
-  const resolvedStatus = filter.status ?? query.status;
+  const queueTab =
+    scope === 'approvals'
+      ? (query.status && query.status !== 'all' ? query.status : 'pending')
+      : (filter.status ?? query.status);
   // _id tiebreaker keeps offset pagination stable when timestamps tie.
   const sort =
-    resolvedStatus === 'approved' || resolvedStatus === 'rejected'
+    queueTab === 'approved' || queueTab === 'rejected' || queueTab === 'cancelled'
       ? { decidedAt: -1, createdAt: -1, _id: -1 }
       : { createdAt: -1, _id: -1 };
   const [requests, total] = await Promise.all([

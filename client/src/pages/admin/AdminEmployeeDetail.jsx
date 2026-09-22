@@ -15,6 +15,7 @@ import { validateForm } from '../../utils/validation.js';
 import ActionMenu from '../../components/ActionMenu.jsx';
 import BackLink from '../../components/BackLink.jsx';
 import DateField, { getTodayIstValue } from '../../components/DateField.jsx';
+import { EMPLOYMENT_MIN_DATE, EMPLOYMENT_MIN_YEAR } from '../../config/company.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
@@ -196,6 +197,8 @@ function EmploymentEditFields({
         <DetailLabel required>Joining date</DetailLabel>
         <DateField
           value={orgForm.joiningDate}
+          min={EMPLOYMENT_MIN_DATE}
+          minYear={EMPLOYMENT_MIN_YEAR}
           onChange={(value) =>
             setOrgForm((current) => ({
               ...current,
@@ -227,7 +230,12 @@ function EmploymentEditFields({
         <DateField
           value={orgForm.endingDate}
           onChange={(value) => updateField('endingDate', value)}
-          min={orgForm.joiningDate || undefined}
+          min={
+            !orgForm.joiningDate || orgForm.joiningDate < EMPLOYMENT_MIN_DATE
+              ? EMPLOYMENT_MIN_DATE
+              : orgForm.joiningDate
+          }
+          minYear={EMPLOYMENT_MIN_YEAR}
           clearable
           aria-label="Ending date"
         />
@@ -773,7 +781,7 @@ export default function AdminEmployeeDetail() {
       onConfirm: async () => {
         const result = await adminApi.resetEmployeePassword(employee.id, validation.data);
         showSuccess(result.message || 'Password reset successfully.');
-        setResetForm(emptyResetForm);
+        closeReset();
       },
     });
     setResetSubmitting(false);
@@ -822,7 +830,13 @@ export default function AdminEmployeeDetail() {
       variant: nextActive ? 'default' : 'danger',
       onConfirm: async () => {
         await adminApi.updateEmployeeStatus(employee.id, nextActive);
+        broadcastEmployeeSync({ userId: employee.id });
         await loadEmployee();
+        showSuccess(
+          nextActive
+            ? `${employee.name} activated. They can sign in again.`
+            : `${employee.name} deactivated. They can no longer sign in.`,
+        );
       },
     });
   }

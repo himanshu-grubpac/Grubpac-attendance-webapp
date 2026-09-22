@@ -9,6 +9,7 @@ import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import LeaveStatusBadge from '../../components/LeaveStatusBadge.jsx';
 import PaginationBar from '../../components/PaginationBar.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
+import { resolveDecisionUndoExpiresAt, stagedDecisionUndoRemainingMs } from '../../utils/decisionUndo.js';
 
 // Quiet background settle cadence for rows with a staged (undoable)
 // cancellation. Capped so a stuck staged row stops polling after ~2 minutes.
@@ -91,13 +92,18 @@ export default function EmployeeMyLeaveRequests() {
     try {
       const response = await leaveApi.cancelRequest(item.id);
       if (isApproved) {
-        const durationMs = response?.request?.decisionUndoExpiresAt
-          ? Math.max(0, new Date(response.request.decisionUndoExpiresAt).getTime() - Date.now())
-          : 0;
+        const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request, {
+          pendingField: 'pendingDecision',
+        });
+        const durationMs = stagedDecisionUndoRemainingMs(response?.request);
         if (durationMs > 0) {
           showActionPopup({
             message: 'Approved leave cancelled. If done by mistake, click Undo to revert.',
-            undoLabel: 'Undo',
+            undoExpiresAtMs,
+            onExpired: () => {
+              showError('The undo window has expired.');
+              loadRequests(page);
+            },
             onUndo: async () => {
               try {
                 await leaveApi.undoCancellation(item.id);

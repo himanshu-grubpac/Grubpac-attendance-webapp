@@ -27,6 +27,12 @@ const reqFor = (page, limit) => ({
   userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_ACCOUNT_R],
 });
 
+const reqForCompanyWide = (page, limit) => ({
+  query: { page: String(page), limit: String(limit) },
+  user: { _id: new mongoose.Types.ObjectId(), roleSlug: 'admin' },
+  userPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_ACCOUNT_R],
+});
+
 const captureRes = () => {
   let body;
   const res = {
@@ -237,18 +243,25 @@ test('direct salary update on an admin is vetoed', async () => {
 
 let joiningSequence = 0;
 
-async function makeEmployeeWithJoining(email, code, joiningDate) {
+async function makeEmployeeWithJoining(
+  email,
+  code,
+  joiningDate,
+  { endingDate = null, isActive = true, reportingManagerId = null } = {},
+) {
   joiningSequence += 1;
   return User.create({
     email,
     passwordHash: 'x',
     role: 'employee',
-    isActive: true,
+    isActive,
     firstName: 'Join',
     name: email,
     mobile: `8${String(700000000 + joiningSequence)}`,
     employeeCode: code,
     joiningDate: joiningDate ? new Date(joiningDate) : null,
+    endingDate: endingDate ? new Date(endingDate) : null,
+    ...(reportingManagerId ? { reportingManagerId } : {}),
   });
 }
 
@@ -296,6 +309,103 @@ test('malformed joining dates are rejected', async () => {
       { ...reqFor(1, 10), query: { page: '1', limit: '10', joiningFrom: 'not-a-date' } },
       bad.res,
     ),
+  );
+});
+
+test('employedInYear filters employees by calendar-year employment overlap', async () => {
+  await User.deleteMany({});
+  await makeEmployeeWithJoining('left2023@test.example', 'EMP2023', '2020-01-01T00:00:00Z', {
+    endingDate: '2023-08-31T00:00:00Z',
+    isActive: false,
+  });
+  await makeEmployeeWithJoining('active2025@test.example', 'EMP2025', '2024-06-01T00:00:00Z');
+  await makeEmployeeWithJoining('future2026@test.example', 'EMP2026', '2026-03-01T00:00:00Z');
+  await makeEmployeeWithJoining('left2025@test.example', 'EMPLEFT25', '2024-01-01T00:00:00Z', {
+    endingDate: '2025-06-30T00:00:00Z',
+    isActive: false,
+  });
+
+  const res2024 = captureRes();
+  await listEmployees(
+    { ...reqForCompanyWide(1, 10), query: { page: '1', limit: '10', employedInYear: '2024' } },
+    res2024.res,
+  );
+  assert.deepEqual(
+    res2024.getBody().employees.map((e) => e.employeeCode).sort(),
+    ['EMP2025', 'EMPLEFT25'],
+  );
+
+  const res2025 = captureRes();
+  await listEmployees(
+    { ...reqForCompanyWide(1, 10), query: { page: '1', limit: '10', employedInYear: '2025' } },
+    res2025.res,
+  );
+  assert.deepEqual(
+    res2025.getBody().employees.map((e) => e.employeeCode).sort(),
+    ['EMP2025', 'EMPLEFT25'],
+  );
+
+  const res2026 = captureRes();
+  await listEmployees(
+    { ...reqForCompanyWide(1, 10), query: { page: '1', limit: '10', employedInYear: '2026' } },
+    res2026.res,
+  );
+  assert.deepEqual(
+    res2026.getBody().employees.map((e) => e.employeeCode).sort(),
+    ['EMP2025', 'EMP2026'],
+  );
+});
+
+test('employedInYear is team-scoped for RM and exposes employment dates for salary history picker', async () => {
+  await User.deleteMany({});
+  const rm = await User.create({
+    email: 'rm.team@test.example',
+    passwordHash: 'x',
+    role: 'admin',
+    isActive: true,
+    firstName: 'Team',
+    name: 'Team RM',
+    mobile: '9000000100',
+    employeeCode: 'RMTEAM',
+  });
+  await makeEmployeeWithJoining('report2024@test.example', 'RMREP24', '2024-06-01T00:00:00Z', {
+    reportingManagerId: rm._id,
+  });
+  await makeEmployeeWithJoining('report2023@test.example', 'RMREP23', '2020-01-01T00:00:00Z', {
+    reportingManagerId: rm._id,
+    endingDate: '2023-08-31T00:00:00Z',
+    isActive: false,
+  });
+  await makeEmployeeWithJoining('outsider2024@test.example', 'RMOUT24', '2024-06-01T00:00:00Z');
+
+  const rmReq = {
+    query: { page: '1', limit: '10', employedInYear: '2024' },
+    user: { _id: rm._id, roleSlug: 'reporting-manager' },
+    userPermissions: [
+      PERMISSIONS.EMPLOYEES_STATS_R,
+      PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R,
+      PERMISSIONS.EMPLOYEES_ACCOUNT_R,
+    ],
+  };
+
+  const res2024 = captureRes();
+  await listEmployees(rmReq, res2024.res);
+  assert.deepEqual(
+    res2024.getBody().employees.map((e) => e.employeeCode),
+    ['RMREP24'],
+  );
+  const pickerRow = res2024.getBody().employees[0];
+  assert.ok(pickerRow.joiningDate, 'joiningDate returned for RM salary history year clamp');
+  assert.equal(pickerRow.endingDate, null);
+
+  const res2023 = captureRes();
+  await listEmployees(
+    { ...rmReq, query: { page: '1', limit: '10', employedInYear: '2023' } },
+    res2023.res,
+  );
+  assert.deepEqual(
+    res2023.getBody().employees.map((e) => e.employeeCode),
+    ['RMREP23'],
   );
 });
 

@@ -2,6 +2,7 @@ import {
   PERMISSIONS,
   canSwitchPortal,
   hasAdminPortalAccess,
+  hasCompanyHelpAccess,
   SYSTEM_ROLE_SLUGS,
   hasAnyPermission,
   hasEmployeePortalAccess,
@@ -118,7 +119,7 @@ export const NAV_ITEMS = [
     icon: '?',
     section: 'Employees',
     portal: 'admin',
-    allPermissions: [PERMISSIONS.HELP_TICKET_R, PERMISSIONS.EMPLOYEES_RECORD_R],
+    companyHelpAccess: true,
   },
   {
     to: '/admin/help/team',
@@ -127,7 +128,7 @@ export const NAV_ITEMS = [
     section: 'Employees',
     portal: 'admin',
     permission: PERMISSIONS.HELP_TICKET_R,
-    excludeIfAllPermissions: [PERMISSIONS.EMPLOYEES_RECORD_R],
+    excludeCompanyHelpAccess: true,
   },
   {
     to: '/admin/leave/policies',
@@ -320,8 +321,16 @@ export function getVisibleNavItems(user, loginPortal) {
       return false;
     }
 
+    if (item.excludeCompanyHelpAccess && hasCompanyHelpAccess(permissions)) {
+      return false;
+    }
+
     if (item.teamCreator && user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
       return true;
+    }
+
+    if (item.companyHelpAccess) {
+      return hasCompanyHelpAccess(permissions);
     }
 
     if (item.allPermissions?.length) {
@@ -411,6 +420,12 @@ const ADMIN_BOTTOM_NAV = [
 function navItemAllowed(item, permissions) {
   if (item.excludeIfAllPermissions?.length && hasAllPermissions(permissions, item.excludeIfAllPermissions)) {
     return false;
+  }
+  if (item.excludeCompanyHelpAccess && hasCompanyHelpAccess(permissions)) {
+    return false;
+  }
+  if (item.companyHelpAccess) {
+    return hasCompanyHelpAccess(permissions);
   }
   if (item.allPermissions?.length) {
     return item.allPermissions.every((p) => hasPermission(permissions, p));
@@ -529,15 +544,29 @@ export function isMoreNavActive(pathname, user, loginPortal) {
   );
 }
 
-export function canAccessRoute(user, { permission, anyPermission, allPermissions, excludeIfAllPermissions, teamCreator } = {}) {
+export function canAccessRoute(user, {
+  permission,
+  anyPermission,
+  allPermissions,
+  excludeIfAllPermissions,
+  companyHelpAccess,
+  excludeCompanyHelpAccess,
+  teamCreator,
+} = {}) {
   const permissions = user?.permissions ?? [];
   if (excludeIfAllPermissions?.length && hasAllPermissions(permissions, excludeIfAllPermissions)) {
+    return false;
+  }
+  if (excludeCompanyHelpAccess && hasCompanyHelpAccess(permissions)) {
     return false;
   }
   // teamCreator marks creation surfaces that reporting managers may also
   // use (scoped to their managed departments, enforced server-side).
   if (teamCreator && user?.roleSlug === SYSTEM_ROLE_SLUGS.REPORTING_MANAGER) {
     return true;
+  }
+  if (companyHelpAccess) {
+    return hasCompanyHelpAccess(permissions);
   }
   if (allPermissions?.length) {
     return allPermissions.every((item) => hasPermission(permissions, item));

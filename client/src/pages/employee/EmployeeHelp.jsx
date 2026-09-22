@@ -244,6 +244,7 @@ export default function EmployeeHelp() {
         </button>
       ),
     });
+    return () => setMeta(null);
   }, [showForm, setMeta]);
 
   const loadTickets = useCallback(async (nextPage = page) => {
@@ -651,23 +652,9 @@ export default function EmployeeHelp() {
             icon={EMPTY_ICONS.help}
             title="No help tickets yet"
             description="Raise a ticket if you need support from HR or IT."
-            action={
-              !showForm ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
-                  New ticket
-                </button>
-              ) : null
-            }
           />
         ) : (
           <>
-            {tickets.length > 0 && !showForm && (
-              <div className="card__toolbar">
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}>
-                  New ticket
-                </button>
-              </div>
-            )}
             <div className="table-wrap table-wrap--responsive my-help-tickets-table-wrap">
             <table className="table data-table">
                 <thead>

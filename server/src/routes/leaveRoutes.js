@@ -31,6 +31,7 @@ import {
   getLeavePolicyHistory,
   getLeaveRequestHandler,
   getMyLeaveBalances,
+  getMyLeaveYears,
   getLopRecordsHandler,
   getTeamCalendarHandler,
   initUserBalancesHandler,
@@ -125,6 +126,7 @@ router.get(
 );
 
 router.get('/balances/me', requirePermission(PERMISSIONS.EMP_BALANCE_R), asyncHandler(getMyLeaveBalances));
+router.get('/years/me', requirePermission(PERMISSIONS.EMP_BALANCE_R), asyncHandler(getMyLeaveYears));
 router.post('/balances/init', requirePermission(PERMISSIONS.EMP_BALANCE_R), asyncHandler(initUserBalancesHandler));
 router.get(
   '/balances',

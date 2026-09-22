@@ -14,6 +14,8 @@ import {
   getAllCatalogSlugs,
   migrateLegacyPermissions,
   slugsFromRow,
+  BULK_IMPORT_PERMISSION_SLUGS,
+  stripBulkImportPermissions,
 } from './permissionCatalog.js';
 
 export {
@@ -27,6 +29,8 @@ export {
   getAllCatalogSlugs,
   migrateLegacyPermissions,
   slugsFromRow,
+  BULK_IMPORT_PERMISSION_SLUGS,
+  stripBulkImportPermissions,
 };
 
 /** Company-wide employee directory scope — row 5 READ slug. */
@@ -408,25 +412,31 @@ export function canReadNotifications(userPermissions) {
 }
 
 /**
- * Company-wide directory scope: employees.record.r is a read permission;
- * company-wide visibility is limited to Admin/HR system roles. Other roles
- * with record.r remain team/department scoped via teamScopeService.
+ * Company-wide directory scope (catalog row 5 READ): employees.record.r grants
+ * company-wide employee visibility regardless of role slug.
  *
  * @param {string[]} userPermissions
- * @param {{ roleSlug?: string, roleId?: { slug?: string } } | null} [actor]
+ * @param {unknown} [_actor] Deprecated — ignored; kept for caller compatibility.
  */
-export function hasCompanyWideScope(userPermissions, actor = null) {
-  if (!hasPermission(userPermissions, COMPANY_WIDE_SCOPE_SLUG)) {
-    return false;
-  }
-  const roleSlug =
-    actor?.roleSlug ??
-    (typeof actor?.roleId === 'object' ? actor.roleId?.slug : null) ??
-    null;
-  if (!roleSlug) {
-    return false;
-  }
-  return roleSlug === SYSTEM_ROLE_SLUGS.ADMIN || roleSlug === SYSTEM_ROLE_SLUGS.HR;
+export function hasCompanyWideScope(userPermissions, _actor = null) {
+  return hasPermission(userPermissions, COMPANY_WIDE_SCOPE_SLUG);
+}
+
+/** Company Help tickets read path: help.ticket access + employees.record.r. */
+export function hasCompanyHelpAccess(userPermissions) {
+  const canViewHelp =
+    hasPermission(userPermissions, PERMISSIONS.HELP_TICKET_R) ||
+    hasPermission(userPermissions, PERMISSIONS.HELP_TICKET_U) ||
+    hasPermission(userPermissions, PERMISSIONS.HELP_MANAGE);
+  return canViewHelp && hasPermission(userPermissions, PERMISSIONS.EMPLOYEES_RECORD_R);
+}
+
+/** Company Help tickets manage / list-all path: help.ticket.u + employees.record.u. */
+export function hasCompanyHelpManageAccess(userPermissions) {
+  const canManageHelp =
+    hasPermission(userPermissions, PERMISSIONS.HELP_MANAGE) ||
+    hasPermission(userPermissions, PERMISSIONS.HELP_TICKET_U);
+  return canManageHelp && hasPermission(userPermissions, PERMISSIONS.EMPLOYEES_RECORD_U);
 }
 
 export function canViewSalaryFields(userPermissions) {

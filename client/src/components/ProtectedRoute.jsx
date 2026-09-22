@@ -8,6 +8,8 @@ export default function ProtectedRoute({
   permission,
   anyPermission,
   allPermissions,
+  companyHelpAccess,
+  excludeCompanyHelpAccess,
   teamCreator,
   role,
   portal,
@@ -65,8 +67,24 @@ export default function ProtectedRoute({
     return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
   }
 
-  if (permission || anyPermission || allPermissions?.length || teamCreator) {
-    if (!canAccessRoute(user, { permission, anyPermission, allPermissions, teamCreator })) {
+  if (
+    permission ||
+    anyPermission ||
+    allPermissions?.length ||
+    companyHelpAccess ||
+    excludeCompanyHelpAccess ||
+    teamCreator
+  ) {
+    if (
+      !canAccessRoute(user, {
+        permission,
+        anyPermission,
+        allPermissions,
+        companyHelpAccess,
+        excludeCompanyHelpAccess,
+        teamCreator,
+      })
+    ) {
       return <Navigate to={getDefaultRoute(user, loginPortal)} replace />;
     }
   }

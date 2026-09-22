@@ -61,6 +61,7 @@ import {
   assertDepartmentInAccessibleSet,
   assertManagedDepartmentsAccessible,
   buildEmployeeDirectoryQuery,
+  buildEmployedInCalendarYearQuery,
   isUserInTeamScope,
   resolveTeamScopedUserIds,
 } from '../services/teamScopeService.js';
@@ -149,6 +150,7 @@ const employeeListQuerySchema = paginationSchema.extend({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'joiningTo must be YYYY-MM-DD.')
     .optional(),
+  employedInYear: z.coerce.number().int().min(2000).max(2100).optional(),
 });
 
 /**
@@ -237,8 +239,25 @@ async function buildEmployeeDirectoryQueryWithRoleFilter(requestedRoleId) {
   return buildEmployeeDirectoryQuery({ includeAdmins });
 }
 
-async function applyEmployeeListFilters(query, { search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo }) {
-  if (typeof isActive === 'boolean') {
+async function applyEmployeeListFilters(query, {
+  search,
+  isActive,
+  departmentId,
+  roleId,
+  createdAfter,
+  joiningFrom,
+  joiningTo,
+  employedInYear,
+}) {
+  if (employedInYear != null) {
+    const yearQuery = buildEmployedInCalendarYearQuery(employedInYear);
+    if (yearQuery) {
+      if (!query.$and) {
+        query.$and = [];
+      }
+      query.$and.push(...yearQuery.$and);
+    }
+  } else if (typeof isActive === 'boolean') {
     query.isActive = isActive;
   }
 
@@ -396,8 +415,18 @@ export async function registerEmployee(req, res) {
 }
 
 export async function listEmployees(req, res) {
-  const { page, limit, search, isActive, departmentId, roleId, createdAfter, joiningFrom, joiningTo } =
-    employeeListQuerySchema.parse(req.query);
+  const {
+    page,
+    limit,
+    search,
+    isActive,
+    departmentId,
+    roleId,
+    createdAfter,
+    joiningFrom,
+    joiningTo,
+    employedInYear,
+  } = employeeListQuerySchema.parse(req.query);
 
   if (departmentId) {
     try {
@@ -422,6 +451,7 @@ export async function listEmployees(req, res) {
       createdAfter,
       joiningFrom,
       joiningTo,
+      employedInYear,
     }),
     req,
   );
@@ -439,17 +469,22 @@ export async function listEmployees(req, res) {
 
   const fieldAccess = buildEmployeeFieldAccess(req.userPermissions);
   const canViewSalary = fieldAccess.salaryColumn && canViewSalaryFields(req.userPermissions);
+  const exposeEmploymentDatesForSalaryHistory =
+    employedInYear != null
+    && hasPermission(req.userPermissions, PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R);
   res.json({
-    employees: employees.map((employee) =>
-      maskEmployeePayload(
-        {
-          ...employee.toSafeJSON({ canViewSalary }),
-          lastLoginAt: employee.lastLoginAt ?? null,
-        },
-        req.userPermissions,
-        { includeMeta: false },
-      ),
-    ),
+    employees: employees.map((employee) => {
+      const json = {
+        ...employee.toSafeJSON({ canViewSalary }),
+        lastLoginAt: employee.lastLoginAt ?? null,
+      };
+      const masked = maskEmployeePayload(json, req.userPermissions, { includeMeta: false });
+      if (exposeEmploymentDatesForSalaryHistory) {
+        masked.joiningDate = json.joiningDate ?? null;
+        masked.endingDate = json.endingDate ?? null;
+      }
+      return masked;
+    }),
 pagination: {
         page,
         limit,
@@ -463,6 +498,7 @@ const teamTodayQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
   departmentId: objectIdSchema.optional(),
   roleId: objectIdSchema.optional(),
+  userId: objectIdSchema.optional(),
 });
 
 export async function getTeamTodayStatusAdmin(req, res) {
@@ -474,6 +510,7 @@ export async function getTeamTodayStatusAdmin(req, res) {
     search: parsed.search ?? '',
     departmentId: parsed.departmentId ?? undefined,
     roleId: parsed.roleId ?? undefined,
+    userId: parsed.userId ?? undefined,
   });
   res.json(result);
 }
@@ -1292,6 +1329,7 @@ export async function editAttendanceRecord(req, res) {
       lastEditedAt: result.checkIn.lastEditedAt ?? null,
       lastEditedBy: result.checkIn.lastEditedBy ?? null,
       editHistory: result.checkIn.editHistory ?? [],
+      adminMarkedAbsent: Boolean(result.checkIn.adminMarkedAbsent),
     },
   });
 }
@@ -1311,6 +1349,31 @@ export async function upsertAttendanceRecord(req, res) {
     permissions: req.userPermissions,
     auditContext,
   });
+
+  if (result.adminMarkedAbsent) {
+    res.status(result.created ? 201 : 200).json({
+      record: {
+        id: result.checkIn._id.toString(),
+        userId: result.checkIn.userId.toString(),
+        type: result.checkIn.type,
+        timestamp: result.checkIn.timestamp,
+        attendanceMode: result.checkIn.attendanceMode,
+        attendanceTag: result.checkIn.attendanceTag,
+        lateNote: result.checkIn.lateNote,
+        status: result.checkIn.status,
+        dayKey: result.dayKey,
+        checkInTime: null,
+        checkOutTime: null,
+        adminMarkedAbsent: true,
+        lastEditedAt: result.checkIn.lastEditedAt ?? null,
+        lastEditedBy: result.checkIn.lastEditedBy ?? null,
+        editHistory: result.checkIn.editHistory ?? [],
+        created: Boolean(result.created),
+      },
+      adminMarkedAbsent: true,
+    });
+    return;
+  }
 
   if (result.leaveOnly) {
     res.status(result.created ? 201 : 200).json({
@@ -1354,6 +1417,7 @@ export async function upsertAttendanceRecord(req, res) {
       lastEditedAt: result.checkIn.lastEditedAt ?? null,
       lastEditedBy: result.checkIn.lastEditedBy ?? null,
       editHistory: result.checkIn.editHistory ?? [],
+      adminMarkedAbsent: Boolean(result.checkIn.adminMarkedAbsent),
       created: Boolean(result.created),
     },
   });

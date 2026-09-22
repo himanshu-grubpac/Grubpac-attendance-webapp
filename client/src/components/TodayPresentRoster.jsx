@@ -25,12 +25,12 @@ function TableSkeleton() {
 }
 
 /**
- * Shared today-present roster: search + department/role toolbar + status
- * table. Used by the Today Present page (full list, infinite scroll) and
- * the admin dashboard (preview). Column prefs, pagination, and scroll
+ * Shared today-present roster: search + department/role/employee toolbar +
+ * status table. Used by the Today Present page (full list, infinite scroll)
+ * and the admin dashboard (preview). Column prefs, pagination, and scroll
  * handling stay with the callers; this component only renders what it is
- * given. Department/role narrowing uses the same team-scoped API params as
- * the Employee List, so filters never widen visibility.
+ * given. Filter narrowing uses the same team-scoped API params as the
+ * Employee List, so filters never widen visibility.
  */
 export default function TodayPresentRoster({
   rows = [],
@@ -50,9 +50,12 @@ export default function TodayPresentRoster({
   roleValue = '',
   onRoleChange = null,
   roleOptions = [],
+  employeeValue = '',
+  onEmployeeChange = null,
+  employeeOptions = [],
 }) {
   const showColumn = (key) => visibleColumns.includes(key);
-  const showFilters = onDepartmentChange || onRoleChange;
+  const showFilters = onDepartmentChange || onRoleChange || onEmployeeChange;
 
   return (
     <>
@@ -88,6 +91,14 @@ export default function TodayPresentRoster({
               onChange={onRoleChange}
               options={roleOptions}
               aria-label="Filter by role"
+            />
+          ) : null}
+          {onEmployeeChange ? (
+            <SelectField
+              value={employeeValue}
+              onChange={onEmployeeChange}
+              options={employeeOptions}
+              aria-label="Filter by employee"
             />
           ) : null}
           {toolbarActions}

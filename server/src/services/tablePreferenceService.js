@@ -18,6 +18,7 @@ const DEFAULT_COLUMNS = {
     { key: 'managerDepartments', order: 12, width: 180, pinned: null },
     { key: 'status', order: 13, width: 100, pinned: null },
     { key: 'lastLogin', order: 14, width: 140, pinned: null },
+    { key: 'updatedAt', order: 15, width: 140, pinned: null },
   ],
   attendanceToday: [
     { key: 'name', order: 0, width: 200, pinned: null },

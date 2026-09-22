@@ -80,10 +80,13 @@ async function bulkFetchAttendanceByUser(userIds, monthStart, monthEnd) {
     type: 'check_in',
     status: 'allowed',
     timestamp: { $gte: monthStart, $lte: monthEnd },
-  }).select('userId timestamp attendanceTag').lean();
+  }).select('userId timestamp attendanceTag adminMarkedAbsent').lean();
 
   const outerMap = new Map();
   for (const record of records) {
+    if (record.adminMarkedAbsent) {
+      continue;
+    }
     const uid = record.userId.toString();
     if (!outerMap.has(uid)) outerMap.set(uid, new Map());
     const dayMap = outerMap.get(uid);
@@ -496,6 +499,64 @@ async function preFetchBulkSalaryData(userIds, year, monthStart, monthEnd) {
 // ── API: Employee salary history ──────────────────────────────────────
 
 /**
+ * Month keys (YYYY-MM) in scope for an employee's salary history in a calendar year.
+ * Clamps to joiningDate (or createdAt), endingDate, and current IST month.
+ */
+export function buildEmployeeHistoryMonthKeys(subject, year, referenceDate = new Date()) {
+  const currentIstYear = getISTYear(referenceDate);
+  const currentIstMonth = getISTMonth(referenceDate);
+  let maxMonth = currentIstYear === year ? currentIstMonth : 12;
+
+  if (subject.endingDate) {
+    const ending = new Date(subject.endingDate);
+    const endYear = getISTYear(ending);
+    if (endYear < year) {
+      return [];
+    }
+    if (endYear === year) {
+      maxMonth = Math.min(maxMonth, getISTMonth(ending));
+    }
+  }
+
+  const effectiveStartDate = subject.joiningDate ?? subject.createdAt;
+  let minMonth = 1;
+  if (effectiveStartDate) {
+    const start = new Date(effectiveStartDate);
+    const startYear = getISTYear(start);
+    if (startYear > year) {
+      return [];
+    }
+    if (startYear === year) {
+      minMonth = getISTMonth(start);
+    }
+  }
+
+  if (minMonth > maxMonth) {
+    return [];
+  }
+
+  const months = [];
+  for (let m = minMonth; m <= maxMonth; m += 1) {
+    months.push(`${year}-${String(m).padStart(2, '0')}`);
+  }
+  return months;
+}
+
+function buildEmployeeHistoryPayload(subject) {
+  return {
+    id: subject._id.toString(),
+    name: subject.name,
+    employeeCode: subject.employeeCode ?? null,
+    monthlySalary: subject.monthlySalary ?? null,
+    salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
+    salaryCurrency: 'INR',
+    joiningDate: subject.joiningDate ?? null,
+    endingDate: subject.endingDate ?? null,
+    createdAt: subject.createdAt ?? null,
+  };
+}
+
+/**
  * Employee salary history: returns monthly salary records for a given employee.
  *
  * Uses the shared buildAuditRow() function — same logic as audit and export.
@@ -544,31 +605,25 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
   }
 
   const year = options.year ?? getISTYear();
-  // Use IST month to determine current month (not raw Date)
   const istNow = new Date();
-  const currentIstYear = getISTYear(istNow);
-  const currentIstMonth = getISTMonth(istNow);
-  const maxMonth = currentIstYear === year ? currentIstMonth : 12;
+  const employee = buildEmployeeHistoryPayload(subject);
+  const months = buildEmployeeHistoryMonthKeys(subject, year, istNow);
 
-  // Start month from the employee's onboarding date (createdAt) or joining date
-  const effectiveStartDate = subject.createdAt ?? subject.joiningDate;
-  let minMonth = 1;
-  if (effectiveStartDate) {
-    const startYear = getISTYear(new Date(effectiveStartDate));
-    if (startYear === year) {
-      minMonth = getISTMonth(new Date(effectiveStartDate));
-    } else if (startYear > year) {
-      minMonth = maxMonth + 1;
-    }
-  }
-
-  const months = [];
-  for (let m = minMonth; m <= maxMonth; m++) {
-    months.push(`${year}-${String(m).padStart(2, '0')}`);
+  if (months.length === 0) {
+    return {
+      employee,
+      history: [],
+    };
   }
 
   // Determine date range for bulk fetch (need full year data for quota consumption)
   const lastMonthRange = parseMonthInputAsISTRange(months[months.length - 1]);
+  if (!lastMonthRange) {
+    return {
+      employee,
+      history: [],
+    };
+  }
 
   // Bulk fetch: LOP records, settlements, transfers, salary computation data
   const [lopByPeriod, settledPeriods, transferByPeriod, bulkData] = await Promise.all([
@@ -622,17 +677,7 @@ export async function getEmployeeSalaryHistory(actor, permissions, userId, optio
   }
 
   return {
-    employee: {
-      id: subject._id.toString(),
-      name: subject.name,
-      employeeCode: subject.employeeCode ?? null,
-      monthlySalary: subject.monthlySalary ?? null,
-      salaryEffectiveFrom: subject.salaryEffectiveFrom ?? null,
-      salaryCurrency: 'INR',
-      joiningDate: subject.joiningDate ?? null,
-      endingDate: subject.endingDate ?? null,
-      createdAt: subject.createdAt ?? null,
-    },
+    employee,
     history,
   };
 }
@@ -767,6 +812,68 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
   return { periodKey, asOfDate, employees: auditRows, totals };
 }
 
+/** Ordered XLSX headers — aligned with TeamAuditSection / SalaryHistorySection table labels. */
+export const MONTHLY_SALARY_AUDIT_EXPORT_HEADERS = [
+  'Employee Code',
+  'Employee Name',
+  'Department',
+  'Year',
+  'Month',
+  'As of date',
+  'Monthly salary',
+  'Working Days',
+  'Present Days',
+  'Paid Leave Days',
+  'Paid days (out of 30)',
+  'Loss of pay (days)',
+  'Loss of pay till date',
+  'Per day salary',
+  'Other Deductions (INR)',
+  'Total Deductions (INR)',
+  'Month-to-date payable',
+  'Net',
+  'Transfer',
+  'Status',
+];
+
+/** Human-readable settlement status — mirrors client auditStatusBadge labels. */
+export function formatAuditStatusLabel(status) {
+  if (status === 'settled') return 'Settled';
+  if (status === 'inconsistent') return 'Needs attention';
+  return 'Pending estimate';
+}
+
+/**
+ * Maps one audit API row to an XLSX export row.
+ * Month-to-date payable uses payableEstimate (Paid days / MTD column);
+ * Net uses netSalary only (Net column) — no cross-fallback between the two.
+ */
+export function mapAuditRowToExportRow(row, defaultAsOfDate = '') {
+  const { year, monthName } = parseSalaryPeriodKey(row.periodKey);
+  return {
+    'Employee Code': row.employeeCode ?? '',
+    'Employee Name': row.employeeName,
+    Department: row.departmentName ?? '',
+    Year: year,
+    Month: monthName,
+    'As of date': row.asOfDate ?? defaultAsOfDate ?? '',
+    'Monthly salary': row.hasSalaryConfigured ? row.grossSalary : null,
+    'Working Days': row.workingDays,
+    'Present Days': row.presentDays,
+    'Paid Leave Days': row.paidLeaveDays,
+    'Paid days (out of 30)': row.paidDaysOutOf30,
+    'Loss of pay (days)': row.lopDays,
+    'Loss of pay till date': row.hasSalaryConfigured ? row.lopDeduction : null,
+    'Per day salary': row.hasSalaryConfigured ? row.perDaySalary : null,
+    'Other Deductions (INR)': row.hasSalaryConfigured ? row.otherDeductions : null,
+    'Total Deductions (INR)': row.hasSalaryConfigured ? row.totalDeductions : null,
+    'Month-to-date payable': row.hasSalaryConfigured ? row.payableEstimate : null,
+    Net: row.hasSalaryConfigured ? row.netSalary : null,
+    Transfer: row.transferStatus ?? '',
+    Status: formatAuditStatusLabel(row.status),
+  };
+}
+
 /**
  * Exports monthly salary audit to XLSX workbook.
  * Uses the SAME getMonthlySalaryAudit → buildAuditRow chain as the API.
@@ -780,31 +887,7 @@ export async function getMonthlySalaryAudit(actor, permissions, periodKey, optio
 export async function exportMonthlySalaryAudit(actor, permissions, periodKey, options = {}) {
   const audit = await getMonthlySalaryAudit(actor, permissions, periodKey, options);
 
-  const rows = audit.employees.map((row) => {
-    const { year, monthName } = parseSalaryPeriodKey(row.periodKey);
-    const mtdPayable = row.netSalary ?? row.payableEstimate ?? null;
-    return {
-      'Employee Code': row.employeeCode ?? '',
-      'Employee Name': row.employeeName,
-      Department: row.departmentName ?? '',
-      Year: year,
-      Month: monthName,
-      'As of date': row.asOfDate ?? audit.asOfDate ?? '',
-      'Monthly salary': row.hasSalaryConfigured ? row.grossSalary : null,
-      'Working Days': row.workingDays,
-      'Present Days': row.presentDays,
-      'Paid Leave Days': row.paidLeaveDays,
-      'Paid days (out of 30)': row.paidDaysOutOf30,
-      'Loss of pay (days)': row.lopDays,
-      'Loss of pay till date': row.hasSalaryConfigured ? row.lopDeduction : null,
-      'Per day salary': row.hasSalaryConfigured ? row.perDaySalary : null,
-      'Other Deductions (INR)': row.hasSalaryConfigured ? row.otherDeductions : null,
-      'Total Deductions (INR)': row.hasSalaryConfigured ? row.totalDeductions : null,
-      'Month-to-date payable': row.hasSalaryConfigured ? mtdPayable : null,
-      'Transfer Status': row.transferStatus ?? '',
-      Status: row.status,
-    };
-  });
+  const rows = audit.employees.map((row) => mapAuditRowToExportRow(row, audit.asOfDate ?? ''));
 
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);

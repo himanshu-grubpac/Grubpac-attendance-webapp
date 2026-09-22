@@ -15,6 +15,7 @@ import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SearchInput from '../../components/SearchInput.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import DateField from '../../components/DateField.jsx';
+import { EMPLOYMENT_MIN_DATE, EMPLOYMENT_MIN_YEAR } from '../../config/company.js';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import StickyHScrollBar from '../../components/StickyHScrollBar.jsx';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
@@ -1161,6 +1162,8 @@ export default function AdminUsers() {
                 <DateField
                   value={joiningFrom}
                   onChange={handleJoiningFromChange}
+                  min={EMPLOYMENT_MIN_DATE}
+                  minYear={EMPLOYMENT_MIN_YEAR}
                   aria-label="Filter by joining date from"
                 />
               </label>
@@ -1170,6 +1173,8 @@ export default function AdminUsers() {
                 <DateField
                   value={joiningTo}
                   onChange={handleJoiningToChange}
+                  min={EMPLOYMENT_MIN_DATE}
+                  minYear={EMPLOYMENT_MIN_YEAR}
                   aria-label="Filter by joining date to"
                 />
               </label>

@@ -10214,11 +10214,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 .attendance-edit-chip__tooltip {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 0.35rem);
-  z-index: 30;
-  display: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
   width: max-content;
   max-width: min(16rem, 70vw);
   padding: 0.55rem 0.65rem;
@@ -10232,14 +10230,11 @@ body::-webkit-scrollbar-thumb {
   line-height: 1.35;
   text-align: left;
   pointer-events: none;
-  transform: translateX(-50%);
 }
 
-.attendance-edit-chip:hover .attendance-edit-chip__tooltip,
-.attendance-edit-chip:focus-within .attendance-edit-chip__tooltip {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
+.attendance-edit-chip__tooltip--portal {
+  position: fixed;
+  z-index: 90;
 }
 
 .attendance-edit-chip__tooltip-section {

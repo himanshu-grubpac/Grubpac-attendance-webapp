@@ -3,6 +3,7 @@ import React, { StrictMode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { PERMISSIONS } from '@shared/permissions.js';
 import AdminDashboard from '../pages/admin/AdminDashboard.jsx';
 
 const ROWS = [
@@ -50,6 +51,7 @@ vi.mock('../services/api.js', () => ({
     listRoles: vi.fn(() =>
       Promise.resolve({ roles: [{ id: 'r1', name: 'SDE' }] }),
     ),
+    listEmployees: vi.fn(() => Promise.resolve({ employees: [] })),
   },
   leaveApi: {
     getApprovalsPendingCounts: vi.fn(() =>
@@ -63,7 +65,16 @@ vi.mock('../context/AuthContext.jsx', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    useAuth: () => ({ hasPermission: () => true }),
+    useAuth: () => ({
+      hasPermission: () => true,
+      user: {
+        permissions: [
+          PERMISSIONS.EMPLOYEES_RECORD_R,
+          PERMISSIONS.ATTENDANCE_READ_ALL,
+          PERMISSIONS.ATTENDANCE_READ_TEAM,
+        ],
+      },
+    }),
   };
 });
 

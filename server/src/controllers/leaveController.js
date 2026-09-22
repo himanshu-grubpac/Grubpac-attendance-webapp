@@ -339,9 +339,15 @@ export async function updateLeavePolicy(req, res) {
 }
 
 export async function getMyLeaveBalances(req, res) {
-  const year = req.query.year ? Number(req.query.year) : getISTYear();
+  const parsed = leaveBalanceQuerySchema.parse(req.query);
+  const year = parsed.year ?? getISTYear();
   const balances = await getBalancesForUser(req.user._id, year);
   res.json({ year, balances });
+}
+
+export async function getMyLeaveYears(req, res) {
+  const years = await LeaveBalance.distinct('year', { userId: req.user._id });
+  res.json({ years: years.sort((a, b) => b - a) });
 }
 
 export async function getLeaveBalances(req, res) {

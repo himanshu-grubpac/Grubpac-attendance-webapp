@@ -76,6 +76,7 @@ export async function getAdminReportsSummary(actor = null, permissions = []) {
     AttendanceRecord.distinct('userId', {
       type: 'check_in',
       status: 'allowed',
+      adminMarkedAbsent: { $ne: true },
       timestamp: { $gte: todayStart, $lte: todayEnd },
       ...userFilter,
     }),

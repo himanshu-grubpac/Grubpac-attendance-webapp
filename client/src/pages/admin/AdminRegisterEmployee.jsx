@@ -14,7 +14,7 @@ import FieldError from '../../components/FieldError.jsx';
 import InrInput from '../../components/InrInput.jsx';
 import MultiSelectField from '../../components/MultiSelectField.jsx';
 import SelectField from '../../components/SelectField.jsx';
-import { COMPANY_START_DATE } from "../../config/company.js";
+import { EMPLOYMENT_MIN_DATE, EMPLOYMENT_MIN_YEAR } from '../../config/company.js';
 
 
 const emptyForm = {
@@ -430,7 +430,8 @@ export default function AdminRegisterEmployee() {
               <RegisterLabel required>Joining date</RegisterLabel>
               <DateField
                 value={form.joiningDate}
-                min={COMPANY_START_DATE}
+                min={EMPLOYMENT_MIN_DATE}
+                minYear={EMPLOYMENT_MIN_YEAR}
                 onChange={(value) =>
                   setForm((current) => ({
                     ...current,
@@ -464,7 +465,12 @@ export default function AdminRegisterEmployee() {
               <DateField
                 value={form.endingDate}
                 onChange={(value) => updateField('endingDate', value)}
-                min={form.joiningDate || undefined}
+                min={
+                  !form.joiningDate || form.joiningDate < EMPLOYMENT_MIN_DATE
+                    ? EMPLOYMENT_MIN_DATE
+                    : form.joiningDate
+                }
+                minYear={EMPLOYMENT_MIN_YEAR}
                 aria-label="Ending date"
                 disabled={formDisabled}
               />

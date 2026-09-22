@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasCompanyWideScope } from '@shared/permissions.js';
 import { adminApi, getErrorMessage } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { usePageMetaContext } from '../../context/PageMetaContext.jsx';
@@ -28,13 +28,14 @@ const EMPTY_SUMMARY = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0
 export default function AdminTodayPresent() {
   const { setMeta } = usePageMetaContext();
   const { hasPermission, user } = useAuth();
-  // Department filter mirrors the Employee List (full-read only), except
-  // team viewers with several managed departments get a dropdown limited
-  // to their scoped departments; a single scoped department locks the
-  // table (no dropdown). The role filter is available to every scoped
-  // viewer, limited to the roles of the people under them. Server-side
-  // team scope applies on top, so no filter can widen visibility.
-  const canSeeFullRoster = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  // Company-wide filter lists (departments, roles) require employees.record.r
+  // — not attendance.record.r, which RMs hold for team read only. Team
+  // viewers with several managed departments get a dropdown limited to their
+  // scoped departments; a single scoped department locks the table (no
+  // dropdown). RMs get an employee dropdown (team members only) instead of
+  // role. Server-side team scope applies on top, so no filter can widen
+  // visibility.
+  const canSeeFullRoster = hasCompanyWideScope(user?.permissions ?? []);
   const canSeeTeamRoster =
     canSeeFullRoster || hasPermission(PERMISSIONS.ATTENDANCE_READ_TEAM);
   const managedDepartmentIds = useMemo(() => {
@@ -52,8 +53,10 @@ export default function AdminTodayPresent() {
   const debouncedSearch = useDebouncedValue(query, 200);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [employeeFilter, setEmployeeFilter] = useState('');
   const [departments, setDepartments] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [teamEmployees, setTeamEmployees] = useState([]);
   // Scope facets arrive with every response: the distinct
   // departments/roles across the viewer's whole scoped membership. Team
   // viewers build both dropdowns from these (never the directory lists).
@@ -90,23 +93,25 @@ export default function AdminTodayPresent() {
   const canSeeAdminRole = user?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN
     || hasPermission(PERMISSIONS.ROLES_MANAGE);
   const withoutAdminRole = (role) => canSeeAdminRole || role.slug !== SYSTEM_ROLE_SLUGS.ADMIN;
-  const scopedRoleOptions = useMemo(() => {
-    const fromFacets = Array.isArray(scopeFacets.roles) ? scopeFacets.roles : [];
-    return [
+  const showRoleFilter = canSeeFullRoster;
+  const roleOptions = useMemo(
+    () => [
       { value: '', label: 'All roles' },
-      ...fromFacets
-        .filter(withoutAdminRole)
-        .map((role) => ({ value: role.id, label: role.name })),
-    ];
-  }, [scopeFacets, canSeeAdminRole]);
-  // Team viewers cannot list roles (ROLES_MANAGE/USERS_WRITE only), so
-  // without scope roles the filter would be a dead select — hide it.
-  const showRoleFilter = canSeeFullRoster || (canSeeTeamRoster && scopedRoleOptions.length > 1);
-  const roleOptions = useMemo(() => (
-    canSeeFullRoster
-      ? [{ value: '', label: 'All roles' }, ...roles.filter(withoutAdminRole).map((role) => ({ value: role.id, label: role.name }))]
-      : scopedRoleOptions
-  ), [canSeeFullRoster, roles, scopedRoleOptions, canSeeAdminRole]);
+      ...roles.filter(withoutAdminRole).map((role) => ({ value: role.id, label: role.name })),
+    ],
+    [roles, canSeeAdminRole],
+  );
+  const employeeOptions = useMemo(
+    () => [
+      { value: '', label: 'All team members' },
+      ...teamEmployees.map((employee) => ({
+        value: employee.id,
+        label: `${employee.name}${employee.employeeCode ? ` (${employee.employeeCode})` : ''}`,
+      })),
+    ],
+    [teamEmployees],
+  );
+  const showEmployeeFilter = !canSeeFullRoster && canSeeTeamRoster && teamEmployees.length > 1;
   const loadMoreRef = useRef(null);
   const tableWrapRef = useRef(null);
   const requestKeyRef = useRef('');
@@ -140,12 +145,13 @@ export default function AdminTodayPresent() {
     append = false,
     nextDepartment = '',
     nextRole = '',
+    nextEmployee = '',
     // Quiet keystroke refreshes keep the current rows on screen and swap in
     // results when they land — no skeleton flash per keystroke (same as the
     // Employee List search bar).
     quiet = false,
   } = {}) => {
-    const requestKey = `${search}|${nextPage}|${append}|${nextDepartment}|${nextRole}`;
+    const requestKey = `${search}|${nextPage}|${append}|${nextDepartment}|${nextRole}|${nextEmployee}`;
     requestKeyRef.current = requestKey;
     if (append) {
       setLoadingMore(true);
@@ -158,6 +164,7 @@ export default function AdminTodayPresent() {
       if (search.trim()) params.search = search.trim();
       if (nextDepartment) params.departmentId = nextDepartment;
       if (nextRole) params.roleId = nextRole;
+      if (nextEmployee) params.userId = nextEmployee;
       const data = await adminApi.getTeamTodayStatus(params);
       if (requestKeyRef.current !== requestKey) return;
       setTeamStatus((current) => {
@@ -198,6 +205,8 @@ export default function AdminTodayPresent() {
   departmentFilterRef.current = departmentFilter;
   const roleFilterRef = useRef(roleFilter);
   roleFilterRef.current = roleFilter;
+  const employeeFilterRef = useRef(employeeFilter);
+  employeeFilterRef.current = employeeFilter;
 
   useEffect(() => {
     if (skipDebouncedSearchRef.current) {
@@ -209,18 +218,42 @@ export default function AdminTodayPresent() {
       nextPage: 1,
       nextDepartment: departmentFilterRef.current,
       nextRole: roleFilterRef.current,
+      nextEmployee: employeeFilterRef.current,
       quiet: true,
     });
   }, [debouncedSearch, load]);
 
   function handleDepartmentChange(value) {
     setDepartmentFilter(value);
-    load({ search: query, nextPage: 1, nextDepartment: value, nextRole: roleFilter });
+    load({
+      search: query,
+      nextPage: 1,
+      nextDepartment: value,
+      nextRole: roleFilter,
+      nextEmployee: employeeFilter,
+    });
   }
 
   function handleRoleChange(value) {
     setRoleFilter(value);
-    load({ search: query, nextPage: 1, nextDepartment: departmentFilter, nextRole: value });
+    load({
+      search: query,
+      nextPage: 1,
+      nextDepartment: departmentFilter,
+      nextRole: value,
+      nextEmployee: employeeFilter,
+    });
+  }
+
+  function handleEmployeeChange(value) {
+    setEmployeeFilter(value);
+    load({
+      search: query,
+      nextPage: 1,
+      nextDepartment: departmentFilter,
+      nextRole: roleFilter,
+      nextEmployee: value,
+    });
   }
 
   useEffect(() => {
@@ -230,11 +263,29 @@ export default function AdminTodayPresent() {
       .listDepartments()
       .then((data) => setDepartments(data.departments ?? []))
       .catch(() => setDepartments([]));
+    if (canSeeFullRoster) {
+      adminApi
+        .listRoles()
+        .then((data) => setRoles(data.roles ?? []))
+        .catch(() => setRoles([]));
+    }
+  }, [canSeeFullRoster]);
+
+  useEffect(() => {
+    if (canSeeFullRoster || !canSeeTeamRoster) return undefined;
+    let cancelled = false;
     adminApi
-      .listRoles()
-      .then((data) => setRoles(data.roles ?? []))
-      .catch(() => setRoles([]));
-  }, []);
+      .listEmployees({ page: 1, limit: 200 })
+      .then((data) => {
+        if (!cancelled) setTeamEmployees(data.employees ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setTeamEmployees([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canSeeFullRoster, canSeeTeamRoster]);
 
   useEffect(() => {
     const node = loadMoreRef.current;
@@ -251,6 +302,7 @@ export default function AdminTodayPresent() {
           append: true,
           nextDepartment: departmentFilterRef.current,
           nextRole: roleFilterRef.current,
+          nextEmployee: employeeFilterRef.current,
         });
       },
       { rootMargin: '120px' },
@@ -315,6 +367,9 @@ export default function AdminTodayPresent() {
           onRoleChange={showRoleFilter ? handleRoleChange : null}
           roleValue={roleFilter}
           roleOptions={roleOptions}
+          onEmployeeChange={showEmployeeFilter ? handleEmployeeChange : null}
+          employeeValue={employeeFilter}
+          employeeOptions={employeeOptions}
           footer={(
             <>
               <StickyHScrollBar targetRef={tableWrapRef} syncKey={teamStatus.length} />

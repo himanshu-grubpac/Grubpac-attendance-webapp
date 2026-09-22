@@ -18,6 +18,8 @@ const adminAttendancePayloadFields = {
   checkOutTime: hhmmTimeSchema.nullable().optional(),
   statusCode: z.enum(ATTENDANCE_STATUS_CODES).optional(),
   leaveTypeId: objectIdSchema.optional(),
+  /** Admin-only: mark the day absent without a check-in (same LOP effect as implicit past absent). */
+  markAbsent: z.boolean().optional(),
   attendanceMode: z.enum(['office', 'wfh']).optional().default('office'),
   lateNote: z
     .string()
@@ -29,6 +31,31 @@ const adminAttendancePayloadFields = {
 };
 
 function refineAdminAttendancePayload(data, ctx) {
+  if (data.markAbsent) {
+    if (data.leaveTypeId) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Cannot combine mark absent with a leave type.',
+        path: ['markAbsent'],
+      });
+    }
+    if (data.checkInTime) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Check-in time must be omitted when marking absent.',
+        path: ['checkInTime'],
+      });
+    }
+    if (data.checkOutTime) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Check-out time must be omitted when marking absent.',
+        path: ['checkOutTime'],
+      });
+    }
+    return;
+  }
+
   if (!data.statusCode && !data.leaveTypeId) {
     ctx.addIssue({
       code: 'custom',
@@ -39,7 +66,7 @@ function refineAdminAttendancePayload(data, ctx) {
   if (!data.leaveTypeId && !data.checkInTime) {
     ctx.addIssue({
       code: 'custom',
-      message: 'Check-in time is required unless applying leave only.',
+      message: 'Check-in time is required unless applying leave only or marking absent.',
       path: ['checkInTime'],
     });
   }

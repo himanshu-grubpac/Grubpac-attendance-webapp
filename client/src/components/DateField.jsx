@@ -75,6 +75,43 @@ function formatDisplayValue(value) {
   );
 }
 
+function normalizeMinMaxInput(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string') return value;
+  if (typeof value?.toString === 'function') {
+    const text = value.toString();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  }
+  return null;
+}
+
+export function resolveDateFieldBounds({ min, max, minYear, maxYear }) {
+  const minValue = normalizeMinMaxInput(min);
+  const maxValue = normalizeMinMaxInput(max);
+  const parsedMin = minValue ? parseDateValue(minValue) : null;
+  const parsedMax = maxValue ? parseDateValue(maxValue) : null;
+
+  const effectiveMinYear = minYear ?? parsedMin?.year ?? null;
+  const effectiveMaxYear = maxYear ?? parsedMax?.year ?? null;
+  const effectiveMinMonth =
+    effectiveMinYear != null
+      ? (parsedMin?.year === effectiveMinYear ? parsedMin.month : 1)
+      : null;
+  const effectiveMaxMonth =
+    effectiveMaxYear != null
+      ? (parsedMax?.year === effectiveMaxYear ? parsedMax.month : 12)
+      : null;
+
+  return {
+    minValue,
+    maxValue,
+    effectiveMinYear,
+    effectiveMinMonth,
+    effectiveMaxYear,
+    effectiveMaxMonth,
+  };
+}
+
 export function buildMonthCells(year, month) {
   const totalDays = daysInMonth(year, month);
   const offset = mondayFirstWeekday(year, month, 1);
@@ -111,6 +148,10 @@ export default function DateField({
   id: idProp,
   min,
   max,
+  /** Block year/month navigation below this calendar year (ANDed with `min`). */
+  minYear,
+  /** Block year/month navigation above this calendar year (ANDed with `max`). */
+  maxYear,
   // Leave flow: block non-working days at pick time. `disabledDates` is an
   // array/Set of YYYY-MM-DD (e.g. admin holidays); `disableWeekends` blocks
   // Saturdays/Sundays; `disabledDateTitles` optionally maps date → tooltip.
@@ -140,6 +181,19 @@ export default function DateField({
   const ignoreTriggerClickRef = useRef(false);
   const onChangeRef = useRef(onChange);
 
+  const bounds = useMemo(
+    () => resolveDateFieldBounds({ min, max, minYear, maxYear }),
+    [min, max, minYear, maxYear],
+  );
+  const {
+    minValue,
+    maxValue,
+    effectiveMinYear,
+    effectiveMinMonth,
+    effectiveMaxYear,
+    effectiveMaxMonth,
+  } = bounds;
+
   const selected = parseDateValue(value);
   const initial = selected ?? parseDateValue(todayValue) ?? {
     year: new Date().getFullYear(),
@@ -157,18 +211,48 @@ export default function DateField({
     setPosition((prev) => ({ ...prev, ready: false }));
   }, []);
 
+  const clampViewToBounds = useCallback(
+    (year, month) => {
+      let nextYear = year;
+      let nextMonth = month;
+      if (
+        effectiveMinYear != null
+        && (nextYear < effectiveMinYear
+          || (nextYear === effectiveMinYear
+            && effectiveMinMonth != null
+            && nextMonth < effectiveMinMonth))
+      ) {
+        nextYear = effectiveMinYear;
+        nextMonth = effectiveMinMonth ?? 1;
+      }
+      if (
+        effectiveMaxYear != null
+        && (nextYear > effectiveMaxYear
+          || (nextYear === effectiveMaxYear
+            && effectiveMaxMonth != null
+            && nextMonth > effectiveMaxMonth))
+      ) {
+        nextYear = effectiveMaxYear;
+        nextMonth = effectiveMaxMonth ?? 12;
+      }
+      return { year: nextYear, month: nextMonth };
+    },
+    [effectiveMinYear, effectiveMinMonth, effectiveMaxYear, effectiveMaxMonth],
+  );
+
   const openPicker = useCallback(() => {
     if (disabled) return;
     const today = getTodayIstValue();
     setTodayValue(today);
     const next = parseDateValue(value) ?? parseDateValue(today);
     if (next) {
-      setViewYear(next.year);
-      setViewMonth(next.month);
+      const clamped = clampViewToBounds(next.year, next.month);
+      setViewYear(clamped.year);
+      setViewMonth(clamped.month);
     }
     setPosition((prev) => ({ ...prev, ready: false }));
     setOpen(true);
-  }, [disabled, value]);
+  }, [clampViewToBounds, disabled, value]);
 
   useEscapeKey(open, close);
 
@@ -250,10 +334,25 @@ export default function DateField({
   }
 
   function isOutOfRange(dateValue) {
-    if (min && dateValue < min) return true;
-    if (max && dateValue > max) return true;
+    if (minValue && dateValue < minValue) return true;
+    if (maxValue && dateValue > maxValue) return true;
     return false;
   }
+
+  const canShiftYearBack =
+    effectiveMinYear == null || viewYear > effectiveMinYear;
+  const canShiftYearForward =
+    effectiveMaxYear == null || viewYear < effectiveMaxYear;
+  const canShiftMonthBack =
+    effectiveMinYear == null
+    || viewYear > effectiveMinYear
+    || (viewYear === effectiveMinYear
+      && (effectiveMinMonth == null || viewMonth > effectiveMinMonth));
+  const canShiftMonthForward =
+    effectiveMaxYear == null
+    || viewYear < effectiveMaxYear
+    || (viewYear === effectiveMaxYear
+      && (effectiveMaxMonth == null || viewMonth < effectiveMaxMonth));
 
   function isUnpickable(dateValue) {
     if (isOutOfRange(dateValue) || isNonWorkingDay(dateValue)) return true;
@@ -275,13 +374,20 @@ export default function DateField({
   }
 
   function handleShiftMonth(delta) {
+    if (delta < 0 && !canShiftMonthBack) return;
+    if (delta > 0 && !canShiftMonthForward) return;
     const next = shiftYearMonth(viewYear, viewMonth, delta);
-    setViewYear(next.year);
-    setViewMonth(next.month);
+    const clamped = clampViewToBounds(next.year, next.month);
+    setViewYear(clamped.year);
+    setViewMonth(clamped.month);
   }
 
   function handleShiftYear(delta) {
-    setViewYear((year) => year + delta);
+    if (delta < 0 && !canShiftYearBack) return;
+    if (delta > 0 && !canShiftYearForward) return;
+    const clamped = clampViewToBounds(viewYear + delta, viewMonth);
+    setViewYear(clamped.year);
+    setViewMonth(clamped.month);
   }
 
   function handleTriggerClick() {
@@ -371,6 +477,7 @@ export default function DateField({
                     type="button"
                     className="date-field__nav date-field__nav--compact"
                     aria-label="Previous year"
+                    disabled={!canShiftYearBack}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => handleShiftYear(-1)}
                   >
@@ -383,6 +490,7 @@ export default function DateField({
                     type="button"
                     className="date-field__nav date-field__nav--compact"
                     aria-label="Next year"
+                    disabled={!canShiftYearForward}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => handleShiftYear(1)}
                   >
@@ -394,6 +502,7 @@ export default function DateField({
                     type="button"
                     className="date-field__nav date-field__nav--compact"
                     aria-label="Previous month"
+                    disabled={!canShiftMonthBack}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => handleShiftMonth(-1)}
                   >
@@ -406,6 +515,7 @@ export default function DateField({
                     type="button"
                     className="date-field__nav date-field__nav--compact"
                     aria-label="Next month"
+                    disabled={!canShiftMonthForward}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => handleShiftMonth(1)}
                   >

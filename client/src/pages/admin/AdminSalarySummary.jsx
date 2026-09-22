@@ -707,7 +707,9 @@ function SalaryStructureTab({ canManageSalary }) {
     setEditForm({
       monthlySalary:
         employee.monthlySalary != null ? formatInrInput(employee.monthlySalary) : '',
-      salaryEffectiveFrom: employee.salaryEffectiveFrom ?? '',
+      salaryEffectiveFrom: employee.salaryEffectiveFrom
+        ? String(employee.salaryEffectiveFrom).slice(0, 10)
+        : '',
     });
     setEditError('');
     setFieldErrors({});

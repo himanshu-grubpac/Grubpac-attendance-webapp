@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { isDecisionUndoExpired } from '../utils/decisionUndo.js';
 
 const ActionPopupContext = createContext(null);
 
@@ -23,12 +24,17 @@ export function ActionPopupProvider({ children }) {
   const showActionPopup = useCallback(
     (options = {}) => {
       const id = ++popupCounter;
-      const durationMs = options.durationMs ?? DEFAULT_DURATION_MS;
+      const undoExpiresAtMs = Number.isFinite(options.undoExpiresAtMs) ? options.undoExpiresAtMs : null;
+      const durationMs =
+        options.durationMs ??
+        (undoExpiresAtMs != null ? Math.max(0, undoExpiresAtMs - Date.now()) : DEFAULT_DURATION_MS);
       const popup = {
         id,
         message: options.message ?? '',
         undoLabel: options.undoLabel ?? 'Undo',
         onUndo: typeof options.onUndo === 'function' ? options.onUndo : null,
+        onExpired: typeof options.onExpired === 'function' ? options.onExpired : null,
+        undoExpiresAtMs,
         durationMs,
       };
 
@@ -88,6 +94,11 @@ function ActionPopupCard({ popup, onDismiss }) {
   const progress = popup.durationMs > 0 ? (remaining / popup.durationMs) * 100 : 0;
 
   function handleUndo() {
+    if (isDecisionUndoExpired(popup.undoExpiresAtMs)) {
+      popup.onExpired?.();
+      onDismiss(popup.id);
+      return;
+    }
     popup.onUndo?.();
     onDismiss(popup.id);
   }

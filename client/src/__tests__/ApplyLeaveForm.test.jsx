@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../context/ToastContext.jsx';
+import { ActionPopupProvider } from '../context/ActionPopupContext.jsx';
 import ApplyLeaveForm from '../pages/employee/ApplyLeaveForm.jsx';
 
 vi.mock('../services/api.js', () => ({
@@ -33,7 +34,9 @@ function setup(mode) {
   render(
     <MemoryRouter>
       <ToastProvider>
-        <ApplyLeaveForm mode={mode} />
+        <ActionPopupProvider>
+          <ApplyLeaveForm mode={mode} />
+        </ActionPopupProvider>
       </ToastProvider>
     </MemoryRouter>,
   );
@@ -71,7 +74,9 @@ describe('ApplyLeaveForm leave/WFH split', () => {
     const { unmount } = render(
       <MemoryRouter>
         <ToastProvider>
-          <ApplyLeaveForm mode="wfh" />
+          <ActionPopupProvider>
+            <ApplyLeaveForm mode="wfh" />
+          </ActionPopupProvider>
         </ToastProvider>
       </MemoryRouter>,
     );

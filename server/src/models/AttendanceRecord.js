@@ -53,6 +53,11 @@ const attendanceRecordSchema = new mongoose.Schema(
     rejectionReasons: [{ type: String }],
     /** Present (P), half-day (HD), or leave-violation (LV) when warnings exhausted — set on allowed check-in. */
     attendanceTag: { type: String, enum: ['P', 'HD', 'LV'], default: null },
+    /**
+     * Admin-confirmed absence for a working day (typically today before end-of-day).
+     * No attendance credit; blocks employee check-in until cleared by an admin edit.
+     */
+    adminMarkedAbsent: { type: Boolean, default: false },
     /** Optional note when check-in is after the grace threshold. */
     lateNote: { type: String, default: null, trim: true, maxlength: 500 },
     warningIssued: { type: Boolean, default: false },

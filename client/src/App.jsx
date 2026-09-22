@@ -377,7 +377,11 @@ export default function App() {
               <Route
                 path="admin/help/team"
                 element={
-                  <ProtectedRoute portal="admin" permission={PERMISSIONS.HELP_TICKET_R}>
+                  <ProtectedRoute
+                    portal="admin"
+                    permission={PERMISSIONS.HELP_TICKET_R}
+                    excludeCompanyHelpAccess
+                  >
                     <AdminHelpTeam />
                   </ProtectedRoute>
                 }
@@ -385,18 +389,19 @@ export default function App() {
               <Route
                 path="admin/help/team/:id"
                 element={
-                  <ProtectedRoute portal="admin" permission={PERMISSIONS.HELP_TICKET_R}>
-                    <HelpTicketDetail backTo="/admin/help/team" canUpdateStatus />
+                  <ProtectedRoute
+                    portal="admin"
+                    permission={PERMISSIONS.HELP_TICKET_R}
+                    excludeCompanyHelpAccess
+                  >
+                    <HelpTicketDetail backTo="/admin/help/team" />
                   </ProtectedRoute>
                 }
               />
               <Route
                 path="admin/help/tickets"
                 element={
-                  <ProtectedRoute
-                    portal="admin"
-                    allPermissions={[PERMISSIONS.HELP_TICKET_R, PERMISSIONS.EMPLOYEES_RECORD_R]}
-                  >
+                  <ProtectedRoute portal="admin" companyHelpAccess>
                     <AdminHelpTickets />
                   </ProtectedRoute>
                 }
@@ -404,11 +409,8 @@ export default function App() {
               <Route
                 path="admin/help/tickets/:id"
                 element={
-                  <ProtectedRoute
-                    portal="admin"
-                    allPermissions={[PERMISSIONS.HELP_TICKET_R, PERMISSIONS.EMPLOYEES_RECORD_R]}
-                  >
-                    <HelpTicketDetail backTo="/admin/help/tickets" canUpdateStatus />
+                  <ProtectedRoute portal="admin" companyHelpAccess>
+                    <HelpTicketDetail backTo="/admin/help/tickets" />
                   </ProtectedRoute>
                 }
               />

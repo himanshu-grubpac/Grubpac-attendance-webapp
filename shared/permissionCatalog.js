@@ -330,6 +330,23 @@ export const LEGACY_PERMISSION_MAP = {
   'demo_faq.manage': ['ops.faq.c', 'ops.faq.u', 'ops.faq.d'],
 };
 
+/**
+ * Bulk Import page slugs (catalog rows 17–18): directory export read + upload actions.
+ * Reporting Manager defaults deny these; legacy users.write migration may grant them.
+ */
+export const BULK_IMPORT_PERMISSION_SLUGS = PERMISSION_CATALOG.filter(
+  (catalogRow) => catalogRow.page === 'Bulk Import' && catalogRow.navGroup === 'Employees',
+)
+  .flatMap(slugsFromRow)
+  .filter((slug, index, all) => all.indexOf(slug) === index)
+  .sort();
+
+/** Remove Bulk Import slugs from a permission array (idempotent). */
+export function stripBulkImportPermissions(permissions = []) {
+  const revoke = new Set(BULK_IMPORT_PERMISSION_SLUGS);
+  return permissions.filter((slug) => !revoke.has(slug));
+}
+
 /** Migrate a role's permission array from legacy slugs to catalog slugs. */
 export function migrateLegacyPermissions(permissions = []) {
   const catalogSlugs = new Set(getAllCatalogSlugs());
