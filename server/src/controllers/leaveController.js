@@ -346,7 +346,9 @@ export async function getMyLeaveBalances(req, res) {
 }
 
 export async function getMyLeaveYears(req, res) {
-  const years = await LeaveBalance.distinct('year', { userId: req.user._id });
+  const policyYears = await LeavePolicy.distinct('year', { isActive: true });
+  const balanceYears = await LeaveBalance.distinct('year', { userId: req.user._id });
+  const years = balanceYears.filter(y => policyYears.includes(y));
   res.json({ years: years.sort((a, b) => b - a) });
 }
 
