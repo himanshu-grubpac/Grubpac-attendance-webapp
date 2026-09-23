@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
@@ -77,6 +77,8 @@ const WORKING_STATUS_OPTIONS = [
 ];
 
 const LEAVE_CODE_STATUS_KEYS = new Set(['sl', 'cl', 'el', 'co', 'rh']);
+/** FE-only status for admin mark-absent; sent to API as markAbsent, not statusCode. */
+const ABSENT_STATUS_CODE = 'A';
 
 /** Maps a classified day cell to a working-status filter key, or null if it has no status. */
 function cellStatusKey(cell) {
@@ -186,10 +188,14 @@ function isEditableAttendanceCell(cell) {
 
 function isAttendanceCreateCell(cell) {
   return (
-    cell?.kind === 'absent'
+    (cell?.kind === 'absent' && !cell?.checkInRecordId)
     || cell?.kind === 'pending'
     || (cell?.kind === 'leave' && !cell?.checkInRecordId)
   );
+}
+
+function isAbsentStatusCode(code) {
+  return String(code ?? '').trim().toUpperCase() === ABSENT_STATUS_CODE;
 }
 
 function getEditableWeekDays(cells, weekDayKeys) {
@@ -279,7 +285,48 @@ function isWfhLeaveTypeCode(code, leaveTypes) {
   return String(type.code ?? '').trim().toUpperCase() === 'WFH';
 }
 
-function buildStatusOptions(warningsPerQuarter = 3, leaveTypes = []) {
+export function shouldIncludeAbsentStatusOption(editTarget) {
+  if (!editTarget) return false;
+  if (editTarget.isCreate || editTarget.adminMarkedAbsent || editTarget.cellKind === 'pending') {
+    return true;
+  }
+  return Boolean(editTarget.checkInRecordId && !editTarget.adminMarkedAbsent);
+}
+
+export function buildAttendanceEditFormDefaults(cell, { policy, leaveTypes = [] } = {}) {
+  if (cell?.adminMarkedAbsent && cell?.checkInRecordId) {
+    return {
+      checkInTime: '',
+      checkOutTime: '',
+      statusCode: ABSENT_STATUS_CODE,
+      attendanceMode: cell.checkInRecord?.attendanceMode ?? 'office',
+      lateNote: cell.checkInRecord?.lateNote ?? '',
+    };
+  }
+
+  if (isAttendanceCreateCell(cell)) {
+    const isLeaveOnly = cell.kind === 'leave' && !cell.checkInRecordId;
+    const leaveOnlyStatusCode = isLeaveOnly ? resolveLeaveOnlyStatusCode(cell, leaveTypes) : '';
+    return {
+      checkInTime: isLeaveOnly ? '' : normalizeHHmmTime(policy?.officeStartTime) ?? '09:00',
+      checkOutTime: '',
+      statusCode: leaveOnlyStatusCode,
+      attendanceMode:
+        isLeaveOnly && isWfhLeaveTypeCode(leaveOnlyStatusCode, leaveTypes) ? 'wfh' : 'office',
+      lateNote: '',
+    };
+  }
+
+  return {
+    checkInTime: timestampToHHmmIST(cell.checkInRecord.timestamp),
+    checkOutTime: cell.checkOutRecord ? timestampToHHmmIST(cell.checkOutRecord.timestamp) : '',
+    statusCode: statusCodeFromCheckInRecord(cell.checkInRecord),
+    attendanceMode: cell.checkInRecord.attendanceMode ?? 'office',
+    lateNote: cell.checkInRecord.lateNote ?? '',
+  };
+}
+
+function buildStatusOptions(warningsPerQuarter = 3, leaveTypes = [], { includeAbsent = false } = {}) {
   const allowance = Math.max(1, Math.min(10, Number(warningsPerQuarter) || 3));
   const options = [
     { value: 'P', label: 'Present (P)' },
@@ -295,6 +342,9 @@ function buildStatusOptions(warningsPerQuarter = 3, leaveTypes = []) {
     if (!code || options.some((option) => option.value === code)) continue;
     const name = type.name ?? code;
     options.push({ value: code, label: `${code} — ${name}` });
+  }
+  if (includeAbsent) {
+    options.push({ value: ABSENT_STATUS_CODE, label: 'Absent (A)' });
   }
   return options;
 }
@@ -675,6 +725,17 @@ function classifyDayCell({
     return leaveCell;
   }
 
+  if (allowedCheckIn?.adminMarkedAbsent) {
+    const editMeta = pickEditMetadata(allowedCheckIn);
+    return {
+      kind: 'absent',
+      adminMarkedAbsent: true,
+      checkInRecordId: recordId(allowedCheckIn),
+      checkInRecord: allowedCheckIn,
+      ...editMeta,
+    };
+  }
+
   if (allowedCheckIn) {
     const { statusTag, warningTag } = derivePolicyFromRecord(allowedCheckIn, policy);
     const editMeta = pickEditMetadata(allowedCheckIn);
@@ -743,8 +804,14 @@ function AttendanceStatusTag({ code, tone, title }) {
   );
 }
 
+const ATTENDANCE_EDIT_TOOLTIP_GAP = 6;
+const ATTENDANCE_EDIT_TOOLTIP_PADDING = 8;
+
 function AttendanceUpdatedChip({ lastEditedAt, lastEditedBy, editHistory = [] }) {
-  if (!lastEditedAt) return null;
+  const triggerRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0, ready: false });
 
   const history = editHistory.length > 0
     ? editHistory
@@ -756,50 +823,131 @@ function AttendanceUpdatedChip({ lastEditedAt, lastEditedBy, editHistory = [] })
   const latest = history[history.length - 1];
   const latestChanges = latest?.changes ?? [];
 
-  return (
-    <span className="attendance-edit-chip">
-      <span className="attendance-edit-chip__label">Updated</span>
-      <span className="attendance-edit-chip__tooltip" role="tooltip">
-        <span className="attendance-edit-chip__tooltip-section">
-          <strong>Latest edit</strong>
-          <span>Updated at: {formatEditTimestamp(latest?.editedAt ?? lastEditedAt)}</span>
-          <span>Updated by: {latest?.editedBy?.name ?? lastEditedBy?.name ?? 'Unknown'}</span>
-          {latestChanges.length > 0 ? (
-            <span className="attendance-edit-chip__changes">
-              {latestChanges.map((change) => (
-                <span key={`${change.field}-${change.from}-${change.to}`}>
-                  {formatEditChangeLine(change)}
-                </span>
-              ))}
-            </span>
-          ) : (
-            <span>No field changes recorded.</span>
-          )}
-        </span>
-        {history.length > 1 ? (
-          <span className="attendance-edit-chip__tooltip-section attendance-edit-chip__tooltip-history">
-            <strong>Full history</strong>
-            {[...history].reverse().map((entry, index) => (
-              <span key={`${entry.editedAt}-${index}`} className="attendance-edit-chip__history-entry">
-                <span>
-                  {formatEditTimestamp(entry.editedAt)} · {entry.editedBy?.name ?? 'Unknown'}
-                </span>
-                {(entry.changes ?? []).length > 0 ? (
-                  <span className="attendance-edit-chip__changes">
-                    {entry.changes.map((change) => (
-                      <span key={`${entry.editedAt}-${change.field}-${change.from}-${change.to}`}>
-                        {formatEditChangeLine(change)}
-                      </span>
-                    ))}
-                  </span>
-                ) : (
-                  <span>No field changes</span>
-                )}
+  const updateTooltipPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!trigger || !tooltip) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const tooltipHeight = tooltip.offsetHeight;
+    const tooltipWidth = tooltip.offsetWidth;
+
+    let top = rect.top - tooltipHeight - ATTENDANCE_EDIT_TOOLTIP_GAP;
+    if (top < ATTENDANCE_EDIT_TOOLTIP_PADDING) {
+      top = rect.bottom + ATTENDANCE_EDIT_TOOLTIP_GAP;
+    }
+
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+    left = Math.max(
+      ATTENDANCE_EDIT_TOOLTIP_PADDING,
+      Math.min(left, window.innerWidth - tooltipWidth - ATTENDANCE_EDIT_TOOLTIP_PADDING),
+    );
+
+    setTooltipPosition({ top, left, ready: true });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!tooltipOpen) {
+      setTooltipPosition({ top: 0, left: 0, ready: false });
+      return;
+    }
+    updateTooltipPosition();
+  }, [tooltipOpen, history.length, latestChanges.length, updateTooltipPosition]);
+
+  useEffect(() => {
+    if (!tooltipOpen) return undefined;
+
+    function handleReposition() {
+      updateTooltipPosition();
+    }
+
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+
+    return () => {
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+    };
+  }, [tooltipOpen, updateTooltipPosition]);
+
+  if (!lastEditedAt) return null;
+
+  const tooltipBody = (
+    <>
+      <span className="attendance-edit-chip__tooltip-section">
+        <strong>Latest edit</strong>
+        <span>Updated at: {formatEditTimestamp(latest?.editedAt ?? lastEditedAt)}</span>
+        <span>Updated by: {latest?.editedBy?.name ?? lastEditedBy?.name ?? 'Unknown'}</span>
+        {latestChanges.length > 0 ? (
+          <span className="attendance-edit-chip__changes">
+            {latestChanges.map((change) => (
+              <span key={`${change.field}-${change.from}-${change.to}`}>
+                {formatEditChangeLine(change)}
               </span>
             ))}
           </span>
-        ) : null}
+        ) : (
+          <span>No field changes recorded.</span>
+        )}
       </span>
+      {history.length > 1 ? (
+        <span className="attendance-edit-chip__tooltip-section attendance-edit-chip__tooltip-history">
+          <strong>Full history</strong>
+          {[...history].reverse().map((entry, index) => (
+            <span key={`${entry.editedAt}-${index}`} className="attendance-edit-chip__history-entry">
+              <span>
+                {formatEditTimestamp(entry.editedAt)} · {entry.editedBy?.name ?? 'Unknown'}
+              </span>
+              {(entry.changes ?? []).length > 0 ? (
+                <span className="attendance-edit-chip__changes">
+                  {entry.changes.map((change) => (
+                    <span key={`${entry.editedAt}-${change.field}-${change.from}-${change.to}`}>
+                      {formatEditChangeLine(change)}
+                    </span>
+                  ))}
+                </span>
+              ) : (
+                <span>No field changes</span>
+              )}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </>
+  );
+
+  return (
+    <span
+      className="attendance-edit-chip"
+      onMouseEnter={() => setTooltipOpen(true)}
+      onMouseLeave={() => setTooltipOpen(false)}
+      onFocus={() => setTooltipOpen(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setTooltipOpen(false);
+        }
+      }}
+    >
+      <span ref={triggerRef} className="attendance-edit-chip__label" tabIndex={0}>
+        Updated
+      </span>
+      {tooltipOpen
+        ? createPortal(
+            <span
+              ref={tooltipRef}
+              className="attendance-edit-chip__tooltip attendance-edit-chip__tooltip--portal"
+              role="tooltip"
+              style={{
+                top: tooltipPosition.top,
+                left: tooltipPosition.left,
+                visibility: tooltipPosition.ready ? 'visible' : 'hidden',
+              }}
+            >
+              {tooltipBody}
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }
@@ -1158,6 +1306,7 @@ function AttendanceEditModal({
       }).format(dayLabel)
     : target.dayKey;
   const priorEdit = pickEditMetadata(target.checkInRecord);
+  const absentSelected = isAbsentStatusCode(form.statusCode);
 
   return createPortal(
     <div className="modal__backdrop" role="presentation" onClick={onClose}>
@@ -1199,17 +1348,23 @@ function AttendanceEditModal({
               </div>
             ) : null}
 
-            <label className="modal__field">
-              <span className="modal__label">Check-in time (IST)</span>
-              <TimeField
-                value={form.checkInTime}
-                onChange={(value) => onChange({ checkInTime: value })}
-                disabled={saving || readOnly}
-                aria-label="Check-in time"
-              />
-            </label>
+            {!absentSelected ? (
+              <label className="modal__field">
+                <span className="modal__label">Check-in time (IST)</span>
+                <TimeField
+                  value={form.checkInTime}
+                  onChange={(value) => onChange({ checkInTime: value })}
+                  disabled={saving || readOnly}
+                  aria-label="Check-in time"
+                />
+              </label>
+            ) : (
+              <p className="muted small" role="status">
+                No check-in time — this day is marked absent.
+              </p>
+            )}
 
-            {target.hasCheckOutField ? (
+            {target.hasCheckOutField && !absentSelected ? (
               <label className="modal__field">
                 <span className="modal__label">
                   Check-out time (IST){target.isCreate ? ' (optional)' : ''}
@@ -1339,7 +1494,7 @@ export default function AdminAttendance() {
   const [editForm, setEditForm] = useState({
     checkInTime: '09:00',
     checkOutTime: '',
-    statusCode: 'P',
+    statusCode: '',
     attendanceMode: 'office',
     lateNote: '',
   });
@@ -1827,16 +1982,33 @@ export default function AdminAttendance() {
   }, [filteredGridRows, weekDays, historyDay]);
 
   const quarterLabel = quarterWarnings.quarter?.label ?? 'Current quarter';
-  const statusOptions = useMemo(
-    () => buildStatusOptions(policy.warningsPerQuarter, leaveTypes),
-    [policy.warningsPerQuarter, leaveTypes],
-  );
+  const statusOptions = useMemo(() => {
+    const includeAbsent = shouldIncludeAbsentStatusOption(editTarget);
+    return buildStatusOptions(policy.warningsPerQuarter, leaveTypes, { includeAbsent });
+  }, [policy.warningsPerQuarter, leaveTypes, editTarget]);
 
   function openEditForDay(employee, dayKey, cell, { readOnly = false } = {}) {
     if (!isEditableAttendanceCell(cell)) return;
 
     setEditPickerTarget(null);
     setEditReadOnly(readOnly);
+
+    if (cell.adminMarkedAbsent && cell.checkInRecordId) {
+      setEditTarget({
+        employee,
+        dayKey,
+        checkInRecordId: cell.checkInRecordId,
+        isCreate: false,
+        isLeaveOnly: false,
+        hasCheckOutField: false,
+        cellKind: 'absent',
+        adminMarkedAbsent: true,
+        checkInRecord: cell.checkInRecord,
+      });
+      setEditForm(buildAttendanceEditFormDefaults(cell, { policy, leaveTypes }));
+      setEditError('');
+      return;
+    }
 
     if (isAttendanceCreateCell(cell)) {
       const isLeaveOnly = cell.kind === 'leave' && !cell.checkInRecordId;
@@ -1850,15 +2022,7 @@ export default function AdminAttendance() {
         cellKind: cell.kind,
         checkInRecord: null,
       });
-      const leaveOnlyStatusCode = isLeaveOnly ? resolveLeaveOnlyStatusCode(cell, leaveTypes) : 'P';
-      setEditForm({
-        checkInTime: isLeaveOnly ? '' : normalizeHHmmTime(policy.officeStartTime) ?? '09:00',
-        checkOutTime: '',
-        statusCode: leaveOnlyStatusCode,
-        attendanceMode:
-          isLeaveOnly && isWfhLeaveTypeCode(leaveOnlyStatusCode, leaveTypes) ? 'wfh' : 'office',
-        lateNote: '',
-      });
+      setEditForm(buildAttendanceEditFormDefaults(cell, { policy, leaveTypes }));
       setEditError('');
       return;
     }
@@ -1873,13 +2037,7 @@ export default function AdminAttendance() {
       cellKind: cell.kind,
       checkInRecord: cell.checkInRecord,
     });
-    setEditForm({
-      checkInTime: timestampToHHmmIST(cell.checkInRecord.timestamp),
-      checkOutTime: cell.checkOutRecord ? timestampToHHmmIST(cell.checkOutRecord.timestamp) : '',
-      statusCode: statusCodeFromCheckInRecord(cell.checkInRecord),
-      attendanceMode: cell.checkInRecord.attendanceMode ?? 'office',
-      lateNote: cell.checkInRecord.lateNote ?? '',
-    });
+    setEditForm(buildAttendanceEditFormDefaults(cell, { policy, leaveTypes }));
     setEditError('');
   }
 
@@ -1913,6 +2071,16 @@ export default function AdminAttendance() {
     setEditForm((current) => {
       const next = { ...current, ...patch };
       if (patch.statusCode !== undefined) {
+        if (isAbsentStatusCode(patch.statusCode)) {
+          next.checkInTime = '';
+          next.checkOutTime = '';
+        } else if (
+          isAbsentStatusCode(current.statusCode)
+          && !editTarget?.adminMarkedAbsent
+          && !editTarget?.isCreate
+        ) {
+          next.checkInTime = normalizeHHmmTime(policy.officeStartTime) ?? '09:00';
+        }
         if (isWfhLeaveTypeCode(patch.statusCode, leaveTypes)) {
           next.attendanceMode = 'wfh';
         } else if (
@@ -1931,20 +2099,36 @@ export default function AdminAttendance() {
     if (!editTarget || editReadOnly) return;
     if (!editTarget.isCreate && !editTarget.checkInRecordId && !editTarget.isLeaveOnly) return;
 
+    const absentSelected = isAbsentStatusCode(editForm.statusCode);
     const leaveType = findLeaveTypeByCode(editForm.statusCode, leaveTypes);
-    const isLeaveTypeSelection = Boolean(leaveType);
+    const isLeaveTypeSelection = Boolean(leaveType) && !absentSelected;
     const applyLeaveOnly =
       isLeaveTypeSelection
-      && !editTarget.checkInRecordId
       && !editForm.checkOutTime
-      && (editTarget.isLeaveOnly || editTarget.cellKind === 'absent' || editTarget.cellKind === 'leave');
+      && (
+        editTarget.adminMarkedAbsent
+        || (
+          !editTarget.checkInRecordId
+          && (editTarget.isLeaveOnly || editTarget.cellKind === 'absent' || editTarget.cellKind === 'leave')
+        )
+      );
 
     if (applyLeaveOnly && !leaveType) {
       setEditError('Select a leave type from the list.');
       return;
     }
 
-    if (!applyLeaveOnly && !isValidHHmmTime(editForm.checkInTime)) {
+    if (absentSelected && editTarget.adminMarkedAbsent) {
+      closeEditModal();
+      return;
+    }
+
+    if (!absentSelected && !isLeaveTypeSelection && !String(editForm.statusCode ?? '').trim()) {
+      setEditError('Select an attendance status.');
+      return;
+    }
+
+    if (!applyLeaveOnly && !absentSelected && !isValidHHmmTime(editForm.checkInTime)) {
       setEditError('Enter a valid check-in time.');
       return;
     }
@@ -1965,26 +2149,30 @@ export default function AdminAttendance() {
         lateNote: editForm.lateNote.trim() ? editForm.lateNote.trim() : null,
       };
 
-      if (isLeaveTypeSelection) {
+      if (absentSelected) {
+        payload.markAbsent = true;
+      } else if (isLeaveTypeSelection) {
         payload.leaveTypeId = leaveType.id ?? leaveType._id;
       }
 
-      if (applyLeaveOnly) {
-        // Leave-only correction — no attendance record required.
+      if (applyLeaveOnly || absentSelected) {
+        // Leave-only or admin mark-absent — no check-in time required.
       } else {
         payload.checkInTime = normalizeHHmmTime(editForm.checkInTime);
         payload.statusCode = isPolicyStatusCode(editForm.statusCode) ? editForm.statusCode : 'P';
       }
 
-      if (!editTarget.isCreate) {
-        payload.checkOutTime = editForm.checkOutTime
-          ? normalizeHHmmTime(editForm.checkOutTime)
-          : null;
-      } else if (editTarget.hasCheckOutField && editForm.checkOutTime) {
-        payload.checkOutTime = normalizeHHmmTime(editForm.checkOutTime);
+      if (!absentSelected) {
+        if (!editTarget.isCreate) {
+          payload.checkOutTime = editForm.checkOutTime
+            ? normalizeHHmmTime(editForm.checkOutTime)
+            : null;
+        } else if (editTarget.hasCheckOutField && editForm.checkOutTime) {
+          payload.checkOutTime = normalizeHHmmTime(editForm.checkOutTime);
+        }
       }
 
-      if (editTarget.isCreate || editTarget.isLeaveOnly) {
+      if (absentSelected || editTarget.isCreate || (editTarget.isLeaveOnly && !editTarget.adminMarkedAbsent)) {
         await adminApi.upsertAttendanceRecord({
           userId: editTarget.employee.id,
           dayKey: editTarget.dayKey,

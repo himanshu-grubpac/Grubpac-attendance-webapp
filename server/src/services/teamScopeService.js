@@ -8,12 +8,45 @@ import {
 import { Department } from '../models/Department.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
+import {
+  endOfDayIST,
+  parseDateInputAsISTDay,
+  startOfDayIST,
+} from '../utils/istDate.js';
 
 /** Employee directory base query — excludes system Admin role unless includeAdmins. */
 export async function buildEmployeeDirectoryQuery({ includeAdmins = false } = {}) {
   if (includeAdmins) return {};
   const adminRole = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.ADMIN }).select('_id').lean();
   return adminRole ? { roleId: { $ne: adminRole._id } } : { role: { $ne: 'admin' } };
+}
+
+/**
+ * Mongo match clause: employee was employed during any part of a calendar year.
+ * Joined on/before Dec 31; no ending date or ending on/after Jan 1.
+ */
+export function buildEmployedInCalendarYearQuery(year) {
+  const yearStart = startOfDayIST(parseDateInputAsISTDay(`${year}-01-01`));
+  const yearEnd = endOfDayIST(parseDateInputAsISTDay(`${year}-12-31`));
+  if (!yearStart || !yearEnd) {
+    return null;
+  }
+  return {
+    $and: [
+      {
+        $or: [
+          { joiningDate: { $lte: yearEnd } },
+          { joiningDate: null, createdAt: { $lte: yearEnd } },
+        ],
+      },
+      {
+        $or: [
+          { endingDate: { $gte: yearStart } },
+          { endingDate: null },
+        ],
+      },
+    ],
+  };
 }
 
 function scopeError(message, statusCode = 403) {

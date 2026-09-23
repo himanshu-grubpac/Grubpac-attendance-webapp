@@ -1,12 +1,32 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { NOTIFICATIONS_PORTAL_PERMISSIONS } from '@shared/permissions.js';
+import {
+  hasCompanyHelpAccess,
+  NOTIFICATIONS_PORTAL_PERMISSIONS,
+} from '@shared/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useEscapeKey } from '../hooks/useEscapeKey.js';
 import { notificationsApi } from '../services/api.js';
 import { formatISTDateTime } from '../utils/datetime.js';
 import { usePortalSync } from '../hooks/usePortalSync.js';
 import { PORTAL_TOPICS } from '../utils/portalSync.js';
+
+/** Align help bell links with Help tickets vs Team issues nav (handles stale payloads). */
+function resolveNotificationLink(notification, userPermissions) {
+  const link = notification?.link;
+  if (!link) return link;
+
+  const teamHelpMatch = link.match(/^\/admin\/help\/team\/([^/]+)$/);
+  if (
+    !teamHelpMatch ||
+    !notification.type?.startsWith('help.') ||
+    !hasCompanyHelpAccess(userPermissions)
+  ) {
+    return link;
+  }
+
+  return `/admin/help/tickets/${teamHelpMatch[1]}`;
+}
 
 function BellIcon() {
   return (
@@ -18,16 +38,19 @@ function BellIcon() {
 }
 
 export default function NotificationBell() {
-  const { hasAnyPermission } = useAuth();
+  const { hasAnyPermission, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const panelId = useId();
-  const panelRef = useRef(null);
-  const buttonRef = useRef(null);
+  const rootRef = useRef(null);
+  const notificationsRef = useRef([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [listLoaded, setListLoaded] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  notificationsRef.current = notifications;
 
   const canRead = hasAnyPermission(NOTIFICATIONS_PORTAL_PERMISSIONS);
 
@@ -43,15 +66,17 @@ export default function NotificationBell() {
 
   const loadNotifications = useCallback(async () => {
     if (!canRead) return;
-    setLoading(true);
+    const isInitialLoad = notificationsRef.current.length === 0;
+    if (isInitialLoad) setLoading(true);
     try {
       const data = await notificationsApi.list({ page: 1, limit: 20 });
       setNotifications(data.notifications ?? []);
       setUnreadCount(data.unreadCount ?? 0);
     } catch {
-      setNotifications([]);
+      if (isInitialLoad) setNotifications([]);
     } finally {
-      setLoading(false);
+      setListLoaded(true);
+      if (isInitialLoad) setLoading(false);
     }
   }, [canRead]);
 
@@ -67,24 +92,28 @@ export default function NotificationBell() {
 
   useEffect(() => {
     if (!open) return undefined;
-
-    loadNotifications();
-
-    function handlePointerDown(event) {
-      if (
-        panelRef.current?.contains(event.target) ||
-        buttonRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      setOpen(false);
-    }
-
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-    };
+    void loadNotifications();
   }, [open, loadNotifications]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    let removeListener = () => {};
+    const frameId = requestAnimationFrame(() => {
+      function handlePointerDown(event) {
+        if (rootRef.current?.contains(event.target)) return;
+        setOpen(false);
+      }
+
+      document.addEventListener('pointerdown', handlePointerDown);
+      removeListener = () => document.removeEventListener('pointerdown', handlePointerDown);
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      removeListener();
+    };
+  }, [open]);
 
   useEscapeKey(open, () => setOpen(false));
 
@@ -93,6 +122,16 @@ export default function NotificationBell() {
   }, [location.pathname]);
 
   if (!canRead) return null;
+
+  function toggleOpen() {
+    setOpen((wasOpen) => {
+      const next = !wasOpen;
+      if (next && !listLoaded && notificationsRef.current.length === 0) {
+        setLoading(true);
+      }
+      return next;
+    });
+  }
 
   async function handleMarkAllRead() {
     try {
@@ -130,23 +169,26 @@ export default function NotificationBell() {
       }
     }
 
-    if (notification.link) {
+    const target = resolveNotificationLink(notification, user?.permissions ?? []);
+    if (target) {
       setOpen(false);
-      navigate(notification.link);
+      navigate(target);
     }
   }
 
+  const showLoadingState = loading && notifications.length === 0;
+  const showEmptyState = listLoaded && !loading && notifications.length === 0;
+
   return (
-    <div className="notification-bell">
+    <div className="notification-bell" ref={rootRef}>
       <button
-        ref={buttonRef}
         type="button"
         className="btn btn-ghost btn-sm notification-bell__trigger header-trigger"
         aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? panelId : undefined}
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggleOpen}
       >
         <BellIcon />
         {unreadCount > 0 && (
@@ -157,7 +199,7 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div ref={panelRef} id={panelId} className="notification-bell__panel" role="dialog" aria-label="Notifications">
+        <div id={panelId} className="notification-bell__panel" role="dialog" aria-label="Notifications">
           <div className="notification-bell__header">
             <strong>Notifications</strong>
             <div className="notification-bell__header-actions">
@@ -175,11 +217,11 @@ export default function NotificationBell() {
           </div>
 
           <div className="notification-bell__list">
-            {loading && <p className="notification-bell__empty">Loading…</p>}
-            {!loading && notifications.length === 0 && (
+            {showLoadingState && <p className="notification-bell__empty">Loading…</p>}
+            {showEmptyState && (
               <p className="notification-bell__empty">No notifications yet.</p>
             )}
-            {!loading &&
+            {notifications.length > 0 &&
               notifications.map((item) => (
                 <button
                   key={item.id}

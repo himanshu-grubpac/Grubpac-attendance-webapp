@@ -1,13 +1,9 @@
 /**
  * B-014 — help ticket comment bell matrix (integration, real Mongo).
  *
- * Every comment must ring all thread stakeholders exactly once, mirroring the
- * ticket-creation matrix: the ticket creator, the creator's reporting
- * manager, and every HELP_MANAGE holder — never the commenting actor.
- * - staff (admin) comment → creator + manager + fellow admins notified
- * - reporting-manager comment → creator + admins notified (no self-ping, no dupe)
- * - creator comment → manager + admins notified (unchanged behavior)
- * - repeated comments notify again (no suppression)
+ * Scoped stakeholders only: ticket creator, company-wide help managers,
+ * reporting manager, and team-scoped managers whose managed team includes
+ * the creator — never every help.ticket.u holder company-wide.
  */
 process.env.NODE_ENV = 'test';
 
@@ -22,6 +18,7 @@ import { HelpTicket } from '../models/HelpTicket.js';
 import { Notification } from '../models/Notification.js';
 import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
+import { Department } from '../models/Department.js';
 import { addHelpComment } from './helpService.js';
 
 let memoryServer;
@@ -40,6 +37,7 @@ beforeEach(async () => {
     Notification.deleteMany({}),
     Role.deleteMany({}),
     User.deleteMany({}),
+    Department.deleteMany({}),
   ]);
 });
 
@@ -53,7 +51,7 @@ async function createRole(slug, permissions) {
   return Role.create({ name: slug, slug: `${slug}-${sequence}`, permissions });
 }
 
-async function createUser(name, { roleId = null, reportingManagerId = null } = {}) {
+async function createUser(name, fields = {}) {
   sequence += 1;
   return User.create({
     firstName: name,
@@ -63,8 +61,8 @@ async function createUser(name, { roleId = null, reportingManagerId = null } = {
     mobile: `9${String(100000000 + sequence)}`,
     passwordHash: 'hash',
     role: 'employee',
-    roleId,
-    reportingManagerId,
+    isActive: true,
+    ...fields,
   });
 }
 
@@ -93,6 +91,11 @@ async function setupThread() {
 
 async function countFor(userId) {
   return Notification.countDocuments({ userId, type: 'help.comment' });
+}
+
+async function latestLinkFor(userId, type = 'help.comment') {
+  const row = await Notification.findOne({ userId, type }).sort({ createdAt: -1 }).lean();
+  return row?.link ?? null;
 }
 
 test('admin comment notifies creator, reporting manager, and fellow admins (not self)', async () => {
@@ -141,6 +144,78 @@ test('creator comment notifies manager and admins (unchanged behavior)', async (
   assert.equal(await countFor(admin1._id), 1, 'admin notified');
   assert.equal(await countFor(admin2._id), 1, 'second admin notified');
   assert.equal(await countFor(employee._id), 0, 'creator never self-notified');
+});
+
+test('admin who is also reporting manager gets company help ticket link (not team issues)', async () => {
+  const adminRole = await createRole('admin-rm', [
+    PERMISSIONS.HELP_MANAGE,
+    PERMISSIONS.HELP_TICKET_R,
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+  ]);
+  const empRole = await createRole('emp-rm', [PERMISSIONS.HELP_WRITE]);
+  const adminRm = await createUser('AdminRm', { roleId: adminRole._id });
+  const employee = await createUser('EmpUnderAdmin', {
+    roleId: empRole._id,
+    reportingManagerId: adminRm._id,
+  });
+  const ticket = await HelpTicket.create({
+    title: 'VPN down',
+    category: 'Attendance',
+    description: 'Cannot connect from home.',
+    createdBy: employee._id,
+  });
+
+  await addHelpComment(
+    ticket._id.toString(),
+    employee,
+    [PERMISSIONS.HELP_WRITE],
+    { body: 'Still broken after reboot.' },
+  );
+
+  const link = await latestLinkFor(adminRm._id);
+  assert.equal(link, `/admin/help/tickets/${ticket._id.toString()}`, 'admin RM lands on Help tickets route');
+});
+
+test('reporting manager without company record read keeps team issues link', async () => {
+  const { manager, employee, ticket } = await setupThread();
+
+  await addHelpComment(
+    ticket._id.toString(),
+    employee,
+    [PERMISSIONS.HELP_WRITE],
+    { body: 'Any update?' },
+  );
+
+  const link = await latestLinkFor(manager._id);
+  assert.equal(link, `/admin/help/team/${ticket._id.toString()}`, 'RM stays on team issues route');
+});
+
+test('multi-dept RM is notified for managed-department employee without direct report link', async () => {
+  const deptA = await Department.create({ name: 'Ops A', code: `OA${sequence}`, isActive: true });
+  const rmRole = await createRole('rm-multi', [PERMISSIONS.HELP_MANAGE, PERMISSIONS.HELP_TICKET_R]);
+  const empRole = await createRole('emp-multi', [PERMISSIONS.HELP_WRITE]);
+  const rm = await createUser('MultiRm', { roleId: rmRole._id, managedDepartmentIds: [deptA._id] });
+  const employee = await createUser('DeptMember', {
+    roleId: empRole._id,
+    departmentId: deptA._id,
+  });
+  const ticket = await HelpTicket.create({
+    title: 'Hardware fault',
+    category: 'Other',
+    description: 'Laptop keyboard stops responding after sleep.',
+    createdBy: employee._id,
+  });
+
+  await addHelpComment(
+    ticket._id.toString(),
+    employee,
+    [PERMISSIONS.HELP_WRITE],
+    { body: 'Still broken after reboot.' },
+  );
+
+  assert.equal(await countFor(rm._id), 1, 'multi-dept RM notified for dept member');
+  const link = await latestLinkFor(rm._id);
+  assert.equal(link, `/admin/help/team/${ticket._id.toString()}`, 'RM lands on team issues route');
 });
 
 test('repeated comments notify again (no suppression)', async () => {

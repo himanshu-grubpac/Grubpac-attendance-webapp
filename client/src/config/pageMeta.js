@@ -29,6 +29,7 @@ const PAGE_META = [
   },
   { match: '/admin/office-settings', title: 'Geolocation', subtitle: 'Geofence, office hours, and attendance policy thresholds.' },
   { match: '/admin/faq-demo', title: 'FAQ & Demo', subtitle: 'Guides and demo videos for your role' },
+  { match: '/admin/attendance/today-present', title: 'Today Present', subtitle: 'Live attendance status for all team members' },
   { match: '/admin/attendance', title: 'Attendance history', subtitle: 'View and manage team attendance records.' },
   {
     match: '/admin/audit-logs',

@@ -18,7 +18,11 @@ import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import { getTeamTodayStatusService } from './attendanceService.js';
 
-const ADMIN_PERMS = [PERMISSIONS.ATTENDANCE_READ_ALL, PERMISSIONS.ATTENDANCE_READ_TEAM];
+const ADMIN_PERMS = [
+  PERMISSIONS.EMPLOYEES_RECORD_R,
+  PERMISSIONS.ATTENDANCE_READ_ALL,
+  PERMISSIONS.ATTENDANCE_READ_TEAM,
+];
 
 let memoryServer;
 let sequence = 0;
@@ -83,13 +87,13 @@ async function setup() {
   return { admin, adminRole, empRole, rmRole, dev, design, devEmp, designRm };
 }
 
-test('no filters returns the whole scoped roster including admins (Employee List parity)', async () => {
+test('no filters returns the whole scoped roster (Employee List parity — admins excluded by default)', async () => {
   const { admin } = await setup();
   const result = await getTeamTodayStatusService(admin, ADMIN_PERMS, { paginate: true, page: 1, limit: 25 });
-  assert.equal(result.pagination.total, 3);
-  assert.equal(result.summary.total, 3);
+  assert.equal(result.pagination.total, 2);
+  assert.equal(result.summary.total, 2);
   const names = result.teamStatus.map((row) => row.name);
-  assert.ok(names.includes('Admin Test'));
+  assert.ok(!names.includes('Admin Test'), 'admin accounts hidden unless role filter selects Admin');
 });
 
 test('departmentId narrows rows, total and summary together', async () => {
@@ -118,7 +122,7 @@ test('roleId narrows rows, total and summary together', async () => {
   assert.equal(result.summary.total, 1);
 });
 
-test('explicit Admin role selection lists admins (default stays admin-free)', async () => {
+test('Admin role filter on default roster matches nobody (admins not in base membership)', async () => {
   const { admin, adminRole } = await setup();
   const result = await getTeamTodayStatusService(admin, ADMIN_PERMS, {
     paginate: true,
@@ -126,9 +130,9 @@ test('explicit Admin role selection lists admins (default stays admin-free)', as
     limit: 25,
     roleId: adminRole._id.toString(),
   });
-  assert.equal(result.pagination.total, 1);
-  assert.equal(result.teamStatus[0].name, 'Admin Test');
-  assert.equal(result.summary.total, 1);
+  assert.equal(result.pagination.total, 0);
+  assert.equal(result.teamStatus.length, 0);
+  assert.equal(result.summary.total, 0);
 });
 
 test('non-admin role selection never surfaces admins', async () => {
@@ -150,6 +154,32 @@ test('unknown department matches nobody (never widens)', async () => {
     page: 1,
     limit: 25,
     departmentId: new mongoose.Types.ObjectId().toString(),
+  });
+  assert.equal(result.pagination.total, 0);
+  assert.equal(result.teamStatus.length, 0);
+  assert.equal(result.summary.total, 0);
+});
+
+test('userId narrows to one member within scope', async () => {
+  const { admin, devEmp } = await setup();
+  const result = await getTeamTodayStatusService(admin, ADMIN_PERMS, {
+    paginate: true,
+    page: 1,
+    limit: 25,
+    userId: devEmp._id.toString(),
+  });
+  assert.equal(result.pagination.total, 1);
+  assert.equal(result.teamStatus[0].name, 'Dev Emp');
+  assert.equal(result.summary.total, 1);
+});
+
+test('userId outside scope matches nobody (never widens)', async () => {
+  const { admin } = await setup();
+  const result = await getTeamTodayStatusService(admin, ADMIN_PERMS, {
+    paginate: true,
+    page: 1,
+    limit: 25,
+    userId: new mongoose.Types.ObjectId().toString(),
   });
   assert.equal(result.pagination.total, 0);
   assert.equal(result.teamStatus.length, 0);

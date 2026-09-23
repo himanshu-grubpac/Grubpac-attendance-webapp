@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { changePasswordSchema, setPinSchema } from '@shared/validation/auth.js';
 import { authApi, getErrorMessage } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { usePageMetaContext } from '../context/PageMetaContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { validateForm } from '../utils/validation.js';
+import BackLink from '../components/BackLink.jsx';
 import FieldError from '../components/FieldError.jsx';
 import PasswordInput from '../components/PasswordInput.jsx';
 
@@ -21,7 +24,29 @@ const emptyPinForm = {
 
 export default function ChangePassword() {
   const { user, refreshUser } = useAuth();
+  const { pathname } = useLocation();
+  const { setMeta } = usePageMetaContext();
   const { showSuccess } = useToast();
+
+  const profilePath = useMemo(
+    () => (pathname.startsWith('/admin/') ? '/admin/profile' : '/employee/profile'),
+    [pathname],
+  );
+
+  useEffect(() => {
+    if (user?.mustChangePassword) {
+      setMeta(null);
+      return undefined;
+    }
+    setMeta({
+      actions: (
+        <BackLink to={profilePath} compact>
+          Account settings
+        </BackLink>
+      ),
+    });
+    return () => setMeta(null);
+  }, [profilePath, setMeta, user?.mustChangePassword]);
 
   const [passwordForm, setPasswordForm] = useState(emptyPasswordForm);
   const [passwordErrors, setPasswordErrors] = useState({});

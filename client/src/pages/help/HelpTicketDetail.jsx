@@ -82,7 +82,7 @@ function uploadFileToS3(uploadUrl, file, headers = {}) {
   });
 }
 
-export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
+export default function HelpTicketDetail({ backTo }) {
   const { hasPermission } = useAuth();
   const canSetPriority =
     hasPermission(PERMISSIONS.HELP_SET_PRIORITY) || hasPermission(PERMISSIONS.HELP_MANAGE);
@@ -389,7 +389,7 @@ export default function HelpTicketDetail({ backTo, canUpdateStatus = false }) {
         </div>
       )}
 
-      {canUpdateStatus && (
+      {ticket.canManage && (
         <div className="card">
         <p className="card__section-title">Update ticket</p>
         <form className="toolbar-row" onSubmit={handleStatusUpdate}>

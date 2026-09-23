@@ -14,6 +14,7 @@
  * - Dual-portal system role permissions (HR attendance.read_own)
  * - HelpAttachment status + createdAt compound index (stale pending cleanup sweep)
  * - DemoFaqItem collection indexes + demo_faq.* role permissions
+ * - Reporting Manager: strip Bulk Import slugs (legacy users.write may grant bulk_export.r / bulk_upload.*)
  *
  * Usage (always from server/):
  *   node --env-file=.env.staging src/migrateRecentFeatures.js
@@ -46,6 +47,7 @@ import {
   hasAdminPortalAccess,
   hasPermission,
   migrateLegacyPermissions,
+  stripBulkImportPermissions,
 } from '../../shared/permissions.js';
 import { User } from './models/User.js';
 import { Role } from './models/Role.js';
@@ -210,6 +212,31 @@ async function migrateAllRolePermissions() {
     }
   }
   return changes;
+}
+
+/**
+ * Reporting Manager must not retain Bulk Import permissions (catalog rows 17–18).
+ * Legacy users.write → bulk_upload.* / bulk_export.r can linger on existing roles.
+ * Idempotent — safe on every migrate run including prod-safe mode.
+ */
+async function stripReportingManagerBulkImportPermissions() {
+  const role = await Role.findOne({ slug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER });
+  if (!role) {
+    return null;
+  }
+
+  const before = [...(role.permissions ?? [])].sort();
+  const after = stripBulkImportPermissions(before);
+  const beforeKey = before.join(',');
+  const afterKey = after.join(',');
+
+  if (beforeKey === afterKey) {
+    return null;
+  }
+
+  role.permissions = after;
+  await role.save();
+  return `reporting-manager: removed Bulk Import slugs (${before.length} → ${after.length} permissions)`;
 }
 
 async function syncUserLegacyRoles(roleMap) {
@@ -432,6 +459,14 @@ async function migrateRecentFeatures() {
     console.log('All roles already on catalog slugs.');
   } else {
     permMigrations.forEach((line) => console.log(line));
+  }
+
+  console.log('\n=== Reporting Manager Bulk Import permission strip ===');
+  const rmBulkStrip = await stripReportingManagerBulkImportPermissions();
+  if (rmBulkStrip) {
+    console.log(rmBulkStrip);
+  } else {
+    console.log('reporting-manager: no Bulk Import slugs to remove.');
   }
 
   const userFixes = await syncUserLegacyRoles(roleMap);

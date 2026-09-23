@@ -54,6 +54,47 @@ const LEAVE_NOTIFICATION_DELAY_MS = env.leaveNotificationDelayMs;
 const COMP_OFF_LEAVE_TYPE_CODE = 'CO';
 /** Terminal statuses: an overlap check only considers non-terminal requests. */
 const ACTIVE_STATUSES = ['pending', 'approved', 'worked'];
+
+/**
+ * Maps an approval-queue tab to a Mongo filter that includes provisional
+ * (undo-window) rows whose committed `status` has not yet been written.
+ */
+export function buildCompOffApprovalStatusFilter(status) {
+  switch (status) {
+    case 'approved':
+      return {
+        $or: [
+          { status: 'approved' },
+          { status: 'pending', pendingAction: 'approved' },
+        ],
+      };
+    case 'closed':
+      return {
+        $or: [
+          { status: { $in: ['rejected', 'lapsed', 'cancelled'] } },
+          { status: 'pending', pendingAction: 'rejected' },
+          { status: 'approved', pendingAction: 'cancelled' },
+        ],
+      };
+    case 'worked':
+      return {
+        $or: [
+          { status: 'worked' },
+          { status: 'worked', pendingAction: 'assessed' },
+        ],
+      };
+    case 'assessed':
+      return {
+        $or: [
+          { status: 'assessed' },
+          { status: 'worked', pendingAction: 'assessed' },
+        ],
+      };
+    case 'pending':
+    default:
+      return { status: 'pending' };
+  }
+}
 const ASSESSMENT_RATE = { completed: 1, half: 0.5, none: 0 };
 
 /**
@@ -64,6 +105,20 @@ function provisionalTiming(windowMs, fromTime = Date.now()) {
   const undoExpiresAt = new Date(fromTime + windowMs);
   const notifyAfter = new Date(undoExpiresAt.getTime() + LEAVE_NOTIFICATION_DELAY_MS);
   return { undoExpiresAt, notifyAfter };
+}
+
+/** Same safety-net semantics as leave dueStagedLeaveDecisionFilter. */
+function dueStagedCompOffActionFilter(now) {
+  return {
+    pendingAction: { $ne: null },
+    $or: [
+      { notifyAfter: { $ne: null, $lte: now } },
+      {
+        undoExpiresAt: { $ne: null, $lte: now },
+        $or: [{ notifyAfter: null }, { notifyAfter: { $lte: now } }],
+      },
+    ],
+  };
 }
 
 /** Round a credit figure to 0.5 granularity (never rounds below 0). */
@@ -1381,6 +1436,7 @@ export async function finalizeCompOffAction(request) {
   const decision = request.pendingAction;
   const requestKey = request._id.toString();
   const userId = request.userId?._id ?? request.userId;
+  const skipNotify = request.notificationsSent === true;
 
   let creditedDays = 0;
   let workedYear = null;
@@ -1455,18 +1511,20 @@ export async function finalizeCompOffAction(request) {
   // work was revoked after they were told it was approved.
   if (decision === 'cancelled') {
     if (request.cancelledBy) {
-      try {
-        await notifyCompOffApplicant({ request, status: 'cancelled', remarks: request.comment });
-      } catch (notifyErr) {
-        console.error('[comp-off] cancelled notification failed', {
-          requestId: requestKey,
-          error: notifyErr?.message,
-        });
-        auditLog('comp_off_finalized_notification_failed', {
-          requestId: requestKey,
-          decision,
-          error: notifyErr?.message ?? 'unknown',
-        });
+      if (!skipNotify) {
+        try {
+          await notifyCompOffApplicant({ request, status: 'cancelled', remarks: request.comment });
+        } catch (notifyErr) {
+          console.error('[comp-off] cancelled notification failed', {
+            requestId: requestKey,
+            error: notifyErr?.message,
+          });
+          auditLog('comp_off_finalized_notification_failed', {
+            requestId: requestKey,
+            decision,
+            error: notifyErr?.message ?? 'unknown',
+          });
+        }
       }
       auditLog('comp_off_cancelled', {
         adminId: request.cancelledBy?.toString?.(),
@@ -1485,35 +1543,37 @@ export async function finalizeCompOffAction(request) {
     }
     return { finalized: true, requestId: requestKey };
   }
-  try {
-    if (decision === 'assessed') {
-      await notifyCompOffApplicant({
-        request,
-        status: 'assessed',
-        creditedDays,
-        assessment: assessmentBreakdown.every((entry) => entry.assessment === assessmentBreakdown[0]?.assessment)
-          ? (assessmentBreakdown[0]?.assessment ?? 'none')
-          : 'mixed',
-        breakdown: assessmentBreakdown,
+  if (!skipNotify) {
+    try {
+      if (decision === 'assessed') {
+        await notifyCompOffApplicant({
+          request,
+          status: 'assessed',
+          creditedDays,
+          assessment: assessmentBreakdown.every((entry) => entry.assessment === assessmentBreakdown[0]?.assessment)
+            ? (assessmentBreakdown[0]?.assessment ?? 'none')
+            : 'mixed',
+          breakdown: assessmentBreakdown,
+        });
+      } else {
+        await notifyCompOffApplicant({
+          request,
+          status: decision === 'approved' ? 'approved' : 'rejected',
+          remarks: request.comment,
+        });
+      }
+    } catch (notifyErr) {
+      console.error('[comp-off] finalized notification failed', {
+        requestId: requestKey,
+        decision,
+        error: notifyErr?.message,
       });
-    } else {
-      await notifyCompOffApplicant({
-        request,
-        status: decision === 'approved' ? 'approved' : 'rejected',
-        remarks: request.comment,
+      auditLog('comp_off_finalized_notification_failed', {
+        requestId: requestKey,
+        decision,
+        error: notifyErr?.message ?? 'unknown',
       });
     }
-  } catch (notifyErr) {
-    console.error('[comp-off] finalized notification failed', {
-      requestId: requestKey,
-      decision,
-      error: notifyErr?.message,
-    });
-    auditLog('comp_off_finalized_notification_failed', {
-      requestId: requestKey,
-      decision,
-      error: notifyErr?.message ?? 'unknown',
-    });
   }
 
   auditLog('comp_off_finalized', {
@@ -1589,11 +1649,7 @@ export async function lapseStaleCompOff(now = new Date()) {
  * Per-item isolation matches the leave sweep conventions.
  */
 export async function runCompOffSweep(now = new Date()) {
-  const dueDecisions = await CompOffRequest.find({
-    pendingAction: { $ne: null },
-    notifyAfter: { $ne: null, $lte: now },
-    notificationsSent: false,
-  }).populate(COMP_OFF_REQUEST_POPULATE);
+  const dueDecisions = await CompOffRequest.find(dueStagedCompOffActionFilter(now)).populate(COMP_OFF_REQUEST_POPULATE);
   const dueSubmits = await CompOffRequest.find({
     status: 'pending',
     pendingAction: null,
@@ -1691,12 +1747,17 @@ export async function listCompOffRequests(actor, permissions, query) {
     }
     filter.userId = query.userId;
   }
-  // Virtual queue: 'closed' covers every terminal non-credited outcome with
-  // real server-side pagination (rejected + lapsed + cancelled).
   if (query.status && query.status !== 'all') {
-    filter.status = query.status === 'closed'
-      ? { $in: ['rejected', 'lapsed', 'cancelled'] }
-      : query.status;
+    if (scope === 'approvals') {
+      Object.assign(filter, buildCompOffApprovalStatusFilter(query.status));
+    } else {
+      // Virtual queue: 'closed' covers every terminal non-credited outcome.
+      filter.status = query.status === 'closed'
+        ? { $in: ['rejected', 'lapsed', 'cancelled'] }
+        : query.status;
+    }
+  } else if (scope === 'approvals') {
+    filter.status = 'pending';
   }
 
   if (query.month) {
@@ -1716,9 +1777,12 @@ export async function listCompOffRequests(actor, permissions, query) {
   }
 
   const skip = (query.page - 1) * query.limit;
-  const resolvedStatus = filter.status ?? query.status;
+  const queueTab =
+    scope === 'approvals'
+      ? (query.status && query.status !== 'all' ? query.status : 'pending')
+      : (filter.status ?? query.status);
   const sort =
-    resolvedStatus === 'approved' || resolvedStatus === 'rejected'
+    queueTab === 'approved' || queueTab === 'closed' || queueTab === 'assessed'
       ? { decidedAt: -1, createdAt: -1, _id: -1 }
       : { createdAt: -1, _id: -1 };
   const [requests, total] = await Promise.all([

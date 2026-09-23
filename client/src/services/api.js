@@ -75,6 +75,37 @@ export function startSessionKeepalive() {
 
 const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+const TRANSIENT_503_MAX_RETRIES = 2;
+const TRANSIENT_503_BASE_DELAY_MS = 400;
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isRetrySafeMethod(method) {
+  const normalized = (method ?? 'get').toUpperCase();
+  return normalized === 'GET' || normalized === 'HEAD';
+}
+
+function isTransient503(error) {
+  if (error?.response?.status !== 503) return false;
+  const code = error?.response?.data?.code;
+  // API Gateway cold-start/integration 503 often has no JSON body.
+  return !code || code === 'DB_UNAVAILABLE';
+}
+
+function parseRetryAfterMs(headers = {}) {
+  const raw = headers['retry-after'] ?? headers['Retry-After'];
+  if (raw == null) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return seconds * 1000;
+  }
+  return null;
+}
+
 function normalizeApiPath(url) {
   if (url.startsWith('/api/')) return url.slice(4);
   if (url.startsWith('/api')) return url.slice(4) || '/';
@@ -179,7 +210,27 @@ api.interceptors.response.use(
     }
     return response;
   },
-  (error) => {
+  async (error) => {
+    const config = error?.config;
+    const canRetry503 =
+      config &&
+      !config.__transient503Retry &&
+      isRetrySafeMethod(config.method) &&
+      isTransient503(error);
+
+    if (canRetry503) {
+      const attempt = config.__transient503Attempt ?? 0;
+      if (attempt < TRANSIENT_503_MAX_RETRIES) {
+        config.__transient503Attempt = attempt + 1;
+        config.__transient503Retry = true;
+        const retryAfterMs = parseRetryAfterMs(error.response?.headers);
+        const delayMs =
+          retryAfterMs ?? TRANSIENT_503_BASE_DELAY_MS * (attempt + 1);
+        await sleep(delayMs);
+        return api.request(config);
+      }
+    }
+
     if (error?.response?.status === 401 && !error.config?.url?.includes('/auth/')) {
       window.location.href = '/login';
     }
@@ -388,6 +439,7 @@ export const leaveApi = {
   createPolicy: (payload) => api.post('/leave/policies', payload).then((r) => r.data),
   updatePolicy: (id, payload) => api.patch(`/leave/policies/${id}`, payload).then((r) => r.data),
   getMyBalances: (params = {}) => api.get('/leave/balances/me', { params }).then((r) => r.data),
+  getMyYears: () => api.get('/leave/years/me').then((r) => r.data),
   getBalances: (params = {}) => api.get('/leave/balances', { params }).then((r) => r.data),
   adjustBalance: (userId, payload) =>
     api.patch(`/leave/balances/${userId}`, payload).then((r) => r.data),
@@ -623,6 +675,12 @@ export function getErrorMessage(error) {
   const data = error?.response?.data;
   if (data?.errors?.length) {
     return data.errors.map((item) => item.message).join(' ');
+  }
+  if (error?.response?.status === 503) {
+    return (
+      data?.message ||
+      'The server is temporarily unavailable. Please wait a moment and try again.'
+    );
   }
   return (
     data?.message ||

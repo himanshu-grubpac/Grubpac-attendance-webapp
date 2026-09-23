@@ -48,6 +48,7 @@ export const helpTicketQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(100).optional(),
   dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  departmentId: objectIdSchema.optional(),
 });
 
 export const HELP_ATTACHMENT_MAX_BYTES = 5_242_880;

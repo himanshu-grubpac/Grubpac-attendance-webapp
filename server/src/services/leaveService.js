@@ -93,6 +93,25 @@ function provisionalTiming(windowMs, fromTime = Date.now()) {
   return { undoExpiresAt, notifyAfter };
 }
 
+/**
+ * Mongo filter for staged leave decisions due for the finalizer sweep.
+ * Primary path: notifyAfter reached. Safety net: undo window elapsed but
+ * notifyAfter missing or also due (legacy / poison rows that would never match
+ * the old notificationsSent-only query).
+ */
+function dueStagedLeaveDecisionFilter(now) {
+  return {
+    pendingDecision: { $ne: null },
+    $or: [
+      { notifyAfter: { $ne: null, $lte: now } },
+      {
+        undoExpiresAt: { $ne: null, $lte: now },
+        $or: [{ notifyAfter: null }, { notifyAfter: { $lte: now } }],
+      },
+    ],
+  };
+}
+
 const pendingSubmitTimers = new Map();
 
 /** Single-flight guard so the in-memory timer and the sweeper job never dispatch the same request concurrently. */
@@ -308,6 +327,39 @@ export async function peekLeaveDecisionToken(requestId, action, rawToken) {
 // email/SMS is deferred until this window passes, so a reverted decision never
 // mails the applicant. Shared with the client popup via LEAVE_DECISION_UNDO_MS.
 const LEAVE_DECISION_UNDO_MS = env.leaveDecisionUndoMs;
+
+/**
+ * Maps an approval-queue tab to a Mongo filter that includes provisional
+ * (undo-window) rows whose committed `status` has not yet been written.
+ */
+export function buildLeaveApprovalStatusFilter(status) {
+  switch (status) {
+    case 'approved':
+      return {
+        $or: [
+          { status: 'approved' },
+          { status: 'pending', pendingDecision: 'approved' },
+        ],
+      };
+    case 'rejected':
+      return {
+        $or: [
+          { status: 'rejected' },
+          { status: 'pending', pendingDecision: 'rejected' },
+        ],
+      };
+    case 'cancelled':
+      return {
+        $or: [
+          { status: 'cancelled' },
+          { status: 'approved', pendingDecision: 'cancelled' },
+        ],
+      };
+    case 'pending':
+    default:
+      return { status: 'pending' };
+  }
+}
 
 /**
  * Raw leave-type ObjectId for balance keying. Populating a deleted type
@@ -1716,7 +1768,7 @@ export async function cancelApprovedLeaveByApprover(requestId, actor, permission
   }
 
   await applyLeaveCancellation(request, actor, { undoable: true, approverId: actor._id, decisionComment, auditContext });
-  return request.toSafeJSON();
+  return (await LeaveRequest.findById(request._id).populate(LEAVE_REQUEST_POPULATE)).toSafeJSON();
 }
 
 /**
@@ -2482,11 +2534,7 @@ async function expirePendingWfhAttendance(now) {
  */
 export async function runLeaveDecisionNotifyJob(now = new Date()) {
   const expiredPendingWfh = await expirePendingWfhAttendance(now);
-  const dueDecisions = await LeaveRequest.find({
-    pendingDecision: { $ne: null },
-    notifyAfter: { $ne: null, $lte: now },
-    notificationsSent: false,
-  }).populate(LEAVE_REQUEST_POPULATE);
+  const dueDecisions = await LeaveRequest.find(dueStagedLeaveDecisionFilter(now)).populate(LEAVE_REQUEST_POPULATE);
   const dueSubmits = await LeaveRequest.find({
     status: 'pending',
     pendingDecision: null,
@@ -2503,6 +2551,7 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   for (const request of dueDecisions) {
     const decision = request.pendingDecision;
     const requestKey = request._id.toString();
+    const skipNotify = request.notificationsSent === true;
     try {
       // Stale-guard: only the revision that staged this outcome may finalize
       // it. Anything else means a newer action superseded it — no-op.
@@ -2579,47 +2628,51 @@ export async function runLeaveDecisionNotifyJob(now = new Date()) {
   }
 
       // Deferred notification — post-commit only, never blocking finality.
-      try {
-        if (decision === 'cancelled') {
-          const approverId = request.approverId?._id?.toString?.()
-            ?? request.approverId?.toString?.()
-            ?? null;
-          // request.* is the populated sweep doc re-read after staging, so
-          // cancelledBy records who actually initiated the cancellation
-          // (owner vs approver), which approverId alone cannot tell (it
-          // keeps pointing at the original approver).
-          const cancelledBy = request.cancelledBy?._id?.toString?.()
-            ?? request.cancelledBy?.toString?.()
-            ?? null;
-          await notifyLeaveCancelled(request, true, approverId, { sendChannels: true, cancelledBy });
-        } else {
-          const requester = await loadRequester(userId);
-          await notifyApplicantDecision({
-            applicant: requester,
-            request,
-            leaveType: request.leaveTypeId,
-            status: decision === 'approved' ? 'approved' : 'rejected',
-            decisionComment: request.decisionComment,
-            sendChannels: true,
+      // Skip when notificationsSent was already true (stuck-row recovery) so
+      // a half-applied row never double-mails the applicant.
+      if (!skipNotify) {
+        try {
+          if (decision === 'cancelled') {
+            const approverId = request.approverId?._id?.toString?.()
+              ?? request.approverId?.toString?.()
+              ?? null;
+            // request.* is the populated sweep doc re-read after staging, so
+            // cancelledBy records who actually initiated the cancellation
+            // (owner vs approver), which approverId alone cannot tell (it
+            // keeps pointing at the original approver).
+            const cancelledBy = request.cancelledBy?._id?.toString?.()
+              ?? request.cancelledBy?.toString?.()
+              ?? null;
+            await notifyLeaveCancelled(request, true, approverId, { sendChannels: true, cancelledBy });
+          } else {
+            const requester = await loadRequester(userId);
+            await notifyApplicantDecision({
+              applicant: requester,
+              request,
+              leaveType: request.leaveTypeId,
+              status: decision === 'approved' ? 'approved' : 'rejected',
+              decisionComment: request.decisionComment,
+              sendChannels: true,
+            });
+          }
+        } catch (notifyErr) {
+          // Final state stands; delivery failure is logged for ops follow-up.
+          // No retry by design (the decision is final) — surface request context
+          // so a missed applicant/manager email can be found and re-sent manually.
+          console.error('[leave] finalized notification failed', {
+            requestId: requestKey,
+            decision,
+            revision: request.pendingRevision ?? request.revision,
+            error: notifyErr?.message,
+          });
+          auditLog('leave_finalized_notification_failed', {
+            userId: userId?.toString?.(),
+            requestId: requestKey,
+            decision,
+            error: notifyErr?.message ?? 'unknown',
+            ...submittedAuditContext(request),
           });
         }
-      } catch (notifyErr) {
-        // Final state stands; delivery failure is logged for ops follow-up.
-        // No retry by design (the decision is final) — surface request context
-        // so a missed applicant/manager email can be found and re-sent manually.
-        console.error('[leave] finalized notification failed', {
-          requestId: requestKey,
-          decision,
-          revision: request.pendingRevision ?? request.revision,
-          error: notifyErr?.message,
-        });
-        auditLog('leave_finalized_notification_failed', {
-          userId: userId?.toString?.(),
-          requestId: requestKey,
-          decision,
-          error: notifyErr?.message ?? 'unknown',
-          ...submittedAuditContext(request),
-        });
       }
 
       auditLog('leave_request_finalized', {
@@ -2678,7 +2731,6 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (!hasPermission(permissions, PERMISSIONS.LEAVE_APPROVE)) {
       throwError('You do not have permission to view approval queue.', 403);
     }
-    filter.status = 'pending';
     if (hasCompanyWideScope(permissions, actor)) {
       // Admin/HR sees all pending
     } else {
@@ -2692,7 +2744,7 @@ export async function listLeaveRequests(actor, permissions, query) {
     if (hasCompanyWideScope(permissions, actor)) {
       // unscoped
     } else {
-      // Direct reports (+ delegate chain) only — never managed departments.
+      // Full managed-team membership (direct reports, delegate chain, managed depts).
       const reportIds = await resolveLeaveTeamUserIds(actor);
       filter.userId = { $in: reportIds ?? [] };
     }
@@ -2753,7 +2805,14 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   if (query.status && query.status !== 'all') {
-    filter.status = query.status;
+    if (scope === 'approvals') {
+      delete filter.status;
+      Object.assign(filter, buildLeaveApprovalStatusFilter(query.status));
+    } else {
+      filter.status = query.status;
+    }
+  } else if (scope === 'approvals') {
+    filter.status = 'pending';
   }
 
   if (query.month) {
@@ -2773,10 +2832,13 @@ export async function listLeaveRequests(actor, permissions, query) {
   }
 
   const skip = (query.page - 1) * query.limit;
-  const resolvedStatus = filter.status ?? query.status;
+  const queueTab =
+    scope === 'approvals'
+      ? (query.status && query.status !== 'all' ? query.status : 'pending')
+      : (filter.status ?? query.status);
   // _id tiebreaker keeps offset pagination stable when timestamps tie.
   const sort =
-    resolvedStatus === 'approved' || resolvedStatus === 'rejected'
+    queueTab === 'approved' || queueTab === 'rejected' || queueTab === 'cancelled'
       ? { decidedAt: -1, createdAt: -1, _id: -1 }
       : { createdAt: -1, _id: -1 };
   const [requests, total] = await Promise.all([

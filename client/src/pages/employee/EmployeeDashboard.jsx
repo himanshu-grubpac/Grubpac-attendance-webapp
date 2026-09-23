@@ -26,6 +26,7 @@ import {
 import { evaluateOfficeGeoPreview } from '../../utils/geoPreview.js';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { broadcastAttendancePayrollSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
+import { attendanceUndoRemainingMs } from '../../utils/decisionUndo.js';
 
 function nextISTMonthInput(monthInput) {
   const [year, month] = monthInput.split('-').map(Number);
@@ -293,15 +294,22 @@ export default function EmployeeDashboard() {
       setLateNoteOpen(false);
       setLateNoteText('');
       if (data.undoToken) {
-        showActionPopup({
-          message:
-            type === 'check_in'
-              ? 'Checked in. If done by mistake, click Undo to revert it.'
-              : 'Checked out. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-          onUndo: () => performUndo(data.undoToken),
-          durationMs: 15000,
-        });
+        const undoExpiresAtMs = Number.isFinite(data.undo?.expiresAt) ? data.undo.expiresAt : null;
+        const durationMs = attendanceUndoRemainingMs(data.undo);
+        if (durationMs > 0) {
+          showActionPopup({
+            message:
+              type === 'check_in'
+                ? 'Checked in. If done by mistake, click Undo to revert it.'
+                : 'Checked out. If done by mistake, click Undo to revert it.',
+            undoExpiresAtMs,
+            onExpired: () => showError('The undo window has expired.'),
+            onUndo: () => performUndo(data.undoToken),
+            durationMs,
+          });
+        } else {
+          showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
+        }
       } else {
         showSuccess(type === 'check_in' ? 'Checked in.' : 'Checked out.');
       }

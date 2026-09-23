@@ -5,6 +5,7 @@ import { WFH_LEAVE_TYPE_CODE } from '@shared/utils/wfhPolicy.js';
 import { getISTDateInputValue } from '../../utils/datetime.js';
 import { leaveApi, getErrorMessage, getFieldErrors } from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
+import { useActionPopup } from '../../context/ActionPopupContext.jsx';
 import { validateForm } from '../../utils/validation.js';
 import { broadcastLeavePayrollSync } from '../../utils/portalSync.js';
 import { showFormError, buildDocCertificateError } from '../../utils/formErrors.js';
@@ -21,6 +22,12 @@ import {
   LEAVE_APPLY_DEADLINE_ERROR,
 } from '@shared/utils/wfhPolicy.js';
 import DateField from '../../components/DateField.jsx';
+import {
+  isDecisionUndoExpired,
+  parseDecisionUndoExpiresAt,
+  submitUndoRemainingMs,
+  SUBMIT_UNDO_FALLBACK_MS,
+} from '../../utils/decisionUndo.js';
 import FieldError from '../../components/FieldError.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
@@ -50,6 +57,7 @@ const DURATION_OPTIONS = [
  */
 export default function ApplyLeaveForm({ mode = 'leave' }) {
   const { showToast, showSuccess } = useToast();
+  const { showActionPopup } = useActionPopup();
   const isWfhMode = mode === 'wfh';
   const [types, setTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
@@ -70,7 +78,6 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
   const submittingRef = useRef(false);
   const alertRef = useRef(null);
   const [wfhDisabled, setWfhDisabled] = useState(false);
-  const UNDO_WINDOW_MS = 10000;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const editId = searchParams.get('edit');
@@ -340,19 +347,22 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
       const snapshot = { ...form };
       setForm({ ...emptyForm, leaveTypeId: form.leaveTypeId });
       setPreview(null);
-      // Undo countdown follows the server-authoritative expiry when present
-      // (backend remains correct across refresh/close); local fallback only.
-      const serverUndoMs = Date.parse(req.decisionUndoExpiresAt ?? '');
-      const undoMs = Number.isFinite(serverUndoMs)
-        ? Math.max(0, serverUndoMs - Date.now())
-        : UNDO_WINDOW_MS;
+      const undoExpiresAtMs = parseDecisionUndoExpiresAt(req.decisionUndoExpiresAt);
+      const undoMs = submitUndoRemainingMs(req, SUBMIT_UNDO_FALLBACK_MS);
       // A zero/negative window (expiry already passed or clock skew) would
       // render an instantly-vanishing Undo toast — fall back to plain success.
       if (undoMs > 0) {
-        showToast(isWfhMode ? 'WFH request submitted.' : 'Leave request submitted.', {
-          variant: 'success',
+        showActionPopup({
+          message: isWfhMode
+            ? 'WFH request submitted. If done by mistake, click Undo to revert it.'
+            : 'Leave request submitted. If done by mistake, click Undo to revert it.',
+          undoExpiresAtMs,
+          onExpired: () => {
+            showToast('The undo window has expired.', { variant: 'error' });
+            navigate('/employee/leave/requests');
+          },
+          onUndo: () => handleUndo(req.id, snapshot, undoExpiresAtMs),
           durationMs: undoMs,
-          action: { label: 'Undo', onClick: () => handleUndo(req.id, snapshot) },
         });
       } else {
         showSuccess(isWfhMode ? 'WFH request submitted.' : 'Leave request submitted.');
@@ -382,8 +392,13 @@ export default function ApplyLeaveForm({ mode = 'leave' }) {
     }
   }
 
-  async function handleUndo(id, snapshot) {
+  async function handleUndo(id, snapshot, undoExpiresAtMs) {
     if (!id) return;
+    if (isDecisionUndoExpired(undoExpiresAtMs)) {
+      showToast('The undo window has expired.', { variant: 'error' });
+      navigate('/employee/leave/requests');
+      return;
+    }
     try {
       await leaveApi.withdrawSubmitted(id);
       if (snapshot) {

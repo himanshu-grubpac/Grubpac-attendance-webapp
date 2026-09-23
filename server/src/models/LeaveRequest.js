@@ -117,7 +117,9 @@ leaveRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     pendingDecision: this.pendingDecision ?? null,
     revision: this.revision ?? 0,
     finalizedAt: this.finalizedAt ?? null,
-    decisionUndoExpiresAt: this.undoExpiresAt ?? this.notifyAfter ?? null,
+    // notifyAfter trails undo expiry by the post-expiry notification delay and
+    // must never drive client undo countdowns (see schema comment above).
+    decisionUndoExpiresAt: this.undoExpiresAt ?? null,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

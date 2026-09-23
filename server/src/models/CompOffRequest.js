@@ -137,7 +137,8 @@ compOffRequestSchema.methods.toSafeJSON = function toSafeJSON() {
     cancelledBy: this.cancelledBy?._id?.toString() ?? this.cancelledBy?.toString?.() ?? null,
     revision: this.revision ?? 0,
     finalizedAt: this.finalizedAt ?? null,
-    decisionUndoExpiresAt: this.undoExpiresAt ?? this.notifyAfter ?? null,
+    // notifyAfter trails undo expiry — never expose it as the undo deadline.
+    decisionUndoExpiresAt: this.undoExpiresAt ?? null,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

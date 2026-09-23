@@ -8,10 +8,6 @@ import { ActionPopupProvider } from '../context/ActionPopupContext.jsx';
 import ApplyLeaveForm from '../pages/employee/ApplyLeaveForm.jsx';
 import { leaveApi } from '../services/api.js';
 
-// Neutralize the advance-notice deadline (same-day defaults would otherwise
-// keep Submit disabled): the unit under test is the zero-working-days guard,
-// not deadline policy (covered by wfhPolicyService.test.js server-side).
-// Full manual mock (no importOriginal): deterministic regardless of aliasing.
 vi.mock('@shared/utils/wfhPolicy.js', () => ({
   WFH_LEAVE_TYPE_CODE: 'WFH',
   SL_LEAVE_TYPE_CODE: 'SL',
@@ -25,9 +21,7 @@ vi.mock('../services/api.js', () => ({
   leaveApi: {
     listTypes: vi.fn(() =>
       Promise.resolve({
-        // IDs must satisfy objectIdSchema or client validation fails first.
         types: [
-          { id: '507f1f77bcf86cd799439011', code: 'CL', name: 'Casual Leave', isActive: true },
           { id: '507f1f77bcf86cd799439012', code: 'WFH', name: 'Work From Home', isActive: true },
         ],
       }),
@@ -35,17 +29,14 @@ vi.mock('../services/api.js', () => ({
     listPolicies: vi.fn(() => Promise.resolve({ policies: [] })),
     listHolidays: vi.fn(() => Promise.resolve({ holidays: [] })),
     getMyBalances: vi.fn(() => Promise.resolve({ balances: [] })),
-    // Zero working days whatever the range (e.g. a Saturday-only range).
-    previewDays: vi.fn(() => Promise.resolve({ days: 0, workingDays: [], sandwichApplied: false })),
+    previewDays: vi.fn(() => Promise.resolve({ days: 1, workingDays: ['2026-09-22'], sandwichApplied: false })),
     createRequest: vi.fn(),
-    updateRequest: vi.fn(),
+    withdrawSubmitted: vi.fn(() => Promise.resolve({})),
   },
   getErrorMessage: (err) => err?.message ?? 'Something went wrong.',
   getFieldErrors: () => ({}),
 }));
 
-// jsdom has no layout engine: stub scrollIntoView used by dropdowns and the
-// submit-error alert.
 if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoView) {
   window.HTMLElement.prototype.scrollIntoView = function scrollIntoView() {};
 }
@@ -62,44 +53,67 @@ function setup(mode) {
   );
 }
 
-async function fillReasonAndSubmit(user) {
-  const reason = screen.getByLabelText(/reason/i);
-  await user.type(reason, 'Family function visit');
-  await user.click(screen.getByRole('button', { name: /submit request/i }));
-}
-
-describe('ApplyLeaveForm submit guards (leave + WFH parity)', () => {
+describe('ApplyLeaveForm submit undo (ActionPopup)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('leave mode never POSTs a zero-working-day range and shows the reason', async () => {
-    const user = userEvent.setup();
-    setup('leave');
-
-    await waitFor(() => {
-      expect(leaveApi.listTypes).toHaveBeenCalled();
+  it('wfh submit shows ActionPopup with Undo and yellow progress bar', async () => {
+    const undoExpiresAt = new Date(Date.now() + 10000).toISOString();
+    leaveApi.createRequest.mockResolvedValueOnce({
+      request: {
+        id: '507f1f77bcf86cd799439099',
+        userId: '507f1f77bcf86cd799439088',
+        decisionUndoExpiresAt: undoExpiresAt,
+      },
     });
-    await fillReasonAndSubmit(user);
 
-    await waitFor(() => {
-      expect(screen.getByText(/no working days/i)).toBeInTheDocument();
-    });
-    expect(leaveApi.createRequest).not.toHaveBeenCalled();
-  });
-
-  it('wfh mode blocks zero-working-day ranges exactly like leave mode', async () => {
     const user = userEvent.setup();
     setup('wfh');
 
     await waitFor(() => {
-      expect(leaveApi.listTypes).toHaveBeenCalled();
+      expect(screen.getByLabelText('Leave type')).toBeInTheDocument();
     });
-    await fillReasonAndSubmit(user);
+
+    await user.type(screen.getByLabelText(/reason/i), 'Focus work from home');
+    await user.click(screen.getByRole('button', { name: /submit request/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/no working days/i)).toBeInTheDocument();
+      expect(leaveApi.createRequest).toHaveBeenCalledTimes(1);
     });
-    expect(leaveApi.createRequest).not.toHaveBeenCalled();
+
+    expect(
+      await screen.findByText(/WFH request submitted\. If done by mistake, click Undo to revert it\./i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    expect(document.querySelector('.action-popup__progress-bar')).toBeInTheDocument();
+  });
+
+  it('wfh undo calls withdrawSubmitted before server expiry', async () => {
+    const undoExpiresAt = new Date(Date.now() + 10000).toISOString();
+    leaveApi.createRequest.mockResolvedValueOnce({
+      request: {
+        id: '507f1f77bcf86cd799439099',
+        userId: '507f1f77bcf86cd799439088',
+        decisionUndoExpiresAt: undoExpiresAt,
+      },
+    });
+
+    const user = userEvent.setup();
+    setup('wfh');
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Leave type')).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByLabelText(/reason/i), 'Focus work from home');
+    await user.click(screen.getByRole('button', { name: /submit request/i }));
+
+    const undoBtn = await screen.findByRole('button', { name: 'Undo' });
+    await user.click(undoBtn);
+
+    await waitFor(() => {
+      expect(leaveApi.withdrawSubmitted).toHaveBeenCalledWith('507f1f77bcf86cd799439099');
+    });
   });
 });

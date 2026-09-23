@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PERMISSIONS, SYSTEM_ROLE_SLUGS } from '@shared/permissions.js';
+import { PERMISSIONS, SYSTEM_ROLE_SLUGS, hasCompanyWideScope } from '@shared/permissions.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { adminApi, getErrorMessage, leaveApi } from '../../services/api.js';
@@ -85,8 +85,9 @@ export default function AdminDashboard() {
 
   // Today-present roster: every role with an admin view (READ_ALL or
   // READ_TEAM) gets the section; the server scopes rows to the managed
-  // departments for team viewers. Department/role narrow within scope.
-  const canSeeFullRoster = hasPermission(PERMISSIONS.ATTENDANCE_READ_ALL);
+  // departments for team viewers. Company-wide filter lists require
+  // employees.record.r; RMs get an employee dropdown instead of role.
+  const canSeeFullRoster = hasCompanyWideScope(user?.permissions ?? []);
   const canSeeTeamRoster =
     canSeeFullRoster || hasPermission(PERMISSIONS.ATTENDANCE_READ_TEAM);
   // Managed department scope for team viewers (single managed department
@@ -105,8 +106,10 @@ export default function AdminDashboard() {
   const [rosterQuery, setRosterQuery] = useState('');
   const [rosterDepartment, setRosterDepartment] = useState('');
   const [rosterRole, setRosterRole] = useState('');
+  const [rosterEmployee, setRosterEmployee] = useState('');
   const [rosterDepartments, setRosterDepartments] = useState([]);
   const [rosterRoles, setRosterRoles] = useState([]);
+  const [rosterTeamEmployees, setRosterTeamEmployees] = useState([]);
   // Scope facets arrive with every roster response: the distinct
   // departments/roles across the viewer's whole scoped membership. Team
   // viewers build both dropdowns from these (never the directory lists).
@@ -154,17 +157,19 @@ export default function AdminDashboard() {
   const canSeeAdminRole = user?.roleSlug === SYSTEM_ROLE_SLUGS.ADMIN
     || hasPermission(PERMISSIONS.ROLES_MANAGE);
   const withoutAdminRole = (role) => canSeeAdminRole || role.slug !== SYSTEM_ROLE_SLUGS.ADMIN;
-  const scopedRoleOptions = useMemo(() => {
-    const fromFacets = Array.isArray(rosterFacets.roles) ? rosterFacets.roles : [];
-    return [
-      { value: '', label: 'All roles' },
-      ...fromFacets
-        .filter(withoutAdminRole)
-        .map((role) => ({ value: role.id, label: role.name })),
-    ];
-  }, [rosterFacets, canSeeAdminRole]);
-  const showRosterRoleFilter =
-    canSeeFullRoster || (canSeeTeamRoster && scopedRoleOptions.length > 1);
+  const showRosterRoleFilter = canSeeFullRoster;
+  const rosterEmployeeOptions = useMemo(
+    () => [
+      { value: '', label: 'All team members' },
+      ...rosterTeamEmployees.map((employee) => ({
+        value: employee.id,
+        label: `${employee.name}${employee.employeeCode ? ` (${employee.employeeCode})` : ''}`,
+      })),
+    ],
+    [rosterTeamEmployees],
+  );
+  const showRosterEmployeeFilter =
+    !canSeeFullRoster && canSeeTeamRoster && rosterTeamEmployees.length > 1;
   const debouncedRosterQuery = useDebouncedValue(rosterQuery, 350);
   const rosterSentinelRef = useRef(null);
   const rosterRequestKeyRef = useRef('');
@@ -175,12 +180,13 @@ export default function AdminDashboard() {
     append = false,
     nextDepartment = '',
     nextRole = '',
+    nextEmployee = '',
     // Quiet keystroke refreshes keep the current rows on screen and swap in
     // results when they land — no skeleton flash per keystroke (same as the
     // Employee List search bar).
     quiet = false,
   } = {}) => {
-    const requestKey = `${search}|${nextPage}|${append}|${nextDepartment}|${nextRole}`;
+    const requestKey = `${search}|${nextPage}|${append}|${nextDepartment}|${nextRole}|${nextEmployee}`;
     rosterRequestKeyRef.current = requestKey;
     if (append) {
       setRosterLoadingMore(true);
@@ -193,6 +199,7 @@ export default function AdminDashboard() {
       if (search.trim()) params.search = search.trim();
       if (nextDepartment) params.departmentId = nextDepartment;
       if (nextRole) params.roleId = nextRole;
+      if (nextEmployee) params.userId = nextEmployee;
       const data = await adminApi.getTeamTodayStatus(params);
       if (rosterRequestKeyRef.current !== requestKey) return;
       setRoster((current) => {
@@ -250,8 +257,6 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (!canSeeFullRoster) return undefined;
-    // listRoles needs ROLES_MANAGE or USERS_WRITE — team viewers build
-    // their role options from the roster scope facets instead.
     if (typeof adminApi.listRoles !== 'function') return undefined;
     adminApi
       .listRoles()
@@ -259,12 +264,30 @@ export default function AdminDashboard() {
       .catch(() => setRosterRoles([]));
   }, [canSeeFullRoster]);
 
+  useEffect(() => {
+    if (canSeeFullRoster || !canSeeTeamRoster) return undefined;
+    let cancelled = false;
+    adminApi
+      .listEmployees({ page: 1, limit: 200 })
+      .then((data) => {
+        if (!cancelled) setRosterTeamEmployees(data.employees ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setRosterTeamEmployees([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canSeeFullRoster, canSeeTeamRoster]);
+
   // Refs mirror the Employee List pattern: the debounced keystroke effect
   // must not refire for dropdown changes (those load directly below).
   const rosterDepartmentRef = useRef(rosterDepartment);
   rosterDepartmentRef.current = rosterDepartment;
   const rosterRoleRef = useRef(rosterRole);
   rosterRoleRef.current = rosterRole;
+  const rosterEmployeeRef = useRef(rosterEmployee);
+  rosterEmployeeRef.current = rosterEmployee;
 
   useEffect(() => {
     if (!canSeeTeamRoster) return undefined;
@@ -273,18 +296,42 @@ export default function AdminDashboard() {
       nextPage: 1,
       nextDepartment: rosterDepartmentRef.current,
       nextRole: rosterRoleRef.current,
+      nextEmployee: rosterEmployeeRef.current,
       quiet: true,
     });
   }, [canSeeTeamRoster, debouncedRosterQuery, loadRoster]);
 
   function handleRosterDepartmentChange(value) {
     setRosterDepartment(value);
-    loadRoster({ search: rosterQuery, nextPage: 1, nextDepartment: value, nextRole: rosterRole });
+    loadRoster({
+      search: rosterQuery,
+      nextPage: 1,
+      nextDepartment: value,
+      nextRole: rosterRole,
+      nextEmployee: rosterEmployee,
+    });
   }
 
   function handleRosterRoleChange(value) {
     setRosterRole(value);
-    loadRoster({ search: rosterQuery, nextPage: 1, nextDepartment: rosterDepartment, nextRole: value });
+    loadRoster({
+      search: rosterQuery,
+      nextPage: 1,
+      nextDepartment: rosterDepartment,
+      nextRole: value,
+      nextEmployee: rosterEmployee,
+    });
+  }
+
+  function handleRosterEmployeeChange(value) {
+    setRosterEmployee(value);
+    loadRoster({
+      search: rosterQuery,
+      nextPage: 1,
+      nextDepartment: rosterDepartment,
+      nextRole: rosterRole,
+      nextEmployee: value,
+    });
   }
 
   useEffect(() => {
@@ -302,6 +349,7 @@ export default function AdminDashboard() {
           append: true,
           nextDepartment: rosterDepartmentRef.current,
           nextRole: rosterRoleRef.current,
+          nextEmployee: rosterEmployeeRef.current,
         });
       },
       { rootMargin: '120px' },
@@ -313,6 +361,7 @@ export default function AdminDashboard() {
     debouncedRosterQuery,
     rosterDepartment,
     rosterRole,
+    rosterEmployee,
     loadRoster,
     rosterLoading,
     rosterLoadingMore,
@@ -403,12 +452,13 @@ export default function AdminDashboard() {
                 departmentOptions={rosterDepartmentOptions}
                 onRoleChange={showRosterRoleFilter ? handleRosterRoleChange : null}
                 roleValue={rosterRole}
-                roleOptions={canSeeFullRoster
-                  ? [
-                    { value: '', label: 'All roles' },
-                    ...rosterRoles.filter(withoutAdminRole).map((role) => ({ value: role.id, label: role.name })),
-                  ]
-                  : scopedRoleOptions}
+                roleOptions={[
+                  { value: '', label: 'All roles' },
+                  ...rosterRoles.filter(withoutAdminRole).map((role) => ({ value: role.id, label: role.name })),
+                ]}
+                onEmployeeChange={showRosterEmployeeFilter ? handleRosterEmployeeChange : null}
+                employeeValue={rosterEmployee}
+                employeeOptions={rosterEmployeeOptions}
                 footer={
                   rosterPagination && roster.length > 0 ? (
                     <p className="employees-scroll-hint muted small" role="status">

@@ -114,7 +114,11 @@ router.post(
 );
 router.get(
   '/users',
-  requirePermission(PERMISSIONS.EMPLOYEES_RECORD_R, PERMISSIONS.EMPLOYEES_STATS_R),
+  requirePermission(
+    PERMISSIONS.EMPLOYEES_RECORD_R,
+    PERMISSIONS.EMPLOYEES_STATS_R,
+    PERMISSIONS.EMPLOYEES_SALARY_HISTORY_R,
+  ),
   asyncHandler(listEmployees),
 );
 router.get(

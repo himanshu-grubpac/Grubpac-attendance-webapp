@@ -18,6 +18,11 @@ import LeaveDecisionModal from './LeaveDecisionModal.jsx';
 import RequestsTabs from '../../components/RequestsTabs.jsx';
 import { broadcastLeaveItemSync, PORTAL_TOPICS } from '../../utils/portalSync.js';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
+import {
+  DECISION_UNDO_FALLBACK_MS,
+  resolveDecisionUndoExpiresAt,
+  stagedDecisionUndoRemainingMs,
+} from '../../utils/decisionUndo.js';
 
 const REQUEST_TABS = ['leave', 'wfh', 'compoff'];
 
@@ -27,23 +32,12 @@ function tabFromParam(value) {
 
 const APPROVALS_PAGE_SIZE = 20;
 
-// Fallback only: the popup countdown prefers the server-authoritative
-// `decisionUndoExpiresAt` (undo expiry; the applicant email follows ~2.5s
-// later via the finalizer, never during the undoable period).
-const DECISION_UNDO_MS = 15000;
-
 // Quiet background settle cadence for rows with a staged (undoable) action.
 // The API answers fast; final status lands via the ~5s server finalizer, so
 // the UI polls silently instead of hanging on PENDING. Capped so a stuck
 // staged row (finalizer down) stops polling after ~2 minutes.
 const PENDING_SETTLE_POLL_MS = 5000;
 const MAX_SETTLE_POLLS = 24;
-
-function decisionUndoDurationMs(request) {
-  const expiresAt = Date.parse(request?.decisionUndoExpiresAt ?? '');
-  if (!Number.isFinite(expiresAt)) return DECISION_UNDO_MS;
-  return Math.max(0, expiresAt - Date.now());
-}
 
 const AVATAR_COLORS = ['#e85d04', '#3b82f6', '#8b5cf6', '#059669', '#d946ef', '#0ea5e9'];
 
@@ -438,6 +432,28 @@ export default function AdminLeaveApprovals() {
     loadRequests({ nextPage: 1, nextQueueStatus: value });
   }
 
+  function syncQueueAfterDecision(nextQueueStatus, nextPage = page) {
+    setQueueStatus(nextQueueStatus);
+    return loadRequests({ nextPage, nextQueueStatus });
+  }
+
+  function showDecisionUndoPopup({ message, undoExpiresAtMs, onUndo, afterSync }) {
+    const durationMs = Number.isFinite(undoExpiresAtMs)
+      ? Math.max(0, undoExpiresAtMs - Date.now())
+      : DECISION_UNDO_FALLBACK_MS;
+    if (durationMs <= 0) return;
+    showActionPopup({
+      message,
+      undoExpiresAtMs,
+      onExpired: async () => {
+        showError('The undo window has expired. Refreshing the queue.');
+        await afterSync?.();
+      },
+      onUndo,
+      durationMs,
+    });
+  }
+
   function handleRequestTabChange(tab) {
     if (tab === 'compoff') {
       navigate('/admin/leave/comp-off');
@@ -565,29 +581,26 @@ export default function AdminLeaveApprovals() {
       setError('');
       try {
         const response = await leaveApi.rejectRequest(id, payload);
-        const durationMs = decisionUndoDurationMs(response?.request);
+        const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request);
         setDecisionModal({ open: false, item: null, comment: '' });
-        if (durationMs > 0) {
-          showActionPopup({
-            message: 'Leave request declined. If done by mistake, click Undo to revert it.',
-            undoLabel: 'Undo',
-            onUndo: async () => {
-              try {
-                await leaveApi.undoDecision(id);
-                showSuccess('Leave decision undone.');
-                broadcastLeaveItemSync(item);
-                await loadRequests({ nextPage: page });
-                setDecisionModal({ open: true, item: item, comment: note });
-              } catch (err) {
-                showError(getErrorMessage(err));
-                // Undo may have lost the expiry race and the request could be
-                // finalized — resync so the UI never shows a stale undoable row.
-                await loadRequests({ nextPage: page });
-              }
-            },
-            durationMs,
-          });
-        } else {
+        showDecisionUndoPopup({
+          message: 'Leave request declined. If done by mistake, click Undo to revert it.',
+          undoExpiresAtMs,
+          afterSync: () => syncQueueAfterDecision('rejected', page),
+          onUndo: async () => {
+            try {
+              await leaveApi.undoDecision(id);
+              showSuccess('Leave decision undone.');
+              broadcastLeaveItemSync(item);
+              await syncQueueAfterDecision('pending', page);
+              setDecisionModal({ open: true, item: item, comment: note });
+            } catch (err) {
+              showError(getErrorMessage(err));
+              await syncQueueAfterDecision('rejected', page);
+            }
+          },
+        });
+        if (!stagedDecisionUndoRemainingMs(response?.request)) {
           showSuccess('Leave request declined.');
         }
         setComments((prev) => {
@@ -596,7 +609,7 @@ export default function AdminLeaveApprovals() {
           return next;
         });
         broadcastLeaveItemSync(item);
-        await loadRequests({ nextPage: page });
+        await syncQueueAfterDecision('rejected', page);
       } catch (err) {
         showError(getErrorMessage(err));
       } finally {
@@ -609,38 +622,35 @@ export default function AdminLeaveApprovals() {
     setError('');
     try {
       const response = await leaveApi.approveRequest(id, payload);
-      const durationMs = decisionUndoDurationMs(response?.request);
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request);
       setDecisionModal({ open: false, item: null, comment: '' });
-      if (durationMs > 0) {
-        showActionPopup({
-          message: 'Leave request approved. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-            onUndo: async () => {
-              try {
-                await leaveApi.undoDecision(id);
-                showSuccess('Leave decision undone.');
-                broadcastLeaveItemSync(item);
-                await loadRequests({ nextPage: page });
-                setDecisionModal({ open: true, item: item, comment: note });
-              } catch (err) {
-                showError(getErrorMessage(err));
-                // Undo may have lost the expiry race and the request could be
-                // finalized — resync so the UI never shows a stale undoable row.
-                await loadRequests({ nextPage: page });
-              }
-            },
-            durationMs,
-          });
-        } else {
-          showSuccess('Leave request approved.');
-        }
+      showDecisionUndoPopup({
+        message: 'Leave request approved. If done by mistake, click Undo to revert it.',
+        undoExpiresAtMs,
+        afterSync: () => syncQueueAfterDecision('approved', page),
+        onUndo: async () => {
+          try {
+            await leaveApi.undoDecision(id);
+            showSuccess('Leave decision undone.');
+            broadcastLeaveItemSync(item);
+            await syncQueueAfterDecision('pending', page);
+            setDecisionModal({ open: true, item: item, comment: note });
+          } catch (err) {
+            showError(getErrorMessage(err));
+            await syncQueueAfterDecision('approved', page);
+          }
+        },
+      });
+      if (!stagedDecisionUndoRemainingMs(response?.request)) {
+        showSuccess('Leave request approved.');
+      }
       setComments((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
       broadcastLeaveItemSync(item);
-      await loadRequests({ nextPage: page });
+      await syncQueueAfterDecision('approved', page);
     } catch (err) {
       showError(getErrorMessage(err));
     } finally {
@@ -659,30 +669,29 @@ export default function AdminLeaveApprovals() {
     setError('');
     try {
       const response = await leaveApi.cancelApproved(item.id, { comment: note });
-      const durationMs = decisionUndoDurationMs(response?.request);
+      const undoExpiresAtMs = resolveDecisionUndoExpiresAt(response?.request);
       setCancelModal({ open: false, item: null, comment: '' });
-      if (durationMs > 0) {
-        showActionPopup({
-          message: 'Approved leave cancelled. If done by mistake, click Undo to revert it.',
-          undoLabel: 'Undo',
-            onUndo: async () => {
-              try {
-                await leaveApi.undoCancellation(item.id);
-                showSuccess('Cancellation undone. Leave restored.');
-                broadcastLeaveItemSync(item);
-                await loadRequests({ nextPage: page });
-              } catch (err) {
-                showError(getErrorMessage(err));
-                await loadRequests({ nextPage: page });
-              }
-            },
-          durationMs,
-        });
-      } else {
+      showDecisionUndoPopup({
+        message: 'Approved leave cancelled. If done by mistake, click Undo to revert it.',
+        undoExpiresAtMs,
+        afterSync: () => syncQueueAfterDecision('cancelled', page),
+        onUndo: async () => {
+          try {
+            await leaveApi.undoCancellation(item.id);
+            showSuccess('Cancellation undone. Leave restored.');
+            broadcastLeaveItemSync(item);
+            await syncQueueAfterDecision('approved', page);
+          } catch (err) {
+            showError(getErrorMessage(err));
+            await syncQueueAfterDecision('cancelled', page);
+          }
+        },
+      });
+      if (!stagedDecisionUndoRemainingMs(response?.request)) {
         showSuccess('Approved leave cancelled.');
       }
       broadcastLeaveItemSync(item);
-      await loadRequests({ nextPage: page });
+      await syncQueueAfterDecision('cancelled', page);
     } catch (err) {
       showError(getErrorMessage(err));
     } finally {
@@ -779,7 +788,7 @@ export default function AdminLeaveApprovals() {
                 </button>
               </div>
             ) : null}
-            <div className="filter-bar__field approvals-toolbar__clear">
+            <div className="filter-bar__field approvals-toolbar__actions">
               <button type="button" className="btn btn-ghost btn-sm" onClick={openLeaveEditor}>
                 Edit columns
               </button>

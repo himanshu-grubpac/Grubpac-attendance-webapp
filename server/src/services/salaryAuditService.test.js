@@ -6,6 +6,12 @@ import {
   salaryHistoryParamsSchema,
   salaryHistoryQuerySchema,
 } from '../../../shared/validation/salary.js';
+import {
+  buildEmployeeHistoryMonthKeys,
+  formatAuditStatusLabel,
+  mapAuditRowToExportRow,
+  MONTHLY_SALARY_AUDIT_EXPORT_HEADERS,
+} from './salaryAuditService.js';
 
 // ── Validation Schema Tests ──────────────────────────────────────────
 
@@ -74,6 +80,36 @@ test('salaryHistoryQuerySchema: invalid year 1999 rejects', () => {
 
 test('salaryHistoryQuerySchema: invalid year 2101 rejects', () => {
   assert.throws(() => salaryHistoryQuerySchema.parse({ year: 2101 }));
+});
+
+test('buildEmployeeHistoryMonthKeys: year before joining returns empty (no null range crash)', () => {
+  const subject = {
+    joiningDate: new Date('2026-03-15T00:00:00.000Z'),
+    endingDate: null,
+    createdAt: new Date('2026-03-15T00:00:00.000Z'),
+  };
+  const months = buildEmployeeHistoryMonthKeys(subject, 2025, new Date('2026-09-22T00:00:00.000Z'));
+  assert.deepEqual(months, []);
+});
+
+test('buildEmployeeHistoryMonthKeys: year after ending returns empty', () => {
+  const subject = {
+    joiningDate: new Date('2024-01-01T00:00:00.000Z'),
+    endingDate: new Date('2025-08-31T00:00:00.000Z'),
+    createdAt: new Date('2024-01-01T00:00:00.000Z'),
+  };
+  const months = buildEmployeeHistoryMonthKeys(subject, 2026, new Date('2026-09-22T00:00:00.000Z'));
+  assert.deepEqual(months, []);
+});
+
+test('buildEmployeeHistoryMonthKeys: clamps to join month and ending month in-year', () => {
+  const subject = {
+    joiningDate: new Date('2025-04-01T00:00:00.000Z'),
+    endingDate: new Date('2025-08-31T00:00:00.000Z'),
+    createdAt: new Date('2025-04-01T00:00:00.000Z'),
+  };
+  const months = buildEmployeeHistoryMonthKeys(subject, 2025, new Date('2026-09-22T00:00:00.000Z'));
+  assert.deepEqual(months, ['2025-04', '2025-05', '2025-06', '2025-07', '2025-08']);
 });
 
 // ── buildAuditRow Logic Tests (unit-level) ──────────────────────────
@@ -236,19 +272,50 @@ test('history and audit produce identical rows for same employee/month', () => {
   assert.deepEqual(historyRow, auditRow);
 });
 
-test('export columns include transferStatus and paidDaysOutOf30', () => {
-  const exportColumns = [
-    'Employee Code', 'Employee Name', 'Department', 'Year', 'Month', 'As of date',
-    'Monthly salary', 'Working Days', 'Present Days', 'Paid Leave Days',
-    'Paid days (out of 30)', 'Loss of pay (days)', 'Loss of pay till date', 'Per day salary',
-    'Other Deductions (INR)', 'Total Deductions (INR)', 'Month-to-date payable',
-    'Transfer Status', 'Status',
-  ];
+test('export columns include Transfer, Net, and paidDaysOutOf30', () => {
+  assert.ok(MONTHLY_SALARY_AUDIT_EXPORT_HEADERS.includes('Transfer'));
+  assert.ok(MONTHLY_SALARY_AUDIT_EXPORT_HEADERS.includes('Net'));
+  assert.ok(MONTHLY_SALARY_AUDIT_EXPORT_HEADERS.includes('Paid days (out of 30)'));
+  assert.ok(MONTHLY_SALARY_AUDIT_EXPORT_HEADERS.includes('As of date'));
+  assert.equal(MONTHLY_SALARY_AUDIT_EXPORT_HEADERS.length, 20);
+});
 
-  assert.ok(exportColumns.includes('Transfer Status'));
-  assert.ok(exportColumns.includes('Paid days (out of 30)'));
-  assert.ok(exportColumns.includes('As of date'));
-  assert.equal(exportColumns.length, 19);
+test('formatAuditStatusLabel matches on-screen audit status badges', () => {
+  assert.equal(formatAuditStatusLabel('settled'), 'Settled');
+  assert.equal(formatAuditStatusLabel('pending'), 'Pending estimate');
+  assert.equal(formatAuditStatusLabel('inconsistent'), 'Needs attention');
+});
+
+test('mapAuditRowToExportRow separates MTD payable from Net (no cross-fallback)', () => {
+  const row = {
+    employeeCode: 'EMP001',
+    employeeName: 'Test User',
+    departmentName: 'Engineering',
+    periodKey: '2026-09',
+    grossSalary: 60000,
+    workingDays: 26,
+    presentDays: 24,
+    paidLeaveDays: 0,
+    paidDaysOutOf30: 28,
+    payableEstimate: 55384.62,
+    asOfDate: '2026-09-16',
+    lopDays: 2,
+    lopDeduction: 4615.38,
+    perDaySalary: 2307.69,
+    otherDeductions: 0,
+    totalDeductions: 4615.38,
+    netSalary: null,
+    hasSalaryConfigured: true,
+    transferStatus: null,
+    status: 'inconsistent',
+  };
+
+  const exportRow = mapAuditRowToExportRow(row, '2026-09-16');
+
+  assert.equal(exportRow['Month-to-date payable'], 55384.62);
+  assert.equal(exportRow.Net, null);
+  assert.equal(exportRow.Transfer, '');
+  assert.equal(exportRow.Status, 'Needs attention');
 });
 
 test('empty audit returns valid structure with zero totals', () => {

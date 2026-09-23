@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { getPageMeta } from '../config/pageMeta.js';
 
@@ -8,10 +8,15 @@ export function PageMetaProvider({ children }) {
   const { pathname } = useLocation();
   const routeMeta = useMemo(() => getPageMeta(pathname), [pathname]);
   const [override, setOverride] = useState(null);
+  const pathnameRef = useRef(pathname);
 
-  useEffect(() => {
-    setOverride(null);
-  }, [pathname]);
+  // Reset overrides during render so child useEffects run after the clear (not before).
+  if (pathnameRef.current !== pathname) {
+    pathnameRef.current = pathname;
+    if (override !== null) {
+      setOverride(null);
+    }
+  }
 
   const meta = useMemo(
     () => ({

@@ -259,13 +259,24 @@ function buildTodayStatus(
   wfhApprovalPendingToday = false,
   compOffApprovedToday = false,
 ) {
-  const checkIn = records.find((record) => record.type === 'check_in') ?? null;
+  const checkIn =
+    records.find((record) => record.type === 'check_in' && !record.adminMarkedAbsent) ?? null;
   const checkOut = records.find((record) => record.type === 'check_out') ?? null;
+  const adminMarkedAbsentToday = records.some(
+    (record) =>
+      record.type === 'check_in'
+      && record.status === 'allowed'
+      && record.adminMarkedAbsent,
+  );
 
   return {
     checkIn,
     checkOut,
-    canCheckIn: !checkIn && !isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday),
+    adminMarkedAbsentToday,
+    canCheckIn:
+      !checkIn
+      && !adminMarkedAbsentToday
+      && !isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday),
     canCheckOut: Boolean(checkIn) && !checkOut,
     pendingLeaveToday,
     approvedLeaveToday,
@@ -377,10 +388,11 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
   const limit =
     Number.isInteger(options.limit) && options.limit > 0 ? Math.min(options.limit, 100) : 25;
   const searchNeedle = String(options.search ?? '').trim().toLowerCase();
-  // Department/role narrowing (same team-scope membership as the Employee
-  // List: filters only ever narrow the scoped roster, never widen it).
+  // Department/role/employee narrowing (same team-scope membership as the
+  // Employee List: filters only ever narrow the scoped roster, never widen it).
   const departmentFilter = options.departmentId ? String(options.departmentId) : '';
   const roleFilter = options.roleId ? String(options.roleId) : '';
+  const userFilter = options.userId ? String(options.userId) : '';
 
   const emptySummary = { present: 0, absent: 0, onLeave: 0, inactive: 0, total: 0 };
 
@@ -452,6 +464,10 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
     userIds = teamIds;
   }
 
+  if (userFilter) {
+    userIds = userIds.filter((id) => id.toString() === userFilter);
+  }
+
   if (userIds.length === 0) {
     if (!paginate) return [];
     return {
@@ -469,7 +485,7 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
       type: 'check_in',
       status: 'allowed',
       timestamp: { $gte: todayStart, $lte: todayEnd },
-    }).select('userId attendanceMode attendanceTag timestamp').lean(),
+    }).select('userId attendanceMode attendanceTag timestamp adminMarkedAbsent').lean(),
     LeaveRequest.find({
       userId: { $in: userIds },
       status: 'pending',
@@ -596,6 +612,9 @@ export async function getTeamTodayStatusService(actor, permissions, options = {}
       // Off-boarded members stay visible for headcount parity but never read
       // as present/absent/on-leave, even with stale same-day records.
       status = 'inactive';
+    } else if (checkIn?.adminMarkedAbsent) {
+      status = 'absent';
+      attendanceMode = checkIn.attendanceMode ?? 'office';
     } else if (checkIn) {
       status = 'checked_in';
       attendanceMode = checkIn.attendanceMode ?? 'office';
@@ -906,6 +925,8 @@ export async function markAttendance(userId, type, payload, auditContext = {}) {
       if (type === 'check_in') {
         if (today.checkIn) {
           businessReasons.push('You have already checked in today.');
+        } else if (today.adminMarkedAbsentToday) {
+          businessReasons.push('Your attendance for today was marked absent by an administrator.');
         } else if (isCheckInBlockedByApprovedLeave(approvedLeaveToday, wfhApprovedToday)) {
           businessReasons.push('Check-in is not available on approved leave days.');
         } else {
@@ -1245,16 +1266,35 @@ async function loadCheckInDayStatusMap(userId, monthStart, monthEnd) {
     type: 'check_in',
     status: 'allowed',
     timestamp: { $gte: monthStart, $lte: monthEnd },
-  }).select('timestamp attendanceTag attendanceMode leaveStatus');
+  }).select('timestamp attendanceTag attendanceMode leaveStatus adminMarkedAbsent');
 
   const map = new Map();
   for (const record of records) {
+    if (record.adminMarkedAbsent) {
+      continue;
+    }
     map.set(
       getISTDateInputValue(record.timestamp),
       monthCalendarStatusForCheckIn(record),
     );
   }
   return map;
+}
+
+async function loadAdminMarkedAbsentDaySet(userId, monthStart, monthEnd) {
+  const records = await AttendanceRecord.find({
+    userId,
+    type: 'check_in',
+    status: 'allowed',
+    adminMarkedAbsent: true,
+    timestamp: { $gte: monthStart, $lte: monthEnd },
+  }).select('timestamp');
+
+  const days = new Set();
+  for (const record of records) {
+    days.add(getISTDateInputValue(record.timestamp));
+  }
+  return days;
 }
 
 /**
@@ -1355,6 +1395,7 @@ export function resolveEmployeeMonthDayStatus({
   wfhDay = false,
   leaveDay = false,
   pendingWfhDay = false,
+  adminMarkedAbsent = false,
   compOffPending = false,
   compOffApproved = false,
   compOffWorked = false,
@@ -1378,6 +1419,7 @@ export function resolveEmployeeMonthDayStatus({
   if (checkInStatus) return checkInStatus;
   if (wfhDay) return 'wfh';
   if (leaveDay) return 'leave';
+  if (adminMarkedAbsent) return 'absent';
   if (dayKey < todayKey) return 'absent';
   return 'none';
 }
@@ -1452,11 +1494,13 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
   const holidayDates = new Set(holidayMap.keys());
   const todayKey = getISTDateInputValue();
 
-  const [checkInDayStatusMap, { leaveDays, wfhDays, pendingWfhDays }, compOffDaySets] = await Promise.all([
-    loadCheckInDayStatusMap(userId, start, end),
-    loadApprovedLeaveDaySets(userId, start, end, holidayDates, new Date()),
-    loadCompOffDaySets(userId, start, end, holidayDates, weekendDays),
-  ]);
+  const [checkInDayStatusMap, adminMarkedAbsentDays, { leaveDays, wfhDays, pendingWfhDays }, compOffDaySets] =
+    await Promise.all([
+      loadCheckInDayStatusMap(userId, start, end),
+      loadAdminMarkedAbsentDaySet(userId, start, end),
+      loadApprovedLeaveDaySets(userId, start, end, holidayDates, new Date()),
+      loadCompOffDaySets(userId, start, end, holidayDates, weekendDays),
+    ]);
 
   const days = {};
   const holidays = {};
@@ -1474,6 +1518,7 @@ export async function getMonthDayStatusSummary(userId, monthInput) {
       wfhDay: wfhDays.has(dayKey),
       leaveDay: leaveDays.has(dayKey),
       pendingWfhDay: pendingWfhDays.has(dayKey),
+      adminMarkedAbsent: adminMarkedAbsentDays.has(dayKey),
       compOffPending: compOffDaySets.pendingCompOffDays.has(dayKey),
       compOffApproved: compOffDaySets.approvedCompOffDays.has(dayKey),
       compOffWorked: compOffDaySets.workedCompOffDays.has(dayKey),
@@ -1541,6 +1586,7 @@ function snapshotAttendanceRecord(record) {
     attendanceMode: record.attendanceMode,
     leaveStatus: record.leaveStatus ?? 'approved',
     attendanceTag: record.attendanceTag,
+    adminMarkedAbsent: Boolean(record.adminMarkedAbsent),
     warningIssued: record.warningIssued,
     quarterWarningIndex: record.quarterWarningIndex,
     lateNote: record.lateNote ?? null,
@@ -1683,6 +1729,7 @@ function serializeAdminAttendanceListRecord(record) {
     attendanceMode: record.attendanceMode,
     leaveStatus: record.leaveStatus ?? 'approved',
     attendanceTag: record.attendanceTag,
+    adminMarkedAbsent: Boolean(record.adminMarkedAbsent),
     warningIssued: record.warningIssued,
     quarterWarningIndex: record.quarterWarningIndex,
     lateNote: record.lateNote ?? null,
@@ -1746,6 +1793,161 @@ function buildAdminCreateEditChanges({ checkInTime, checkOutTime, statusCode, at
   return changes;
 }
 
+async function adminMarkAbsentForEmployeeDay({
+  userId,
+  dayKey,
+  payload,
+  actor,
+  permissions,
+  auditContext = {},
+}) {
+  const todayKey = getISTDateInputValue();
+  if (dayKey > todayKey) {
+    throwError('Cannot mark a future day absent.');
+  }
+
+  const istDay = parseDateInputAsISTDay(dayKey);
+  if (!istDay) {
+    throwError('Invalid attendance day.');
+  }
+
+  const allowed = await isUserInTeamScope(actor, permissions, userId);
+  if (!allowed) {
+    throwError('You do not have permission to edit this attendance record.', 403);
+  }
+
+  await assertWeekNotConfirmed(userId, dayKey);
+
+  const blockReason = getAdminAttendanceCreateDayBlockReason(dayKey, todayKey);
+  if (blockReason) {
+    throwError(blockReason);
+  }
+
+  const dayStart = startOfDayIST(istDay);
+  const dayEnd = endOfDayIST(istDay);
+  const existingCheckIn = await findCheckInForUserDay(userId, dayStart, dayEnd);
+
+  if (existingCheckIn?.status === 'allowed' && !existingCheckIn.adminMarkedAbsent) {
+    const beforeCheckIn = snapshotAttendanceRecord(existingCheckIn);
+    await AttendanceRecord.deleteMany({
+      userId,
+      type: 'check_out',
+      timestamp: { $gte: dayStart, $lte: dayEnd },
+    });
+
+    existingCheckIn.adminMarkedAbsent = true;
+    existingCheckIn.timestamp = dayStart;
+    existingCheckIn.attendanceTag = null;
+    existingCheckIn.warningIssued = false;
+    existingCheckIn.quarterWarningIndex = null;
+    existingCheckIn.attendanceMode = payload.attendanceMode ?? existingCheckIn.attendanceMode ?? 'office';
+    existingCheckIn.leaveStatus = 'approved';
+    existingCheckIn.leaveRequestId = null;
+    if (payload.lateNote !== undefined) {
+      existingCheckIn.lateNote = payload.lateNote ?? null;
+    }
+
+    const changes = [
+      {
+        field: 'statusCode',
+        from: beforeCheckIn.attendanceTag ?? 'P',
+        to: 'A',
+      },
+    ];
+    appendAttendanceEditHistory(existingCheckIn, { actor, changes });
+    await existingCheckIn.save();
+
+    auditLog('attendance_admin_mark_absent', {
+      adminId: actor._id.toString(),
+      email: auditContext.email,
+      recordId: existingCheckIn._id.toString(),
+      userId: userId.toString(),
+      dayKey,
+      before: { checkIn: beforeCheckIn },
+      after: { checkIn: snapshotAttendanceRecord(existingCheckIn) },
+      changes,
+      convertedFromPresent: true,
+      ip: auditContext.ip,
+      userAgent: auditContext.userAgent,
+    });
+
+    return {
+      checkIn: existingCheckIn,
+      checkOut: null,
+      dayKey,
+      checkInTime: null,
+      checkOutTime: null,
+      created: false,
+      adminMarkedAbsent: true,
+    };
+  }
+
+  if (existingCheckIn?.adminMarkedAbsent) {
+    if (payload.lateNote !== undefined) {
+      existingCheckIn.lateNote = payload.lateNote ?? null;
+      await existingCheckIn.save();
+    }
+    return {
+      checkIn: existingCheckIn,
+      checkOut: null,
+      dayKey,
+      checkInTime: null,
+      checkOutTime: null,
+      created: false,
+      adminMarkedAbsent: true,
+    };
+  }
+
+  if (existingCheckIn?.status === 'rejected') {
+    await AttendanceRecord.deleteOne({ _id: existingCheckIn._id });
+  }
+
+  const office = await getOfficeSettings();
+  const geoFields = buildAdminSyntheticGeoFields(office);
+  const checkInRecord = await AttendanceRecord.create({
+    userId,
+    type: 'check_in',
+    adminMarkedAbsent: true,
+    attendanceMode: payload.attendanceMode ?? 'office',
+    timestamp: dayStart,
+    status: 'allowed',
+    rejectionReasons: [],
+    lateNote: payload.lateNote ?? null,
+    leaveStatus: 'approved',
+    leaveRequestId: null,
+    attendanceTag: null,
+    warningIssued: false,
+    quarterWarningIndex: null,
+    ...geoFields,
+  });
+
+  const changes = [{ field: 'statusCode', from: null, to: 'A' }];
+  appendAttendanceEditHistory(checkInRecord, { actor, changes });
+  await checkInRecord.save();
+
+  auditLog('attendance_admin_mark_absent', {
+    adminId: actor._id.toString(),
+    email: auditContext.email,
+    recordId: checkInRecord._id.toString(),
+    userId: userId.toString(),
+    dayKey,
+    after: { checkIn: snapshotAttendanceRecord(checkInRecord) },
+    changes,
+    ip: auditContext.ip,
+    userAgent: auditContext.userAgent,
+  });
+
+  return {
+    checkIn: checkInRecord,
+    checkOut: null,
+    dayKey,
+    checkInTime: null,
+    checkOutTime: null,
+    created: true,
+    adminMarkedAbsent: true,
+  };
+}
+
 export async function adminEditAttendanceRecord({
   recordId,
   payload,
@@ -1773,6 +1975,68 @@ export async function adminEditAttendanceRecord({
     throwError('Invalid attendance day on record.');
   }
   await assertWeekNotConfirmed(checkInRecord.userId, dayKey);
+
+  if (payload.markAbsent) {
+    if (checkInRecord.adminMarkedAbsent) {
+      if (payload.lateNote !== undefined) {
+        checkInRecord.lateNote = payload.lateNote ?? null;
+        await checkInRecord.save();
+      }
+      return {
+        checkIn: checkInRecord,
+        checkOut: null,
+        dayKey,
+        checkInTime: null,
+        checkOutTime: null,
+        adminMarkedAbsent: true,
+      };
+    }
+
+    return adminMarkAbsentForEmployeeDay({
+      userId: checkInRecord.userId,
+      dayKey,
+      payload,
+      actor,
+      permissions,
+      auditContext,
+    });
+  }
+
+  if (checkInRecord.adminMarkedAbsent) {
+    if (payload.leaveTypeId) {
+      const leaveResult = await adminApplyLeaveForEmployeeDay({
+        userId: checkInRecord.userId,
+        dayKey,
+        leaveTypeId: payload.leaveTypeId,
+        actor,
+        permissions,
+        auditContext,
+      });
+      await AttendanceRecord.deleteOne({ _id: checkInRecord._id });
+      return {
+        checkIn: null,
+        checkOut: null,
+        dayKey,
+        checkInTime: null,
+        checkOutTime: null,
+        leaveRequest: leaveResult?.leaveRequest ?? null,
+        leaveOnly: true,
+      };
+    }
+
+    if (!payload.checkInTime) {
+      return {
+        checkIn: checkInRecord,
+        checkOut: null,
+        dayKey,
+        checkInTime: null,
+        checkOutTime: null,
+        adminMarkedAbsent: true,
+      };
+    }
+
+    checkInRecord.adminMarkedAbsent = false;
+  }
 
   if (payload.leaveTypeId) {
     await adminApplyLeaveForEmployeeDay({
@@ -1959,6 +2223,17 @@ export async function adminUpsertAttendanceForDay({
 
   const dayStart = startOfDayIST(istDay);
   const dayEnd = endOfDayIST(istDay);
+
+  if (payload.markAbsent) {
+    return adminMarkAbsentForEmployeeDay({
+      userId,
+      dayKey,
+      payload,
+      actor,
+      permissions,
+      auditContext,
+    });
+  }
 
   let leaveResult = null;
   if (payload.leaveTypeId) {

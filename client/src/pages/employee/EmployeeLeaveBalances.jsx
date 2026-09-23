@@ -1,19 +1,62 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getISTDateInputValue, getISTYear } from '../../utils/datetime.js';
-import { buildDynamicYearOptions } from '../../utils/yearOptions.js';
 import { leaveApi, getErrorMessage } from '../../services/api.js';
 import EmptyState, { EMPTY_ICONS } from '../../components/EmptyState.jsx';
 import SelectField from '../../components/SelectField.jsx';
 import { usePortalSync } from '../../hooks/usePortalSync.js';
 import { PORTAL_TOPICS } from '../../utils/portalSync.js';
 
+function normalizeYears(years) {
+  const currentYear = getISTYear();
+  return [...new Set(
+    [...(years ?? []), currentYear]
+      .map(Number)
+      .filter((year) => Number.isInteger(year) && year <= currentYear),
+  )].sort((a, b) => b - a);
+}
+
+function buildYearOptions(years) {
+  return normalizeYears(years).map((year) => ({ value: String(year), label: String(year) }));
+}
+
+function resolveDefaultYear(years) {
+  const currentYear = getISTYear();
+  const merged = normalizeYears(years);
+  if (merged.includes(currentYear)) return String(currentYear);
+  return String(merged[0] ?? currentYear);
+}
+
 export default function EmployeeLeaveBalances() {
   const [year, setYear] = useState(() => String(getISTYear()));
-  const yearOptions = useMemo(() => buildDynamicYearOptions(null, getISTYear()), []);
+  const [yearOptions, setYearOptions] = useState(() => buildYearOptions([]));
   const [balances, setBalances] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await leaveApi.getMyYears();
+        if (cancelled) return;
+        const years = Array.isArray(data?.years) ? data.years : [];
+        const options = buildYearOptions(years);
+        setYearOptions(options);
+        setYear((prev) => {
+          if (options.some((opt) => opt.value === prev)) return prev;
+          return resolveDefaultYear(years);
+        });
+      } catch {
+        if (cancelled) return;
+        setYearOptions(buildYearOptions([]));
+        setYear(String(getISTYear()));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);

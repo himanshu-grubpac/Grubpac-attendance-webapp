@@ -80,15 +80,15 @@ async function seedRmWithDepts() {
   return { deptA, deptB, rm, inTeam, outsider, rmPerms };
 }
 
-test('hasCompanyWideScope: employees.record.r does not bypass team scope for RM', () => {
+test('hasCompanyWideScope: permission-only via employees.record.r (no role slug gate)', () => {
   const rmPermsWithRecordR = [...DEFAULTS['reporting-manager'], PERMISSIONS.EMPLOYEES_RECORD_R];
-  const rmActor = { roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER };
-  assert.equal(hasCompanyWideScope(rmPermsWithRecordR, rmActor), false);
-  assert.equal(hasCompanyWideScope(DEFAULTS.admin, { roleSlug: SYSTEM_ROLE_SLUGS.ADMIN }), true);
-  assert.equal(hasCompanyWideScope(DEFAULTS.hr, { roleSlug: SYSTEM_ROLE_SLUGS.HR }), true);
+  assert.equal(hasCompanyWideScope(rmPermsWithRecordR), true);
+  assert.equal(hasCompanyWideScope(DEFAULTS['reporting-manager']), false);
+  assert.equal(hasCompanyWideScope(DEFAULTS.admin), true);
+  assert.equal(hasCompanyWideScope(DEFAULTS.hr), true);
 });
 
-test('RM with employees.record.r and managedDepartmentIds cannot see deptB employees', async () => {
+test('RM without employees.record.r stays team-scoped; record.r grants company-wide', async () => {
   const { rm, inTeam, outsider, rmPerms } = await seedRmWithDepts();
   const rmPermsWithRecordR = [...rmPerms, PERMISSIONS.EMPLOYEES_RECORD_R];
   const rmActor = {
@@ -97,13 +97,14 @@ test('RM with employees.record.r and managedDepartmentIds cannot see deptB emplo
     roleSlug: SYSTEM_ROLE_SLUGS.REPORTING_MANAGER,
   };
 
-  const scopedIds = await resolveTeamScopedUserIds(rmActor, rmPermsWithRecordR);
+  const scopedIds = await resolveTeamScopedUserIds(rmActor, rmPerms);
   assert.notEqual(scopedIds, null);
-  const idSet = new Set(scopedIds.map(String));
-  assert.ok(idSet.has(inTeam._id.toString()));
-  assert.ok(!idSet.has(outsider._id.toString()));
-  assert.equal(await isUserInTeamScope(rmActor, rmPermsWithRecordR, inTeam._id), true);
-  assert.equal(await isUserInTeamScope(rmActor, rmPermsWithRecordR, outsider._id), false);
+  const scopedSet = new Set(scopedIds.map(String));
+  assert.ok(scopedSet.has(inTeam._id.toString()));
+  assert.ok(!scopedSet.has(outsider._id.toString()));
+
+  assert.equal(await resolveTeamScopedUserIds(rmActor, rmPermsWithRecordR), null);
+  assert.equal(await isUserInTeamScope(rmActor, rmPermsWithRecordR, outsider._id), true);
 });
 
 test('scoped RM listSalarySummariesForMonth excludes out-of-scope employees', async () => {

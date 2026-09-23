@@ -36,6 +36,28 @@ test('admin upsert schema requires check-in time when leave type is omitted', ()
   );
 });
 
+test('admin upsert schema allows markAbsent without check-in or leave type', () => {
+  const parsed = adminAttendanceUpsertSchema.parse({
+    userId: '507f1f77bcf86cd799439011',
+    dayKey: '2026-08-04',
+    markAbsent: true,
+  });
+  assert.equal(parsed.markAbsent, true);
+});
+
+test('resolveEmployeeMonthDayStatus treats adminMarkedAbsent today as absent', () => {
+  assert.equal(
+    resolveEmployeeMonthDayStatus({
+      dayKey: '2026-08-06',
+      todayKey: '2026-08-06',
+      isWeekend: false,
+      isHoliday: false,
+      adminMarkedAbsent: true,
+    }),
+    'absent',
+  );
+});
+
 test('month calendar maps HD check-ins to half_day status', () => {
   assert.equal(monthCalendarStatusForCheckInTag('HD'), 'half_day');
 });

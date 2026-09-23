@@ -1,6 +1,15 @@
 import mongoose from 'mongoose';
-import { PERMISSIONS, hasCompanyWideScope, hasPermission } from '../../../shared/permissions.js';
-import { isUserInTeamScope, resolveManagedTeamUserIds } from './teamScopeService.js';
+import {
+  PERMISSIONS,
+  hasCompanyHelpAccess,
+  hasCompanyHelpManageAccess,
+  hasPermission,
+} from '../../../shared/permissions.js';
+import {
+  assertDepartmentInAccessibleSet,
+  isUserInTeamScope,
+  resolveManagedTeamUserIds,
+} from './teamScopeService.js';
 import { HelpTicket, HELP_TICKET_POPULATE } from '../models/HelpTicket.js';
 import { HelpComment, HELP_COMMENT_POPULATE } from '../models/HelpComment.js';
 import { HelpAttachment, HELP_ATTACHMENT_POPULATE } from '../models/HelpAttachment.js';
@@ -57,6 +66,119 @@ export async function findUsersWithPermission(permission) {
     .populate({ path: 'roleId', select: 'permissions' });
 }
 
+async function getUserPermissions(user) {
+  if (user.roleId && typeof user.roleId === 'object' && Array.isArray(user.roleId.permissions)) {
+    return user.roleId.permissions;
+  }
+  const roleId = user.roleId?._id ?? user.roleId;
+  if (!roleId) return [];
+  const role = await Role.findById(roleId).select('permissions').lean();
+  return role?.permissions ?? [];
+}
+
+async function resolveAdminHelpTicketLink(user, ticketId) {
+  const permissions = await getUserPermissions(user);
+  return hasCompanyHelpAccess(permissions)
+    ? `/admin/help/tickets/${ticketId}`
+    : `/admin/help/team/${ticketId}`;
+}
+
+function canReceiveHelpStakeholderNotify(permissions) {
+  return (
+    hasPermission(permissions, PERMISSIONS.HELP_TICKET_R) ||
+    hasPermission(permissions, PERMISSIONS.HELP_TICKET_U) ||
+    hasPermission(permissions, PERMISSIONS.HELP_MANAGE)
+  );
+}
+
+/**
+ * Help ticket bell recipients: company-wide help managers, the creator's
+ * reporting manager when they can view help, and team-scoped managers whose
+ * managed team includes the creator. Deduped — never every help.ticket.u holder.
+ */
+async function resolveHelpNotifyRecipients(creatorId) {
+  const creator = await loadCreator(creatorId);
+  const notifiedIds = new Set();
+  const recipients = [];
+
+  const helpManagers = await findUsersWithPermission(PERMISSIONS.HELP_MANAGE);
+
+  for (const user of helpManagers) {
+    const permissions = await getUserPermissions(user);
+    if (!hasCompanyHelpManageAccess(permissions)) {
+      continue;
+    }
+    recipients.push({ user, permissions });
+    notifiedIds.add(user._id.toString());
+  }
+
+  const managerId = getManagerId(creator);
+  if (managerId && !notifiedIds.has(managerId)) {
+    const manager = await User.findById(managerId)
+      .select('_id name roleId managedDepartmentIds departmentId')
+      .populate({ path: 'roleId', select: 'permissions slug' });
+    if (manager) {
+      const permissions = await getUserPermissions(manager);
+      if (canReceiveHelpStakeholderNotify(permissions)) {
+        recipients.push({ user: manager, permissions });
+        notifiedIds.add(managerId);
+      }
+    }
+  }
+
+  for (const user of helpManagers) {
+    const userId = user._id.toString();
+    if (notifiedIds.has(userId)) {
+      continue;
+    }
+    const scopedUser = await User.findById(user._id)
+      .select('_id name roleId managedDepartmentIds departmentId')
+      .populate({ path: 'roleId', select: 'permissions slug' });
+    if (!scopedUser) {
+      continue;
+    }
+    const permissions = await getUserPermissions(scopedUser);
+    if (
+      canReceiveHelpStakeholderNotify(permissions) &&
+      (await isUserInTeamScope(scopedUser, permissions, creatorId))
+    ) {
+      recipients.push({ user: scopedUser, permissions });
+      notifiedIds.add(userId);
+    }
+  }
+
+  return recipients;
+}
+
+async function notifyHelpStakeholders({
+  creatorId,
+  actorId,
+  type,
+  title,
+  body,
+  ticketId,
+  metadata = {},
+}) {
+  const notifiedIds = new Set([actorId]);
+  const recipients = await resolveHelpNotifyRecipients(creatorId);
+
+  await Promise.all(
+    recipients
+      .filter(({ user }) => !notifiedIds.has(user._id.toString()))
+      .map(async ({ user, permissions }) => {
+        notifiedIds.add(user._id.toString());
+        return createNotification({
+          userId: user._id,
+          type,
+          title,
+          body,
+          link: await resolveAdminHelpTicketLink(user, ticketId),
+          metadata,
+        });
+      }),
+  );
+}
+
 export async function canViewTicket(actor, ticket, permissions) {
   const actorId = actor._id.toString();
   const creatorId = getCreatorId(ticket);
@@ -72,11 +194,7 @@ export async function canViewTicket(actor, ticket, permissions) {
     return false;
   }
 
-  if (hasCompanyWideScope(permissions, actor)) {
-    return true;
-  }
-
-  if (hasPermission(permissions, PERMISSIONS.HELP_MANAGE) && hasPermission(permissions, PERMISSIONS.USERS_WRITE)) {
+  if (hasCompanyHelpAccess(permissions) || hasCompanyHelpManageAccess(permissions)) {
     return true;
   }
 
@@ -87,7 +205,7 @@ export async function canViewTicket(actor, ticket, permissions) {
   return false;
 }
 
-export function canManageTicket(actor, ticket, permissions) {
+export async function canManageTicket(actor, ticket, permissions) {
   if (
     !hasPermission(permissions, PERMISSIONS.HELP_MANAGE) &&
     !hasPermission(permissions, PERMISSIONS.HELP_SET_PRIORITY)
@@ -95,7 +213,7 @@ export function canManageTicket(actor, ticket, permissions) {
     return false;
   }
 
-  if (hasPermission(permissions, PERMISSIONS.USERS_WRITE)) {
+  if (hasCompanyHelpManageAccess(permissions)) {
     return true;
   }
 
@@ -103,12 +221,11 @@ export function canManageTicket(actor, ticket, permissions) {
   const creatorId = getCreatorId(ticket);
   if (creatorId === actorId) return false;
 
-  const managerId = getManagerId(
-    ticket.createdBy && typeof ticket.createdBy === 'object'
-      ? ticket.createdBy
-      : { reportingManagerId: null },
-  );
-  return managerId === actorId;
+  if (creatorId) {
+    return isUserInTeamScope(actor, permissions, creatorId);
+  }
+
+  return false;
 }
 
 export async function createHelpTicket(actor, payload, permissions = [], auditContext = {}) {
@@ -142,44 +259,17 @@ async function notifyOnTicketCreated(creator, ticket) {
   const link = `/employee/help/${ticket._id.toString()}`;
   const title = 'New help ticket';
   const body = `${creator.name} raised "${ticket.title}" (${ticket.category}).`;
+  const ticketId = ticket._id.toString();
 
-  const notifiedIds = new Set();
-
-  const creatorDoc = await loadCreator(creator._id);
-  const managerId = getManagerId(creatorDoc);
-  if (managerId) {
-    await createNotification({
-      userId: managerId,
-      type: 'help.new',
-      title,
-      body,
-      link: `/admin/help/team/${ticket._id.toString()}`,
-      metadata: { ticketId: ticket._id.toString() },
-    });
-    notifiedIds.add(managerId);
-  }
-
-  const managers = await findUsersWithPermission(PERMISSIONS.HELP_MANAGE);
-  await Promise.all(
-    managers
-      .filter((user) => !notifiedIds.has(user._id.toString()))
-      .map(async (user) => {
-        const userRole = user.roleId && typeof user.roleId === 'object'
-          ? user.roleId
-          : await Role.findById(user.roleId).select('permissions');
-        const hasUsersWrite = userRole?.permissions?.includes(PERMISSIONS.USERS_WRITE);
-        return createNotification({
-          userId: user._id,
-          type: 'help.new',
-          title,
-          body,
-          link: hasUsersWrite
-            ? `/admin/help/tickets/${ticket._id.toString()}`
-            : `/admin/help/team/${ticket._id.toString()}`,
-          metadata: { ticketId: ticket._id.toString() },
-        });
-      }),
-  );
+  await notifyHelpStakeholders({
+    creatorId: creator._id.toString(),
+    actorId: creator._id.toString(),
+    type: 'help.new',
+    title,
+    body,
+    ticketId,
+    metadata: { ticketId },
+  });
 
   await createNotification({
     userId: creator._id,
@@ -187,7 +277,7 @@ async function notifyOnTicketCreated(creator, ticket) {
     title: 'Help ticket submitted',
     body: `Your ticket "${ticket.title}" was submitted and is open.`,
     link,
-    metadata: { ticketId: ticket._id.toString() },
+    metadata: { ticketId },
   });
 }
 
@@ -207,11 +297,17 @@ export async function listHelpTickets(actor, permissions, query) {
     }
     const teamIds = await resolveManagedTeamUserIds(actor);
     filter.createdBy = { $in: teamIds };
+
+    if (query.departmentId) {
+      await assertDepartmentInAccessibleSet(actor, permissions, query.departmentId);
+      const deptMembers = await User.find({
+        departmentId: query.departmentId,
+        _id: { $in: teamIds },
+      }).select('_id');
+      filter.createdBy = { $in: deptMembers.map((user) => user._id) };
+    }
   } else if (scope === 'all') {
-    if (
-      !hasPermission(permissions, PERMISSIONS.HELP_MANAGE) ||
-      !hasPermission(permissions, PERMISSIONS.USERS_WRITE)
-    ) {
+    if (!hasCompanyHelpManageAccess(permissions)) {
       throwError('You do not have permission to view all help tickets.', 403);
     }
   } else {
@@ -252,8 +348,15 @@ export async function listHelpTickets(actor, permissions, query) {
     HelpTicket.countDocuments(filter),
   ]);
 
+  const ticketsWithAccess = await Promise.all(
+    tickets.map(async (item) => ({
+      ...item.toSafeJSON(),
+      canManage: await canManageTicket(actor, item, permissions),
+    })),
+  );
+
   return {
-    tickets: tickets.map((item) => item.toSafeJSON()),
+    tickets: ticketsWithAccess,
     pagination: {
       page: query.page,
       limit: query.limit,
@@ -298,8 +401,10 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
     }
   }
 
+  const canManage = await canManageTicket(actor, ticket, permissions);
+
   return {
-    ticket: ticket.toSafeJSON(),
+    ticket: { ...ticket.toSafeJSON(), canManage },
     comments: comments.map((item) => ({
       ...item.toSafeJSON(),
       attachments: attachmentsByComment[item._id.toString()] ?? [],
@@ -310,7 +415,7 @@ export async function getHelpTicketById(ticketId, actor, permissions) {
 
 export async function updateHelpTicketStatus(ticketId, actor, permissions, payload, auditContext = {}) {
   const ticket = await loadTicket(ticketId);
-  if (!canManageTicket(actor, ticket, permissions)) {
+  if (!(await canManageTicket(actor, ticket, permissions))) {
     throwError('You are not authorized to update this ticket.', 403);
   }
 
@@ -407,65 +512,35 @@ export async function addHelpComment(ticketId, actor, permissions, payload, audi
   });
   await comment.populate(HELP_COMMENT_POPULATE);
 
-  // Thread stakeholder matrix (mirrors ticket creation): the ticket creator,
-  // the creator's reporting manager, and every HELP_MANAGE holder each get
-  // one bell notification per comment — except the commenting actor, who is
-  // never self-notified. A Set dedupes overlaps (e.g. manager who also holds
-  // HELP_MANAGE) so nobody gets double-pinged.
   const creatorId = getCreatorId(ticket);
   const actorId = actor._id.toString();
-  const notifiedIds = new Set([actorId]);
-  const commentMetadata = { ticketId: ticket._id.toString(), commentId: comment._id.toString() };
+  const ticketLinkId = ticket._id.toString();
+  const commentMetadata = { ticketId: ticketLinkId, commentId: comment._id.toString() };
 
-  if (creatorId && !notifiedIds.has(creatorId)) {
+  if (creatorId && creatorId !== actorId) {
     await createNotification({
       userId: creatorId,
       type: 'help.comment',
       title: 'New reply on your ticket',
       body: `${actor.name} commented on "${ticket.title}".`,
-      link: `/employee/help/${ticket._id.toString()}`,
+      link: `/employee/help/${ticketLinkId}`,
       metadata: commentMetadata,
     });
-    notifiedIds.add(creatorId);
   }
 
   if (creatorId) {
-    const managerId = getManagerId(await loadCreator(creatorId));
-    if (managerId && !notifiedIds.has(managerId)) {
-      await createNotification({
-        userId: managerId,
-        type: 'help.comment',
-        title:
-          creatorId === actorId ? 'Employee replied on help ticket' : 'New reply on help ticket',
-        body: `${actor.name} added a comment on "${ticket.title}".`,
-        link: `/admin/help/team/${ticket._id.toString()}`,
-        metadata: commentMetadata,
-      });
-      notifiedIds.add(managerId);
-    }
+    const stakeholderTitle =
+      creatorId === actorId ? 'Employee replied on help ticket' : 'New comment on help ticket';
+    await notifyHelpStakeholders({
+      creatorId,
+      actorId,
+      type: 'help.comment',
+      title: stakeholderTitle,
+      body: `${actor.name} commented on "${ticket.title}".`,
+      ticketId: ticketLinkId,
+      metadata: commentMetadata,
+    });
   }
-
-  const managers = await findUsersWithPermission(PERMISSIONS.HELP_MANAGE);
-  await Promise.all(
-    managers
-      .filter((user) => !notifiedIds.has(user._id.toString()))
-      .map((user) => {
-        notifiedIds.add(user._id.toString());
-        const hasUsersWrite =
-          user.roleId && typeof user.roleId === 'object' &&
-          user.roleId.permissions?.includes(PERMISSIONS.USERS_WRITE);
-        return createNotification({
-          userId: user._id,
-          type: 'help.comment',
-          title: 'New comment on help ticket',
-          body: `${actor.name} commented on "${ticket.title}".`,
-          link: hasUsersWrite
-            ? `/admin/help/tickets/${ticket._id.toString()}`
-            : `/admin/help/team/${ticket._id.toString()}`,
-          metadata: commentMetadata,
-        });
-      }),
-  );
 
   auditLog('help_ticket_comment_added', {
     userId: actor._id.toString(),
@@ -486,7 +561,7 @@ export async function deleteHelpTicket(ticketId, actor, permissions, auditContex
   // in progress and stay protected from creator delete.
   const isCreatorRollback =
     getCreatorId(ticket) === actor._id.toString() && ticket.status === 'open';
-  if (!isCreatorRollback && !canManageTicket(actor, ticket, permissions)) {
+  if (!isCreatorRollback && !(await canManageTicket(actor, ticket, permissions))) {
     throwError('You are not authorized to delete this ticket.', 403);
   }
 

@@ -116,12 +116,12 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     closeDetail();
   }, [fixedUserId]);
 
-  const loadEmployees = useCallback(async (query) => {
+  const loadEmployees = useCallback(async (query, yearValue) => {
     setLoadingEmployees(true);
     try {
       const data = await adminApi.listEmployees({
         search: query || undefined,
-        isActive: 'true',
+        employedInYear: Number(yearValue),
         page: 1,
         limit: HISTORY_PAGE_SIZE,
       });
@@ -135,8 +135,16 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
 
   useEffect(() => {
     if (fixedUserId) return;
-    loadEmployees(debouncedSearch.trim());
-  }, [fixedUserId, debouncedSearch, loadEmployees]);
+    loadEmployees(debouncedSearch.trim(), year);
+  }, [fixedUserId, debouncedSearch, year, loadEmployees]);
+
+  useEffect(() => {
+    if (fixedUserId || !selectedId || loadingEmployees) return;
+    if (!employees.some((employee) => employee.id === selectedId)) {
+      setSelectedId(null);
+      closeDetail();
+    }
+  }, [employees, fixedUserId, loadingEmployees, selectedId]);
 
   const loadHistory = useCallback(async (userId, yearValue) => {
     if (!userId) {
@@ -149,17 +157,30 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
       const data = await salaryApi.getHistory(userId, { year: yearValue });
       setHistory(data);
     } catch (err) {
-      setHistory(null);
+      setHistory((prev) => {
+        if (prev?.employee?.id === userId) {
+          return { ...prev, history: [] };
+        }
+        const fromList = employees.find((employee) => employee.id === userId);
+        if (fromList) {
+          return {
+            employee: {
+              id: fromList.id,
+              name: fromList.name,
+              employeeCode: fromList.employeeCode ?? null,
+              joiningDate: fromList.joiningDate ?? null,
+              endingDate: fromList.endingDate ?? null,
+            },
+            history: [],
+          };
+        }
+        return null;
+      });
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    closeDetail();
-    loadHistory(selectedId, year);
-  }, [selectedId, year, loadHistory]);
+  }, [employees]);
 
   const fetchHistoryDetailBalances = useCallback(async (userId, periodKey) => {
     const isSelf = userId === user?.id;
@@ -236,34 +257,71 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
     [employees],
   );
 
-  const historyEmployeeBounds = useMemo(() => {
-    if (fixedUserId && user) {
-      return {
-        joiningDate: user.joiningDate ?? null,
-        endingDate: user.endingDate ?? null,
-      };
+  const selectedEmployeeMeta = useMemo(() => {
+    if (fixedUserId) {
+      if (history?.employee?.id === fixedUserId) {
+        return history.employee;
+      }
+      if (user?.id === fixedUserId) {
+        return {
+          id: user.id,
+          name: user.name,
+          employeeCode: user.employeeCode ?? null,
+          joiningDate: user.joiningDate ?? null,
+          endingDate: user.endingDate ?? null,
+        };
+      }
+      return null;
     }
-    if (history?.employee) {
+    if (!selectedId) {
+      return null;
+    }
+    if (history?.employee?.id === selectedId) {
+      return history.employee;
+    }
+    const fromList = employees.find((employee) => employee.id === selectedId);
+    if (fromList) {
       return {
-        joiningDate: history.employee.joiningDate ?? null,
-        endingDate: history.employee.endingDate ?? null,
+        id: fromList.id,
+        name: fromList.name,
+        employeeCode: fromList.employeeCode ?? null,
+        joiningDate: fromList.joiningDate ?? null,
+        endingDate: fromList.endingDate ?? null,
       };
     }
     return null;
-  }, [fixedUserId, history?.employee, user]);
+  }, [employees, fixedUserId, history?.employee, selectedId, user]);
+
+  const historyEmployeeBounds = useMemo(() => {
+    if (!selectedEmployeeMeta) {
+      return null;
+    }
+    return {
+      joiningDate: selectedEmployeeMeta.joiningDate ?? null,
+      endingDate: selectedEmployeeMeta.endingDate ?? null,
+    };
+  }, [selectedEmployeeMeta]);
 
   const historyYearOptions = useMemo(
     () => buildSalaryYearOptions(historyEmployeeBounds),
-    [historyEmployeeBounds, year],
+    [historyEmployeeBounds],
   );
 
   useEffect(() => {
-    if (!historyEmployeeBounds) return;
-    const clampedYear = clampYearToCurrentIst(year, historyEmployeeBounds);
-    if (clampedYear !== year) {
-      setYear(clampedYear);
+    closeDetail();
+    if (!selectedId) {
+      setHistory(null);
+      return;
     }
-  }, [historyEmployeeBounds, year]);
+    if (historyEmployeeBounds) {
+      const clampedYear = clampYearToCurrentIst(year, historyEmployeeBounds);
+      if (clampedYear !== year) {
+        setYear(clampedYear);
+        return;
+      }
+    }
+    loadHistory(selectedId, year);
+  }, [selectedId, year, historyEmployeeBounds, loadHistory]);
 
   const rows = history?.history ?? [];
 
@@ -306,10 +364,10 @@ export function SalaryHistorySection({ fixedUserId = null, title = 'Salary histo
         </div>
       </div>
 
-      {history?.employee ? (
+      {selectedEmployeeMeta ? (
         <p className="salary-detail__title muted small">
-          {history.employee.name}
-          {history.employee.employeeCode ? ` (${history.employee.employeeCode})` : ''}
+          {selectedEmployeeMeta.name}
+          {selectedEmployeeMeta.employeeCode ? ` (${selectedEmployeeMeta.employeeCode})` : ''}
         </p>
       ) : null}
 

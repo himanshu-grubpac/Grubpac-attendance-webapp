@@ -5,6 +5,7 @@ const INITIAL_DELAY_MS = 250;
 const MAX_DELAY_MS = 1500;
 
 function isTransientNetworkError(error) {
+  if (error?.response?.status === 503) return true;
   if (error?.response) return false;
   const code = error?.code ?? '';
   const message = String(error?.message ?? '').toLowerCase();
@@ -33,21 +34,13 @@ export function hasSessionCookieHint() {
  * the local dev API to accept connections. Does not touch authenticated routes.
  */
 export async function coldStartPing(maxWaitMs = DEV_STARTUP_WINDOW_MS) {
-  if (!import.meta.env.DEV) {
-    try {
-      await api.get('/health', { timeout: 5000 });
-    } catch {
-      // Best-effort warm-up; subsequent API calls handle their own errors.
-    }
-    return;
-  }
-
   const deadline = Date.now() + maxWaitMs;
   let backoff = INITIAL_DELAY_MS;
+  const timeoutMs = import.meta.env.DEV ? 2000 : 5000;
 
   while (Date.now() < deadline) {
     try {
-      await api.get('/health', { timeout: 2000 });
+      await api.get('/health', { timeout: timeoutMs });
       return;
     } catch (error) {
       if (!isTransientNetworkError(error)) return;

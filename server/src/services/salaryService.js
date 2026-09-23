@@ -129,10 +129,13 @@ async function loadAttendanceCreditByDay(userId, monthStart, monthEnd) {
     type: 'check_in',
     status: 'allowed',
     timestamp: { $gte: monthStart, $lte: monthEnd },
-  }).select('timestamp attendanceTag');
+  }).select('timestamp attendanceTag adminMarkedAbsent');
 
   const creditByDay = new Map();
   for (const record of records) {
+    if (record.adminMarkedAbsent) {
+      continue;
+    }
     const dayKey = getISTDateInputValue(record.timestamp);
     const credit = attendanceCreditForTag(record.attendanceTag);
     // A day can only have one allowed check-in, but retaining the highest credit
