@@ -915,8 +915,11 @@ export async function validateLeaveRequestInput({
     await validateCombinedAccumulation(userId, year, policyMap, days, leaveTypeId);
   }
 
-  await validateSelfOverlap(userId, startDate, endDate, excludeRequestId);
-  await validateLeadDeputyConflict(userId, startDate, endDate, adminException);
+  // WFH is not leave: it must neither be blocked by existing leave nor block a
+  // leave application on the same day(s).
+  const isWfh = isWfhLeaveType(leaveType);
+  await validateSelfOverlap(userId, startDate, endDate, excludeRequestId, isWfh);
+  await validateLeadDeputyConflict(userId, startDate, endDate, adminException, isWfh);
 
   return {
     leaveType,
@@ -936,12 +939,31 @@ async function reserveValidatedLeaveBalance(balance, days, session = null) {
   await balance.save(session ? { session } : undefined);
 }
 
-async function validateSelfOverlap(userId, startDate, endDate, excludeRequestId = null) {
+async function getWfhLeaveTypeId() {
+  const wfhType = await LeaveType.findOne({ code: WFH_LEAVE_TYPE_CODE })
+    .select('_id')
+    .lean();
+  return wfhType?._id ?? null;
+}
+
+async function validateSelfOverlap(
+  userId,
+  startDate,
+  endDate,
+  excludeRequestId = null,
+  isWfh = false,
+) {
+  // WFH is not leave, so a WFH request never conflicts with existing leave.
+  if (isWfh) return;
+
+  const wfhLeaveTypeId = await getWfhLeaveTypeId();
   const overlap = await LeaveRequest.findOne({
     userId,
     status: { $in: ['pending', 'approved'] },
     startDate: { $lte: endDate },
     endDate: { $gte: startDate },
+    // Existing WFH never blocks a leave application on the same day(s).
+    ...(wfhLeaveTypeId ? { leaveTypeId: { $ne: wfhLeaveTypeId } } : {}),
     ...(excludeRequestId ? { _id: { $ne: excludeRequestId } } : {}),
   });
 
@@ -950,8 +972,16 @@ async function validateSelfOverlap(userId, startDate, endDate, excludeRequestId 
   }
 }
 
-async function validateLeadDeputyConflict(userId, startDate, endDate, adminException) {
+async function validateLeadDeputyConflict(
+  userId,
+  startDate,
+  endDate,
+  adminException,
+  isWfh = false,
+) {
   if (adminException) return;
+  // WFH is not leave: it never triggers the lead/deputy same-day leave rule.
+  if (isWfh) return;
 
   const user = await User.findById(userId);
   if (!user?.departmentId) return;
@@ -967,12 +997,15 @@ async function validateLeadDeputyConflict(userId, startDate, endDate, adminExcep
   if (requesterId !== leadId && requesterId !== deputyId) return;
 
   const counterpartId = requesterId === leadId ? deputyId : leadId;
+  const wfhLeaveTypeId = await getWfhLeaveTypeId();
   const conflict = await LeaveRequest.findOne({
     userId: counterpartId,
     status: { $in: ['pending', 'approved'] },
     adminException: false,
     startDate: { $lte: endDate },
     endDate: { $gte: startDate },
+    // Counterpart's WFH is not leave, so it must not block the requester.
+    ...(wfhLeaveTypeId ? { leaveTypeId: { $ne: wfhLeaveTypeId } } : {}),
   });
 
   if (conflict) {

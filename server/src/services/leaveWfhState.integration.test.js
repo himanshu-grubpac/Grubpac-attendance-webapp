@@ -346,6 +346,164 @@ test('CL requests past the combined cap are still rejected', async () => {
   );
 });
 
+test('leave can be applied on a day that already has WFH', async () => {
+  const applicant = await createUser('Leave On Wfh Day');
+  const year = getISTYear();
+  const wfhType = await LeaveType.create({ code: 'WFH', name: 'Work From Home', isActive: true });
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  for (const [type, quota] of [[wfhType, 20], [clType, 10]]) {
+    await LeavePolicy.create({
+      leaveTypeId: type._id,
+      year,
+      annualQuota: quota,
+      accrualPerMonth: 0,
+      paid: true,
+      isActive: true,
+    });
+    await LeaveBalance.create({
+      userId: applicant._id,
+      leaveTypeId: type._id,
+      year,
+      entitled: quota,
+      pending: 0,
+      used: 0,
+      carried: 0,
+      encashed: 0,
+    });
+  }
+
+  const dayKey = nextDay(getISTDateInputValue(), 3);
+
+  const wfh = await createLeaveRequest(applicant._id, {
+    leaveTypeId: wfhType._id.toString(),
+    startDate: dayKey,
+    endDate: dayKey,
+    reason: 'Work from home for the day',
+  });
+  assert.equal(wfh.status, 'pending');
+  assert.equal(wfh.leaveTypeCode, 'WFH');
+
+  // WFH is not leave: it must not block a leave application on the same day.
+  const leave = await createLeaveRequest(applicant._id, {
+    leaveTypeId: clType._id.toString(),
+    startDate: dayKey,
+    endDate: dayKey,
+    reason: 'CL on the WFH day',
+  });
+  assert.equal(leave.status, 'pending');
+  assert.equal(leave.leaveTypeCode, 'CL');
+
+  // Each type draws only from its own balance: WFH never eats CL stock.
+  const wfhBalance = await LeaveBalance.findOne({
+    userId: applicant._id,
+    leaveTypeId: wfhType._id,
+    year,
+  }).lean();
+  const clBalance = await LeaveBalance.findOne({
+    userId: applicant._id,
+    leaveTypeId: clType._id,
+    year,
+  }).lean();
+  assert.equal(wfhBalance.pending, 1);
+  assert.equal(clBalance.pending, 1);
+});
+
+test('WFH can be applied on a day that already has leave', async () => {
+  const applicant = await createUser('Wfh On Leave Day');
+  const year = getISTYear();
+  const wfhType = await LeaveType.create({ code: 'WFH', name: 'Work From Home', isActive: true });
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  for (const [type, quota] of [[wfhType, 20], [clType, 10]]) {
+    await LeavePolicy.create({
+      leaveTypeId: type._id,
+      year,
+      annualQuota: quota,
+      accrualPerMonth: 0,
+      paid: true,
+      isActive: true,
+    });
+    await LeaveBalance.create({
+      userId: applicant._id,
+      leaveTypeId: type._id,
+      year,
+      entitled: quota,
+      pending: 0,
+      used: 0,
+      carried: 0,
+      encashed: 0,
+    });
+  }
+
+  const dayKey = nextDay(getISTDateInputValue(), 3);
+
+  const leave = await createLeaveRequest(applicant._id, {
+    leaveTypeId: clType._id.toString(),
+    startDate: dayKey,
+    endDate: dayKey,
+    reason: 'CL first',
+  });
+  assert.equal(leave.status, 'pending');
+
+  // The reverse direction must hold too: WFH never conflicts with leave.
+  const wfh = await createLeaveRequest(applicant._id, {
+    leaveTypeId: wfhType._id.toString(),
+    startDate: dayKey,
+    endDate: dayKey,
+    reason: 'Work from home instead',
+  });
+  assert.equal(wfh.status, 'pending');
+  assert.equal(wfh.leaveTypeCode, 'WFH');
+
+  const clBalance = await LeaveBalance.findOne({
+    userId: applicant._id,
+    leaveTypeId: clType._id,
+    year,
+  }).lean();
+  assert.equal(clBalance.pending, 1, 'CL balance is drawn only by CL');
+});
+
+test('leave-to-leave overlap is still rejected on the same day', async () => {
+  const applicant = await createUser('Leave Overlap Guard');
+  const year = getISTYear();
+  const clType = await LeaveType.create({ code: 'CL', name: 'Casual Leave', isActive: true });
+  await LeavePolicy.create({
+    leaveTypeId: clType._id,
+    year,
+    annualQuota: 10,
+    accrualPerMonth: 0,
+    paid: true,
+    isActive: true,
+  });
+  await LeaveBalance.create({
+    userId: applicant._id,
+    leaveTypeId: clType._id,
+    year,
+    entitled: 10,
+    pending: 0,
+    used: 0,
+    carried: 0,
+    encashed: 0,
+  });
+
+  const dayKey = nextDay(getISTDateInputValue(), 3);
+  await createLeaveRequest(applicant._id, {
+    leaveTypeId: clType._id.toString(),
+    startDate: dayKey,
+    endDate: dayKey,
+    reason: 'First CL',
+  });
+
+  await assert.rejects(
+    createLeaveRequest(applicant._id, {
+      leaveTypeId: clType._id.toString(),
+      startDate: dayKey,
+      endDate: dayKey,
+      reason: 'Second CL same day',
+    }),
+    /overlapping this date range/,
+  );
+});
+
 test('decision token consumption is atomic under concurrent use', async () => {
   const manager = await createUser('Manager', { role: 'admin' });
   const { request } = await createWfhFixture({ manager });
